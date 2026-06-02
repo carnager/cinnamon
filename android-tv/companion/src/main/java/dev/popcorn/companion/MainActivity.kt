@@ -845,107 +845,10 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun CompanionTopAppBar(
-    devices: List<Device>,
-    selectedDevice: Device?,
-    playbackTarget: PlaybackTarget,
-    onSelectPhone: () -> Unit,
-    onSelectDevice: (Device) -> Unit,
-    onScan: () -> Unit,
-    onLogout: () -> Unit,
-    onRefreshDevices: () -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val targetLabel = if (playbackTarget == PlaybackTarget.Phone) "Phone" else selectedDevice?.displayName() ?: "No TV"
-    val targetIcon = if (playbackTarget == PlaybackTarget.Phone) Icons.Default.PhoneAndroid else Icons.Default.LiveTv
-    TopAppBar(
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Popcorn", fontWeight = FontWeight.Black)
-                Box {
-                    Surface(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(999.dp))
-                            .clickable { expanded = true },
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        contentColor = MaterialTheme.colorScheme.onSurface,
-                        shape = RoundedCornerShape(999.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(7.dp),
-                        ) {
-                            Icon(targetIcon, contentDescription = null, modifier = Modifier.size(17.dp), tint = MaterialTheme.colorScheme.primary)
-                            Text(targetLabel, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                            Text("⌄", color = Muted, fontSize = 15.sp)
-                        }
-                    }
-                    DropdownMenu(
-                        expanded = expanded,
-                        onDismissRequest = { expanded = false },
-                        modifier = Modifier.background(Surface2),
-                    ) {
-                        DropdownMenuItem(
-                            leadingIcon = { Icon(Icons.Default.PhoneAndroid, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                            text = {
-                                Text(
-                                    "Phone",
-                                    color = TextColor,
-                                    fontWeight = if (playbackTarget == PlaybackTarget.Phone) FontWeight.Black else FontWeight.Normal,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            },
-                            onClick = {
-                                expanded = false
-                                onSelectPhone()
-                            },
-                        )
-                        devices.forEach { device ->
-                            DropdownMenuItem(
-                                leadingIcon = { Icon(Icons.Default.LiveTv, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
-                                text = {
-                                    Text(
-                                        device.displayName(),
-                                        color = TextColor,
-                                        fontWeight = if (playbackTarget == PlaybackTarget.Shield && selectedDevice?.id == device.id) FontWeight.Black else FontWeight.Normal,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                },
-                                onClick = {
-                                    expanded = false
-                                    onSelectDevice(device)
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-        },
-        actions = {
-            IconButton(onClick = onScan) {
-                Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan QR")
-            }
-            IconButton(onClick = onLogout) {
-                Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "Logout")
-            }
-        },
-        colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = MaterialTheme.colorScheme.surface,
-            titleContentColor = MaterialTheme.colorScheme.onSurface,
-            actionIconContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        ),
-    )
-}
-
 fun displayTitle(item: PopItem): String = item.episodeTitle.ifBlank { item.title }
 fun fmtDuration(ms: Long): String = if (ms <= 0) "" else "${(ms / 60000).coerceAtLeast(1)}m"
 private fun Int.floorMod(n: Int): Int = ((this % n) + n) % n
-private fun Device.displayName(): String = cleanDeviceName(name) ?: id
+fun Device.displayName(): String = cleanDeviceName(name) ?: id
 fun cleanDeviceName(raw: String): String? {
     val trimmed = raw.trim().replace(Regex("\\s+"), " ")
     if (trimmed.isBlank()) return null

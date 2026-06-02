@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+run_go="${POPCORN_CHECK_GO:-1}"
+run_android="${POPCORN_CHECK_ANDROID:-1}"
+android_tasks="${POPCORN_CHECK_ANDROID_TASKS:-:app:assembleRelease :companion:assembleRelease}"
+
+if [[ "$run_go" != "0" ]]; then
+  echo "==> go test ./..."
+  (cd "$repo_root" && go test ./...)
+fi
+
+if [[ "$run_android" != "0" ]]; then
+  echo "==> gradle $android_tasks"
+  (cd "$repo_root/android-tv" && gradle $android_tasks)
+fi
+
+echo "==> ok"

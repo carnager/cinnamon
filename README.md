@@ -34,6 +34,16 @@ POPCORN_LIBRARY=/media/movies POPCORN_LISTEN=:8097 go run ./cmd/popcornd
 
 For a single TV library through env vars, add `POPCORN_LIBRARY_TYPE=tv`.
 
+## Development
+
+Run the server tests and build both Android release APKs with:
+
+```sh
+./scripts/check
+```
+
+Set `POPCORN_CHECK_ANDROID=0` to run only Go tests, or `POPCORN_CHECK_GO=0` to build only the Android apps.
+
 ## API
 
 - `GET /api/health`

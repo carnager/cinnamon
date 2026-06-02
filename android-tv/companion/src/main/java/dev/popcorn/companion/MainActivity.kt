@@ -132,31 +132,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-private val Bg = Color(0xFF090B10)
-private val Surface1 = Color(0xFF121722)
-private val Surface2 = Color(0xFF1A2030)
-private val Surface3 = Color(0xFF293548)
-private val Line = Color(0xFF344156)
-private val TextColor = Color(0xFFE8ECF2)
-private val Muted = Color(0xFF97A0B2)
-private val Accent = Color(0xFF4FD1A5)
-private val Blue = Color(0xFF63A8FF)
-private val NavSelected = Color(0xFF4A405F)
-private val ErrorRed = Color(0xFFFF8B8B)
-private val PopcornColorScheme = darkColorScheme(
-    primary = Blue,
-    onPrimary = Color.Black,
-    secondary = Accent,
-    onSecondary = Color.Black,
-    background = Bg,
-    onBackground = TextColor,
-    surface = Surface1,
-    onSurface = TextColor,
-    surfaceVariant = Surface2,
-    onSurfaceVariant = Muted,
-    error = ErrorRed,
-)
-
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

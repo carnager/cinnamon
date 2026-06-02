@@ -1,6 +1,7 @@
 .gobuild/
 .gomodcache/
 .claude/
+Screenshots/
 .gradle/
 build/
 android-tv/.gradle/

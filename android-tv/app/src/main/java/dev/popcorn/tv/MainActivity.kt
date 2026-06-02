@@ -59,15 +59,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -80,7 +77,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
-
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.key.Key
@@ -91,7 +87,6 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -109,8 +104,6 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.ui.TimeBar
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import coil.compose.AsyncImage
-import coil.request.ImageRequest
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
@@ -123,52 +116,9 @@ import java.net.HttpURLConnection
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.URL
+import java.util.Locale
 import java.util.UUID
 import kotlin.math.max
-import java.util.Locale
-
-private val Bg = Color(0xFF08090C)
-private val SurfaceColor = Color(0xFF111319)
-private val Surface2 = Color(0xFF181C26)
-private val Surface3 = Color(0xFF1E2331)
-private val Line = Color(0xFF283043)
-private val TextColor = Color(0xFFE8ECF2)
-private val Muted = Color(0xFF8B93A5)
-private val Accent = Color(0xFF4FD1A5)
-private val AccentDim = Color(0xFF2A8B6E)
-private val Gold = Color(0xFFF0C040)
-private val ErrorRed = Color(0xFFFF8B8B)
-private val FocusGlow = Color(0xFF4FD1A5)
-private val CardShape = RoundedCornerShape(8.dp)
-
-private fun isActivationKey(key: Key): Boolean {
-    return key == Key.DirectionCenter || key == Key.Enter || key == Key.NumPadEnter
-}
-
-private fun Modifier.tvActivate(onClick: () -> Unit): Modifier = onKeyEvent {
-    if (it.type == KeyEventType.KeyUp && isActivationKey(it.key)) {
-        onClick()
-        true
-    } else {
-        false
-    }
-}.clickable(onClick = onClick)
-
-private fun fmtDuration(ms: Long): String {
-    if (ms <= 0) return ""
-    val total = (ms / 1000).toInt()
-    val h = total / 3600
-    val m = (total % 3600) / 60
-    return if (h > 0) "${h}h ${m}m" else "${m}m"
-}
-
-private fun fmtClock(ms: Long): String {
-    val total = (ms / 1000).coerceAtLeast(0)
-    val h = total / 3600
-    val m = (total % 3600) / 60
-    val s = total % 60
-    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
-}
 
 class MainActivity : ComponentActivity() {
     override fun dispatchKeyEvent(event: AndroidKeyEvent): Boolean {
@@ -186,12 +136,6 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-}
-
-private object PlayerOsdBridge {
-    var handler: ((AndroidKeyEvent) -> Boolean)? = null
-
-    fun dispatch(event: AndroidKeyEvent): Boolean = handler?.invoke(event) == true
 }
 
 private data class WatchMenuState(
@@ -3358,28 +3302,6 @@ private fun newHlsSessionId(itemId: Long): String {
     return "android_${itemId}_${System.currentTimeMillis()}"
 }
 
-private fun playbackUrl(
-    session: Session?,
-    itemId: Long,
-    bandwidthKbps: Int?,
-    hlsSessionId: String?,
-    startSeconds: Double,
-    audioIndex: Int? = null,
-    subtitleIndex: Int? = null,
-): String {
-    val server = session?.server.orEmpty()
-    if (bandwidthKbps == null || hlsSessionId == null) {
-        return "$server/api/items/$itemId/stream"
-    }
-    val params = mutableListOf(
-        "bandwidth=$bandwidthKbps",
-        "start=${"%.3f".format(Locale.US, startSeconds)}",
-    )
-    if (audioIndex != null) params.add("audio=$audioIndex")
-    if (subtitleIndex != null) params.add("subtitle=$subtitleIndex")
-    return "$server/api/items/$itemId/hls/$hlsSessionId/index.m3u8?${params.joinToString("&")}"
-}
-
 private suspend fun stopHlsSession(session: Session, hlsSessionId: String) = withContext(Dispatchers.IO) {
     runCatching {
         val conn = URL("${session.server}/api/hls/$hlsSessionId").openConnection() as HttpURLConnection
@@ -3391,8 +3313,6 @@ private suspend fun stopHlsSession(session: Session, hlsSessionId: String) = wit
         conn.inputStream.close()
     }
 }
-
-private fun dp(context: Context, value: Int): Int = (value * context.resources.displayMetrics.density).toInt()
 
 @Composable
 fun TrackMenu(title: String, player: ExoPlayer, trackType: Int, allowOff: Boolean = false, onDismiss: () -> Unit) {
@@ -3842,172 +3762,4 @@ fun CardShell(
             .padding(if (focused) 5.dp else 4.dp),
         content = content,
     )
-}
-
-@Composable
-fun FocusButton(label: String, primary: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
-    Box(
-        modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(
-                if (primary) {
-                    if (focused) Accent else AccentDim
-                } else {
-                    if (focused) Surface3 else Surface2
-                }
-            )
-            .border(2.dp, if (focused) FocusGlow else Color.Transparent, RoundedCornerShape(6.dp))
-            .onFocusChanged { focused = it.isFocused }
-            .focusable()
-            .tvActivate(onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(label, color = if (primary) Color.Black else TextColor, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-    }
-}
-
-@Composable
-fun Poster(session: Session?, itemId: Long, modifier: Modifier, version: Long = 0) {
-    val url = imageUrl(session, itemId, "poster", version)
-    Box(modifier.aspectRatio(2f / 3f).clip(RoundedCornerShape(6.dp)).background(Surface2), contentAlignment = Alignment.Center) {
-        if (url.isNotBlank()) {
-            SizedAsyncImage(model = url, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, widthPx = 260, heightPx = 390)
-        } else {
-            Text("?", color = Muted, fontSize = 20.sp)
-        }
-    }
-}
-
-private fun imageUrl(session: Session?, itemId: Long, kind: String, version: Long = 0): String {
-    if (session == null || itemId <= 0) return ""
-    val suffix = if (version > 0) "?v=$version" else ""
-    return "${session.server}/api/items/$itemId/image/$kind$suffix"
-}
-
-@Composable
-fun SizedAsyncImage(
-    model: String,
-    contentDescription: String?,
-    modifier: Modifier,
-    contentScale: ContentScale,
-    widthPx: Int,
-    heightPx: Int,
-) {
-    val context = LocalContext.current
-    val request = remember(model, widthPx, heightPx) {
-        ImageRequest.Builder(context)
-            .data(model)
-            .size(widthPx, heightPx)
-            .crossfade(false)
-            .allowHardware(true)
-            .build()
-    }
-    AsyncImage(
-        model = request,
-        contentDescription = contentDescription,
-        modifier = modifier,
-        contentScale = contentScale,
-    )
-}
-
-@Composable
-fun Pill(text: String, selected: Boolean, badge: String? = null, onClick: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(if (selected) Accent else if (focused) Surface2 else Color.Transparent)
-            .border(1.dp, if (focused && !selected) FocusGlow else if (!selected) Line else Color.Transparent, RoundedCornerShape(999.dp))
-            .onFocusChanged { focused = it.isFocused }
-            .focusable()
-            .tvActivate(onClick)
-            .padding(horizontal = 12.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        Text(text, color = if (selected) Color.Black else TextColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-        if (badge != null) {
-            Text(badge, color = if (selected) Color.Black.copy(alpha = .6f) else Muted, fontSize = 10.sp)
-        }
-    }
-}
-
-@Composable
-fun RatingBadge(rating: Double, small: Boolean = false) {
-    Text(
-        "\u2605 ${"%.1f".format(rating)}",
-        color = Gold,
-        fontWeight = FontWeight.Bold,
-        fontSize = if (small) 9.sp else 11.sp,
-        modifier = Modifier
-            .background(Gold.copy(alpha = .12f), RoundedCornerShape(3.dp))
-            .padding(horizontal = if (small) 4.dp else 5.dp, vertical = 1.dp),
-    )
-}
-
-@Composable
-fun SourceRatingBadge(label: String, value: String) {
-    Row(
-        modifier = Modifier
-            .background(Surface2, RoundedCornerShape(3.dp))
-            .border(1.dp, Line, RoundedCornerShape(3.dp))
-            .padding(horizontal = 5.dp, vertical = 1.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, color = Muted, fontWeight = FontWeight.Bold, fontSize = 9.sp)
-        Text(value, color = TextColor, fontWeight = FontWeight.Bold, fontSize = 10.sp)
-    }
-}
-
-@Composable
-fun PosterRating(rating: Double) {
-    Box(Modifier.fillMaxSize().padding(4.dp), contentAlignment = Alignment.TopEnd) {
-        Text(
-            "\u2605 ${"%.1f".format(rating)}",
-            color = Gold, fontWeight = FontWeight.Bold, fontSize = 9.sp,
-            modifier = Modifier.background(Color.Black.copy(alpha = .7f), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 2.dp),
-        )
-    }
-}
-
-@Composable
-fun TvTextField(value: String, label: String, password: Boolean = false, modifier: Modifier = Modifier, onChange: (String) -> Unit) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onChange,
-        label = { Text(label, color = Muted, fontSize = 11.sp) },
-        singleLine = true,
-        visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = TextColor,
-            unfocusedTextColor = TextColor,
-            focusedBorderColor = Accent,
-            unfocusedBorderColor = Line,
-            cursorColor = Accent,
-            focusedLabelColor = Accent,
-            unfocusedLabelColor = Muted,
-            focusedContainerColor = Bg,
-            unfocusedContainerColor = Bg,
-        ),
-        shape = RoundedCornerShape(6.dp),
-        modifier = modifier.then(if (modifier == Modifier) Modifier.fillMaxWidth() else Modifier),
-        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
-    )
-}
-
-@Composable
-fun LoadingView(error: String) {
-    Box(Modifier.fillMaxSize().background(Bg), contentAlignment = Alignment.Center) {
-        if (error.isBlank()) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
-                Text("Loading\u2026", color = Muted, fontSize = 13.sp)
-            }
-        } else {
-            Text(error, color = ErrorRed, fontSize = 14.sp)
-        }
-    }
 }

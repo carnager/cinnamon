@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Popcorn Remote</title>
+    <style>
+      :root { color-scheme: dark; --bg:#08090c; --panel:#12151d; --line:#283043; --text:#e8ecf2; --muted:#8b93a5; --accent:#4fd1a5; }
+      * { box-sizing: border-box; }
+      body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--text); }
+      main { max-width: 720px; margin:0 auto; padding:16px; }
+      h1 { margin:0 0 14px; color:var(--accent); font-size:26px; }
+      section { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; margin-bottom:12px; }
+      label { display:block; color:var(--muted); font-size:12px; margin-bottom:8px; }
+      input, select, button { width:100%; border-radius:7px; border:1px solid var(--line); padding:11px 12px; background:#0c0f15; color:var(--text); font-size:16px; }
+      button { background:#1b2230; font-weight:700; }
+      button.primary { background:var(--accent); color:#050706; border-color:transparent; }
+      .row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+      .controls { display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; }
+      .list { display:grid; gap:8px; margin-top:10px; }
+      .item { text-align:left; background:#0c0f15; }
+      .title { font-weight:800; }
+      .meta, .state { color:var(--muted); font-size:13px; margin-top:3px; }
+      .error { color:#ff8b8b; font-size:13px; min-height:18px; }
+      .hidden { display:none; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Popcorn Remote</h1>
+      <section id="loginBox">
+        <label>Server <input id="server" value=""></label>
+        <label>Username <input id="username" autocomplete="username"></label>
+        <label>Password <input id="password" type="password" autocomplete="current-password"></label>
+        <button id="login" class="primary">Sign In</button>
+        <div id="loginError" class="error"></div>
+      </section>
+      <section id="remoteBox" class="hidden">
+        <label>Device <select id="device"></select></label>
+        <div class="row">
+          <button id="refreshDevices">Refresh Devices</button>
+          <button id="pair">Pair Code</button>
+        </div>
+        <label>Pairing code <input id="pairCode" inputmode="numeric" placeholder="123456"></label>
+        <div class="row">
+          <button id="pairSubmit">Pair</button>
+          <button id="logout">Logout</button>
+        </div>
+        <div id="state" class="state">No device state yet</div>
+      </section>
+      <section id="searchBox" class="hidden">
+        <label>Search <input id="query" type="search" autocomplete="off" placeholder="Search movies and shows"></label>
+        <div id="results" class="list"></div>
+      </section>
+      <section id="controlsBox" class="hidden">
+        <div class="controls">
+          <button data-command="pause">Pause</button>
+          <button data-command="resume">Play</button>
+          <button data-command="stop">Stop</button>
+          <button data-seek="-30000">-30s</button>
+          <button data-seek="-10000">-10s</button>
+          <button data-seek="10000">+10s</button>
+        </div>
+      </section>
+    </main>
+    <script src="/remote.js"></script>
+  </body>
+</html>

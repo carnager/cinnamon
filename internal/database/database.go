@@ -1,0 +1,223 @@
+package database
+
+import (
+	"database/sql"
+	"os"
+	"path/filepath"
+	"strings"
+
+	_ "modernc.org/sqlite"
+)
+
+func Open(path string) (*sql.DB, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
+	if err != nil {
+		return nil, err
+	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func migrate(db *sql.DB) error {
+	_, err := db.Exec(`
+CREATE TABLE IF NOT EXISTS media_items (
+	id INTEGER PRIMARY KEY,
+	library_id TEXT NOT NULL,
+	path TEXT NOT NULL UNIQUE,
+	kind TEXT NOT NULL,
+	title TEXT NOT NULL,
+	sort_title TEXT NOT NULL,
+	original_title TEXT,
+	year INTEGER,
+	duration_ms INTEGER,
+	container TEXT,
+	video_codec TEXT,
+	audio_codec TEXT,
+	imdb_id TEXT,
+	tmdb_id TEXT,
+	tvdb_id TEXT,
+	width INTEGER,
+	height INTEGER,
+	size_bytes INTEGER NOT NULL DEFAULT 0,
+	mtime_unix INTEGER NOT NULL,
+	nfo_path TEXT,
+	nfo_mtime_unix INTEGER NOT NULL DEFAULT 0,
+	poster_path TEXT,
+	poster_mtime_unix INTEGER NOT NULL DEFAULT 0,
+	backdrop_path TEXT,
+	backdrop_mtime_unix INTEGER NOT NULL DEFAULT 0,
+	overview TEXT,
+	tagline TEXT,
+	genres TEXT,
+	rating REAL,
+	premiered TEXT,
+	show_title TEXT,
+	season_number INTEGER,
+	episode_number INTEGER,
+	episode_title TEXT,
+	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_media_library_sort ON media_items(library_id, sort_title);
+CREATE INDEX IF NOT EXISTS idx_media_updated ON media_items(updated_at);
+CREATE TABLE IF NOT EXISTS scan_state (
+	library_id TEXT PRIMARY KEY,
+	started_at TEXT,
+	finished_at TEXT,
+	status TEXT NOT NULL,
+	message TEXT NOT NULL DEFAULT '',
+	files_seen INTEGER NOT NULL DEFAULT 0,
+	media_found INTEGER NOT NULL DEFAULT 0,
+	items_imported INTEGER NOT NULL DEFAULT 0,
+	files_skipped INTEGER NOT NULL DEFAULT 0,
+	errors INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS users (
+	id INTEGER PRIMARY KEY,
+	username TEXT NOT NULL UNIQUE,
+	display_name TEXT NOT NULL,
+	password_hash TEXT NOT NULL,
+	is_admin INTEGER NOT NULL DEFAULT 0,
+	disabled INTEGER NOT NULL DEFAULT 0,
+	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS auth_sessions (
+	token TEXT PRIMARY KEY,
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS auth_qr_codes (
+	code TEXT PRIMARY KEY,
+	device_name TEXT NOT NULL DEFAULT '',
+	user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+	token TEXT REFERENCES auth_sessions(token) ON DELETE CASCADE,
+	expires_at TEXT NOT NULL,
+	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	completed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS playback_progress (
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	item_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+	position_ms INTEGER NOT NULL DEFAULT 0,
+	duration_ms INTEGER NOT NULL DEFAULT 0,
+	completed INTEGER NOT NULL DEFAULT 0,
+	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY(user_id, item_id)
+);
+CREATE TABLE IF NOT EXISTS trakt_accounts (
+	user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+	access_token TEXT NOT NULL,
+	refresh_token TEXT NOT NULL,
+	expires_at TEXT NOT NULL,
+	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS user_watchlist (
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	watch_key TEXT NOT NULL,
+	kind TEXT NOT NULL,
+	item_id INTEGER REFERENCES media_items(id) ON DELETE CASCADE,
+	library_id TEXT,
+	show_title TEXT,
+	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY(user_id, watch_key)
+);
+CREATE TABLE IF NOT EXISTS external_ratings_cache (
+	item_id INTEGER PRIMARY KEY REFERENCES media_items(id) ON DELETE CASCADE,
+	imdb_id TEXT,
+	tmdb_id TEXT,
+	imdb_rating REAL,
+	tmdb_rating REAL,
+	rotten_tomatoes_rating INTEGER,
+	metacritic_rating INTEGER,
+	source TEXT NOT NULL DEFAULT '',
+	fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS remote_devices (
+	id TEXT PRIMARY KEY,
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	name TEXT NOT NULL,
+	kind TEXT NOT NULL DEFAULT 'tv',
+	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS remote_pairing_codes (
+	code TEXT PRIMARY KEY,
+	device_id TEXT NOT NULL REFERENCES remote_devices(id) ON DELETE CASCADE,
+	expires_at TEXT NOT NULL,
+	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS remote_commands (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	device_id TEXT NOT NULL REFERENCES remote_devices(id) ON DELETE CASCADE,
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	type TEXT NOT NULL,
+	payload TEXT NOT NULL DEFAULT '{}',
+	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS remote_device_state (
+	device_id TEXT PRIMARY KEY REFERENCES remote_devices(id) ON DELETE CASCADE,
+	item_id INTEGER,
+	title TEXT NOT NULL DEFAULT '',
+	state TEXT NOT NULL DEFAULT 'idle',
+	position_ms INTEGER NOT NULL DEFAULT 0,
+	duration_ms INTEGER NOT NULL DEFAULT 0,
+	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	payload TEXT NOT NULL DEFAULT '{}'
+);`)
+	if err != nil {
+		return err
+	}
+	for _, stmt := range []string{
+		`ALTER TABLE media_items ADD COLUMN show_title TEXT`,
+		`ALTER TABLE media_items ADD COLUMN original_title TEXT`,
+		`ALTER TABLE media_items ADD COLUMN imdb_id TEXT`,
+		`ALTER TABLE media_items ADD COLUMN tmdb_id TEXT`,
+		`ALTER TABLE media_items ADD COLUMN tvdb_id TEXT`,
+		`ALTER TABLE media_items ADD COLUMN nfo_mtime_unix INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE media_items ADD COLUMN poster_mtime_unix INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE media_items ADD COLUMN backdrop_mtime_unix INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE media_items ADD COLUMN overview TEXT`,
+		`ALTER TABLE media_items ADD COLUMN tagline TEXT`,
+		`ALTER TABLE media_items ADD COLUMN genres TEXT`,
+		`ALTER TABLE media_items ADD COLUMN rating REAL`,
+		`ALTER TABLE media_items ADD COLUMN premiered TEXT`,
+		`ALTER TABLE media_items ADD COLUMN season_number INTEGER`,
+		`ALTER TABLE media_items ADD COLUMN episode_number INTEGER`,
+		`ALTER TABLE media_items ADD COLUMN episode_title TEXT`,
+		`CREATE INDEX IF NOT EXISTS idx_media_show ON media_items(library_id, show_title, season_number, episode_number)`,
+		`ALTER TABLE scan_state ADD COLUMN files_seen INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE scan_state ADD COLUMN media_found INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE scan_state ADD COLUMN items_imported INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE scan_state ADD COLUMN files_skipped INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE scan_state ADD COLUMN errors INTEGER NOT NULL DEFAULT 0`,
+		`CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)`,
+		`CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_auth_qr_expires ON auth_qr_codes(expires_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_playback_progress_user ON playback_progress(user_id, updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_watchlist_user ON user_watchlist(user_id, updated_at)`,
+		`ALTER TABLE external_ratings_cache ADD COLUMN tmdb_rating REAL`,
+		`CREATE INDEX IF NOT EXISTS idx_remote_commands_device ON remote_commands(device_id, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_remote_pairing_expires ON remote_pairing_codes(expires_at)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumn(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func isDuplicateColumn(err error) bool {
+	return err != nil && (strings.Contains(err.Error(), "duplicate column name") || strings.Contains(err.Error(), "already exists"))
+}

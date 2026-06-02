@@ -1,0 +1,13 @@
+.gobuild/
+.gomodcache/
+.claude/
+.gradle/
+build/
+android-tv/.gradle/
+android-tv/**/build/
+android-tv/local.properties
+*.db
+*.db-*
+/popcorn
+/popcornd
+config.json

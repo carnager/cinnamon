@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Popcorn</string>
+    <string name="player_audio">Audio</string>
+    <string name="player_bandwidth">Bandwidth</string>
+    <string name="player_direct">Direct</string>
+    <string name="player_fast_forward">Fast forward</string>
+    <string name="player_play_pause">Play or pause</string>
+    <string name="player_rewind">Rewind</string>
+    <string name="player_subtitles">Subtitles</string>
+</resources>

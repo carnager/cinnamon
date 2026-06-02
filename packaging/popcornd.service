@@ -1,0 +1,16 @@
+[Unit]
+Description=Popcorn media daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=popcorn
+Group=popcorn
+ExecStart=/usr/local/bin/popcornd -config /etc/popcorn/config.json
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

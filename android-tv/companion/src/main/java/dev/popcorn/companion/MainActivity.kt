@@ -1,0 +1,2449 @@
+package dev.popcorn.companion
+
+import android.content.Context
+import android.content.pm.ActivityInfo
+import android.os.Bundle
+import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
+import androidx.activity.compose.BackHandler
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Forward30
+import androidx.compose.material.icons.filled.Replay30
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SettingsRemote
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.SubdirectoryArrowRight
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import coil.compose.AsyncImage
+import com.google.zxing.client.android.Intents
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+
+private val Bg = Color(0xFF090B10)
+private val Surface1 = Color(0xFF121722)
+private val Surface2 = Color(0xFF1A2030)
+private val Surface3 = Color(0xFF293548)
+private val Line = Color(0xFF344156)
+private val TextColor = Color(0xFFE8ECF2)
+private val Muted = Color(0xFF97A0B2)
+private val Accent = Color(0xFF4FD1A5)
+private val Blue = Color(0xFF63A8FF)
+private val NavSelected = Color(0xFF4A405F)
+private val ErrorRed = Color(0xFFFF8B8B)
+private val PopcornColorScheme = darkColorScheme(
+    primary = Blue,
+    onPrimary = Color.Black,
+    secondary = Accent,
+    onSecondary = Color.Black,
+    background = Bg,
+    onBackground = TextColor,
+    surface = Surface1,
+    onSurface = TextColor,
+    surfaceVariant = Surface2,
+    onSurfaceVariant = Muted,
+    error = ErrorRed,
+)
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            MaterialTheme(colorScheme = PopcornColorScheme) {
+                Surface(color = MaterialTheme.colorScheme.background) {
+                    CompanionApp()
+                }
+            }
+        }
+    }
+}
+
+data class Session(val server: String, val token: String, val username: String = "")
+data class Library(val id: String, val name: String, val type: String)
+data class Device(val id: String, val name: String, val kind: String)
+data class PlayerState(val itemId: Long, val title: String, val state: String, val positionMs: Long, val durationMs: Long)
+data class PlaybackProgress(val itemId: Long, val positionMs: Long, val durationMs: Long, val completed: Boolean)
+enum class PlaybackTarget { Shield, Phone }
+data class PhonePlaybackState(
+    val item: PopItem? = null,
+    val state: String = "idle",
+    val positionMs: Long = 0,
+    val durationMs: Long = 0,
+    val bandwidthKbps: Int? = null,
+)
+
+fun PlayerState.isActivePlayback(): Boolean {
+    val normalized = state.lowercase()
+    return itemId > 0 && normalized != "idle" && normalized != "stopped"
+}
+
+data class PopItem(
+    val id: Long,
+    val libraryId: String,
+    val kind: String,
+    val title: String,
+    val year: Int,
+    val durationMs: Long,
+    val posterMtimeUnix: Long,
+    val overview: String,
+    val rating: Double,
+    val imdbId: String,
+    val tmdbId: String,
+    val showTitle: String,
+    val seasonNumber: Int,
+    val episodeNumber: Int,
+    val episodeTitle: String,
+)
+data class ShowSummary(
+    val libraryId: String,
+    val title: String,
+    val episodeCount: Int,
+    val seasonCount: Int,
+    val posterItemId: Long,
+    val posterMtimeUnix: Long,
+    val overview: String,
+    val rating: Double,
+)
+data class ExternalRatings(
+    val imdbId: String,
+    val tmdbId: String,
+    val imdbRating: Double,
+    val tmdbRating: Double,
+    val rottenTomatoesRating: Int,
+    val metacriticRating: Int,
+)
+data class SeasonSummary(
+    val libraryId: String,
+    val showTitle: String,
+    val seasonNumber: Int,
+    val title: String,
+    val episodeCount: Int,
+    val posterItemId: Long,
+    val posterMtimeUnix: Long,
+    val overview: String,
+)
+data class ScannedQr(val type: String, val server: String = "", val code: String = "", val callback: String = "")
+data class BandwidthOption(val label: String, val kbps: Int?)
+private val BandwidthOptions = listOf(
+    BandwidthOption("Direct", null),
+    BandwidthOption("3 mbit", 3000),
+    BandwidthOption("5 mbit", 5000),
+    BandwidthOption("8 mbit", 8000),
+    BandwidthOption("10 mbit", 10000),
+    BandwidthOption("15 mbit", 15000),
+)
+data class StreamInfo(
+    val index: Int,
+    val type: String,
+    val codec: String,
+    val language: String,
+    val title: String,
+    val default: Boolean,
+    val forced: Boolean,
+) {
+    fun label(): String {
+        val parts = mutableListOf<String>()
+        if (title.isNotBlank()) parts.add(title)
+        if (language.isNotBlank()) parts.add(language.uppercase())
+        if (codec.isNotBlank()) parts.add(codec)
+        if (forced) parts.add("forced")
+        return parts.joinToString(" · ").ifBlank { "Track $index" }
+    }
+}
+
+sealed interface Page {
+    data object Home : Page
+    data object Movies : Page
+    data object Shows : Page
+    data object Search : Page
+    data object Remote : Page
+    data class Show(val show: ShowSummary) : Page
+    data class Season(val show: ShowSummary, val season: SeasonSummary) : Page
+    data class Detail(val item: PopItem, val from: Page) : Page
+    data class LocalPlayer(val item: PopItem, val audioIndex: Int?, val subtitleIndex: Int?, val from: Page) : Page
+}
+
+@Composable
+fun CompanionApp() {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("popcorn-remote", Context.MODE_PRIVATE) }
+    val scope = rememberCoroutineScope()
+    var session by remember {
+        mutableStateOf(
+            prefs.getString("token", null)?.let {
+                Session(
+                    prefs.getString("server", "http://localhost:8097") ?: "http://localhost:8097",
+                    it,
+                    prefs.getString("username", "") ?: "",
+                )
+            }
+        )
+    }
+    var pendingQrCode by remember { mutableStateOf("") }
+    var pendingQrServer by remember { mutableStateOf("") }
+    var pendingSetupCode by remember { mutableStateOf("") }
+    var pendingSetupCallback by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf("") }
+
+    fun completeQr(active: Session, code: String = pendingQrCode) {
+        if (code.isBlank()) return
+        scope.launch {
+            runCatching { Api(active).completeQr(code) }
+                .onSuccess {
+                    pendingQrCode = ""
+                    pendingQrServer = ""
+                    error = "Shield login approved"
+                }
+                .onFailure { error = it.message ?: "QR approval failed" }
+        }
+    }
+
+    fun completeShieldSetup(active: Session, callback: String = pendingSetupCallback, code: String = pendingSetupCode) {
+        if (callback.isBlank() || code.isBlank()) return
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { postShieldSetup(callback, code, active) } }
+                .onSuccess {
+                    pendingSetupCode = ""
+                    pendingSetupCallback = ""
+                    error = "Shield login approved"
+                }
+                .onFailure { error = "Shield setup failed: ${it.message ?: it::class.java.simpleName}" }
+        }
+    }
+
+    val scanner = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val parsed = parseQr(result.contents.orEmpty())
+        if (parsed == null) {
+            error = "That QR code is not a Popcorn login code"
+            return@rememberLauncherForActivityResult
+        }
+        when (parsed.type) {
+            "popcorn-shield-setup" -> {
+                pendingSetupCode = parsed.code
+                pendingSetupCallback = parsed.callback
+                val active = session
+                if (active != null) {
+                    completeShieldSetup(active, parsed.callback, parsed.code)
+                } else {
+                    error = "Sign in on the phone, then the Shield will be approved"
+                }
+            }
+            "popcorn-login" -> {
+                pendingQrCode = parsed.code
+                pendingQrServer = parsed.server
+                val active = session
+                if (active != null && sameServer(active.server, parsed.server)) {
+                    completeQr(active, parsed.code)
+                } else {
+                    session = null
+                    prefs.edit().putString("server", parsed.server).remove("token").apply()
+                    error = "Sign in to approve the Shield login"
+                }
+            }
+        }
+    }
+
+    if (session == null) {
+        LoginView(
+            initialServer = pendingQrServer.ifBlank { prefs.getString("server", "http://localhost:8097") ?: "http://localhost:8097" },
+            error = error,
+            onScan = {
+                scanner.launch(
+                    ScanOptions()
+                        .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        .setPrompt("Scan the Popcorn QR on your TV")
+                        .setBeepEnabled(false)
+                        .addExtra(Intents.Scan.SCAN_TYPE, Intents.Scan.MIXED_SCAN)
+                )
+            },
+            onLogin = { server, username, password ->
+                scope.launch {
+                    error = ""
+                    runCatching { Api(Session(server.trimEnd('/'), "")).login(username, password) }
+                        .onSuccess {
+                            prefs.edit()
+                                .putString("server", it.server)
+                                .putString("token", it.token)
+                                .putString("username", it.username)
+                                .apply()
+                            session = it
+                            if (pendingSetupCallback.isNotBlank()) {
+                                completeShieldSetup(it)
+                            } else {
+                                completeQr(it)
+                            }
+                        }
+                        .onFailure { error = it.message ?: "Login failed" }
+                }
+            },
+        )
+    } else {
+        BrowserView(
+            session = session!!,
+            error = error,
+            onError = { error = it },
+            onLogout = {
+                prefs.edit().remove("token").apply()
+                session = null
+                error = ""
+            },
+            onScan = {
+                scanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setPrompt("Scan the Popcorn QR on your TV").setBeepEnabled(false))
+            },
+        )
+    }
+}
+
+@Composable
+fun LoginView(initialServer: String, error: String, onScan: () -> Unit, onLogin: (String, String, String) -> Unit) {
+    var server by remember(initialServer) { mutableStateOf(initialServer) }
+    var username by remember { mutableStateOf("admin") }
+    var password by remember { mutableStateOf("") }
+    Box(Modifier.fillMaxSize().background(Bg).padding(20.dp), contentAlignment = Alignment.Center) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("Popcorn Remote", color = Accent, fontSize = 28.sp, fontWeight = FontWeight.Black)
+            PopTextField(server, { server = it }, "Server")
+            PopTextField(username, { username = it }, "Username")
+            PopTextField(password, { password = it }, "Password", password = true)
+            Button(onClick = { onLogin(server, username, password) }, colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black), modifier = Modifier.fillMaxWidth()) {
+                Text("Sign In", fontWeight = FontWeight.Bold)
+            }
+            OutlinedButton(onClick = onScan, modifier = Modifier.fillMaxWidth()) {
+                Text("Scan Shield QR")
+            }
+            if (error.isNotBlank()) Text(error, color = if (error.contains("approved", true)) Accent else ErrorRed)
+        }
+    }
+}
+
+@Composable
+fun PopTextField(value: String, onChange: (String) -> Unit, label: String, password: Boolean = false, modifier: Modifier = Modifier) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        label = { Text(label, color = Muted, fontSize = 14.sp) },
+        singleLine = true,
+        visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+        textStyle = TextStyle(color = TextColor, fontSize = 17.sp, fontWeight = FontWeight.Medium),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = TextColor,
+            unfocusedTextColor = TextColor,
+            focusedContainerColor = Surface1,
+            unfocusedContainerColor = Surface1,
+            focusedBorderColor = Blue,
+            unfocusedBorderColor = Line,
+            cursorColor = Blue,
+            focusedLabelColor = Blue,
+            unfocusedLabelColor = Muted,
+        ),
+        shape = RoundedCornerShape(10.dp),
+        modifier = modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
+fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLogout: () -> Unit, onScan: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var page by remember { mutableStateOf<Page>(Page.Home) }
+    var backStack by remember { mutableStateOf<List<Page>>(emptyList()) }
+    var libraries by remember { mutableStateOf<List<Library>>(emptyList()) }
+    var devices by remember { mutableStateOf<List<Device>>(emptyList()) }
+    var selectedDevice by remember { mutableStateOf<Device?>(null) }
+    var state by remember { mutableStateOf(PlayerState(0, "", "idle", 0, 0)) }
+    var movies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
+    var shows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
+    var recentMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
+    var recentShows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
+    var seasons by remember { mutableStateOf<List<SeasonSummary>>(emptyList()) }
+    var episodes by remember { mutableStateOf<List<PopItem>>(emptyList()) }
+    var query by remember { mutableStateOf("") }
+    var searchMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
+    var searchShows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
+    var moviePage by remember { mutableIntStateOf(0) }
+    var showPage by remember { mutableIntStateOf(0) }
+    var loading by remember { mutableStateOf(false) }
+    var jumpDialog by remember { mutableStateOf(false) }
+    var selectedBandwidth by remember { mutableStateOf<Int?>(null) }
+    var playbackTarget by remember { mutableStateOf(PlaybackTarget.Shield) }
+    var phoneState by remember { mutableStateOf(PhonePlaybackState()) }
+    var phoneAudioIndex by remember { mutableStateOf<Int?>(null) }
+    var phoneSubtitleIndex by remember { mutableStateOf<Int?>(null) }
+    var phoneHlsSession by remember { mutableStateOf<String?>(null) }
+    var phoneStreamBaseMs by remember { mutableStateOf(0L) }
+    val api = remember(session) { Api(session) }
+    val localPlayer = remember(session) {
+        val headers = if (session.token.isNotBlank()) mapOf("Authorization" to "Bearer ${session.token}") else emptyMap()
+        val dataSourceFactory = DefaultHttpDataSource.Factory()
+            .setDefaultRequestProperties(headers)
+            .setAllowCrossProtocolRedirects(true)
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            .build()
+    }
+    val movieLib = libraries.firstOrNull { it.type == "movies" }
+    val tvLib = libraries.firstOrNull { it.type == "tv" }
+
+    DisposableEffect(localPlayer) {
+        val listener = object : Player.Listener {
+            override fun onPlayerError(error: PlaybackException) {
+                onError(error.message ?: "Phone playback failed")
+            }
+        }
+        localPlayer.addListener(listener)
+        onDispose {
+            localPlayer.removeListener(listener)
+            localPlayer.release()
+        }
+    }
+
+    fun navigate(next: Page, stack: Boolean = true) {
+        if (stack) backStack = backStack + page
+        page = next
+    }
+
+    fun goBack() {
+        val previous = backStack.lastOrNull()
+        if (previous != null) {
+            backStack = backStack.dropLast(1)
+            page = previous
+        } else {
+            page = Page.Home
+        }
+    }
+
+    fun send(type: String, payload: JSONObject = JSONObject()) {
+        val device = selectedDevice ?: return onError("No Shield selected")
+        scope.launch {
+            runCatching { api.sendCommand(device.id, type, payload) }
+                .onFailure { onError(it.message ?: "Remote command failed") }
+        }
+    }
+
+    fun sendBandwidth(kbps: Int?) {
+        selectedBandwidth = kbps
+        val payload = JSONObject()
+        if (kbps == null) payload.put("bandwidthKbps", JSONObject.NULL) else payload.put("bandwidthKbps", kbps)
+        send("bandwidth", payload)
+    }
+
+    fun play(itemId: Long, audioIndex: Int?, subtitleIndex: Int?) {
+        val device = selectedDevice ?: return onError("No Shield selected")
+        val payload = JSONObject().put("itemId", itemId)
+        if (audioIndex != null) payload.put("audioIndex", audioIndex)
+        if (subtitleIndex != null) payload.put("subtitleIndex", subtitleIndex)
+        val bandwidth = selectedBandwidth
+        scope.launch {
+            runCatching {
+                val remoteState = runCatching { api.deviceState(device.id) }.getOrNull() ?: state
+                if (remoteState.isActivePlayback()) {
+                    api.sendCommand(device.id, "stop", JSONObject())
+                    delay(900)
+                }
+                api.sendCommand(device.id, "playItem", payload)
+                if (bandwidth != null) {
+                    delay(900)
+                    val bandwidthPayload = JSONObject().put("bandwidthKbps", bandwidth)
+                    api.sendCommand(device.id, "bandwidth", bandwidthPayload)
+                }
+            }.onFailure {
+                onError(it.message ?: "Remote play failed")
+            }
+        }
+    }
+
+    fun phoneAbsolutePosition(): Long {
+        val item = phoneState.item ?: return 0
+        val raw = phoneStreamBaseMs + localPlayer.currentPosition.coerceAtLeast(0)
+        return raw.coerceIn(0, (localPlayer.duration.takeIf { it > 0 } ?: item.durationMs).coerceAtLeast(item.durationMs))
+    }
+
+    fun savePhoneProgress(final: Boolean = false) {
+        val item = phoneState.item ?: return
+        val duration = (localPlayer.duration.takeIf { it > 0 } ?: item.durationMs).coerceAtLeast(0)
+        val position = phoneAbsolutePosition()
+        if (position <= 0 || duration <= 0) return
+        scope.launch {
+            runCatching {
+                api.saveProgress(
+                    item.id,
+                    position.coerceIn(0, duration),
+                    duration,
+                    completed = final || position >= (duration * 0.9).toLong(),
+                )
+            }
+        }
+    }
+
+    fun stopPhonePlayback() {
+        savePhoneProgress(final = false)
+        localPlayer.stop()
+        phoneHlsSession?.let { sessionId ->
+            scope.launch { runCatching { api.stopHls(sessionId) } }
+        }
+        phoneHlsSession = null
+        phoneStreamBaseMs = 0L
+        phoneState = PhonePlaybackState()
+        if (playbackTarget == PlaybackTarget.Phone) playbackTarget = PlaybackTarget.Shield
+    }
+
+    fun loadPhonePlayback(item: PopItem, audioIndex: Int?, subtitleIndex: Int?, bandwidthKbps: Int?, startMs: Long) {
+        phoneHlsSession?.let { sessionId ->
+            scope.launch { runCatching { api.stopHls(sessionId) } }
+        }
+        phoneAudioIndex = audioIndex
+        phoneSubtitleIndex = subtitleIndex
+        selectedBandwidth = bandwidthKbps
+        playbackTarget = PlaybackTarget.Phone
+        val duration = item.durationMs.coerceAtLeast(0)
+        val target = startMs.coerceIn(0, duration.takeIf { it > 0 } ?: Long.MAX_VALUE)
+        val url: String
+        if (bandwidthKbps == null) {
+            phoneHlsSession = null
+            phoneStreamBaseMs = 0L
+            url = streamUrl(session, item.id)
+        } else {
+            val hlsId = "phone_${item.id}_${System.currentTimeMillis()}"
+            phoneHlsSession = hlsId
+            phoneStreamBaseMs = target
+            url = hlsUrl(session, item.id, hlsId, bandwidthKbps, target, audioIndex, subtitleIndex)
+        }
+        phoneState = PhonePlaybackState(item = item, state = "loading", positionMs = target, durationMs = duration, bandwidthKbps = bandwidthKbps)
+        localPlayer.setMediaItem(MediaItem.fromUri(url))
+        localPlayer.prepare()
+        if (bandwidthKbps == null && target > 0) localPlayer.seekTo(target)
+        localPlayer.playWhenReady = true
+    }
+
+    fun playLocally(item: PopItem, audioIndex: Int?, subtitleIndex: Int?) {
+        scope.launch {
+            val resume = runCatching { api.progress(item.id) }.getOrNull()
+            val start = resume?.takeIf { !it.completed }?.positionMs ?: 0L
+            loadPhonePlayback(item, audioIndex, subtitleIndex, null, start)
+            navigate(Page.LocalPlayer(item, audioIndex, subtitleIndex, page))
+        }
+    }
+
+    fun seekTo(positionMs: Long) {
+        if (playbackTarget == PlaybackTarget.Phone && phoneState.item != null) {
+            val item = phoneState.item ?: return
+            val target = positionMs.coerceAtLeast(0)
+            if (phoneState.bandwidthKbps == null) {
+                localPlayer.seekTo(target)
+            } else {
+                loadPhonePlayback(item, phoneAudioIndex, phoneSubtitleIndex, phoneState.bandwidthKbps, target)
+            }
+            phoneState = phoneState.copy(positionMs = target)
+            savePhoneProgress()
+        } else {
+            send("seek", JSONObject().put("positionMs", positionMs.coerceAtLeast(0)))
+        }
+    }
+
+    fun openDetail(item: PopItem) {
+        navigate(Page.Detail(item, page))
+    }
+
+    fun loadMovies(pageIndex: Int) {
+        val lib = movieLib ?: return
+        scope.launch {
+            loading = true
+            val cached = CompanionCache.readItems(context, session, "movies_${lib.id}_$pageIndex")
+            if (cached.isNotEmpty()) {
+                movies = cached
+                moviePage = pageIndex
+                page = Page.Movies
+                backStack = emptyList()
+            }
+            runCatching { api.itemsPage(lib.id, 60, pageIndex * 60) }
+                .onSuccess {
+                    movies = it
+                    moviePage = pageIndex
+                    page = Page.Movies
+                    backStack = emptyList()
+                    CompanionCache.writeItems(context, session, "movies_${lib.id}_$pageIndex", it)
+                }
+                .onFailure { onError(it.message ?: "Movies failed") }
+            loading = false
+        }
+    }
+
+    fun loadShows(pageIndex: Int) {
+        val lib = tvLib ?: return
+        scope.launch {
+            loading = true
+            val cached = CompanionCache.readShows(context, session, "shows_${lib.id}_$pageIndex")
+            if (cached.isNotEmpty()) {
+                shows = cached
+                showPage = pageIndex
+                page = Page.Shows
+                backStack = emptyList()
+            }
+            runCatching { api.showsPage(lib.id, 60, pageIndex * 60) }
+                .onSuccess {
+                    shows = it
+                    showPage = pageIndex
+                    page = Page.Shows
+                    backStack = emptyList()
+                    CompanionCache.writeShows(context, session, "shows_${lib.id}_$pageIndex", it)
+                }
+                .onFailure { onError(it.message ?: "Shows failed") }
+            loading = false
+        }
+    }
+
+    fun openShow(show: ShowSummary) {
+        scope.launch {
+            loading = true
+            val key = "seasons_${show.libraryId}_${show.title}"
+            val cached = CompanionCache.readSeasons(context, session, key)
+            if (cached.isNotEmpty()) {
+                seasons = cached
+                navigate(Page.Show(show))
+            }
+            runCatching { api.seasons(show.libraryId, show.title) }
+                .onSuccess {
+                    seasons = it
+                    CompanionCache.writeSeasons(context, session, key, it)
+                    if (page !is Page.Show) navigate(Page.Show(show))
+                }
+                .onFailure { onError(it.message ?: "Seasons failed") }
+            loading = false
+        }
+    }
+
+    fun openSeason(show: ShowSummary, season: SeasonSummary) {
+        scope.launch {
+            loading = true
+            val key = "episodes_${show.libraryId}_${show.title}_${season.seasonNumber}"
+            val cached = CompanionCache.readItems(context, session, key)
+            if (cached.isNotEmpty()) {
+                episodes = cached
+                navigate(Page.Season(show, season))
+            }
+            runCatching { api.episodes(show.libraryId, show.title, season.seasonNumber) }
+                .onSuccess {
+                    episodes = it
+                    CompanionCache.writeItems(context, session, key, it)
+                    if (page !is Page.Season) navigate(Page.Season(show, season))
+                }
+                .onFailure { onError(it.message ?: "Episodes failed") }
+            loading = false
+        }
+    }
+
+    LaunchedEffect(session) {
+        loading = true
+        val cachedLibraries = CompanionCache.readLibraries(context, session)
+        if (cachedLibraries.isNotEmpty()) {
+            libraries = cachedLibraries
+            val cachedMovieLib = cachedLibraries.firstOrNull { it.type == "movies" }
+            val cachedTvLib = cachedLibraries.firstOrNull { it.type == "tv" }
+            if (cachedMovieLib != null) recentMovies = CompanionCache.readItems(context, session, "recent_movies_${cachedMovieLib.id}")
+            if (cachedTvLib != null) recentShows = CompanionCache.readShows(context, session, "recent_shows_${cachedTvLib.id}")
+        }
+        runCatching {
+            libraries = api.libraries()
+            CompanionCache.writeLibraries(context, session, libraries)
+            devices = uniquePlaybackDevices(api.devices())
+            selectedDevice = devices.firstOrNull { it.kind == "tv" } ?: devices.firstOrNull()
+            val ml = libraries.firstOrNull { it.type == "movies" }
+            val tl = libraries.firstOrNull { it.type == "tv" }
+            if (ml != null) {
+                recentMovies = api.recentItems(ml.id, 12)
+                CompanionCache.writeItems(context, session, "recent_movies_${ml.id}", recentMovies)
+            }
+            if (tl != null) {
+                recentShows = api.recentShows(tl.id, 12)
+                CompanionCache.writeShows(context, session, "recent_shows_${tl.id}", recentShows)
+            }
+        }.onFailure { onError(it.message ?: "Load failed") }
+        loading = false
+    }
+
+    LaunchedEffect(selectedDevice?.id) {
+        while (true) {
+            val id = selectedDevice?.id
+            if (id != null) runCatching { state = api.deviceState(id) }
+            delay(1000)
+        }
+    }
+
+    LaunchedEffect(localPlayer, phoneState.item?.id, phoneStreamBaseMs) {
+        var lastSavedAt = 0L
+        while (true) {
+            val item = phoneState.item
+            if (item != null) {
+                val duration = (localPlayer.duration.takeIf { it > 0 } ?: item.durationMs).coerceAtLeast(0)
+                val position = phoneAbsolutePosition()
+                val label = when {
+                    localPlayer.playbackState == Player.STATE_BUFFERING -> "buffering"
+                    localPlayer.playbackState == Player.STATE_ENDED -> "ended"
+                    localPlayer.isPlaying -> "playing"
+                    localPlayer.playbackState == Player.STATE_IDLE -> "idle"
+                    else -> "paused"
+                }
+                phoneState = phoneState.copy(state = label, positionMs = position, durationMs = duration)
+                val now = System.currentTimeMillis()
+                if (position > 0 && duration > 0 && now - lastSavedAt >= 5000) {
+                    lastSavedAt = now
+                    savePhoneProgress(final = label == "ended")
+                }
+            }
+            delay(500)
+        }
+    }
+
+    LaunchedEffect(query) {
+        val q = query.trim()
+        if (q.length < 2) {
+            searchMovies = emptyList()
+            searchShows = emptyList()
+            return@LaunchedEffect
+        }
+        delay(250)
+        if (q == query.trim()) {
+            runCatching {
+                searchMovies = api.searchMovies(q)
+                searchShows = api.searchShows(q)
+            }.onFailure { onError(it.message ?: "Search failed") }
+        }
+    }
+
+    BackHandler(enabled = page !is Page.Home || backStack.isNotEmpty()) {
+        if (page is Page.Remote) {
+            page = Page.Home
+            backStack = emptyList()
+        } else {
+            goBack()
+        }
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        if (page !is Page.Remote && page !is Page.LocalPlayer) {
+            Scaffold(
+            topBar = {
+                CompanionTopAppBar(
+                    devices = devices,
+                    selectedDevice = selectedDevice,
+                    playbackTarget = playbackTarget,
+                    onSelectPhone = { playbackTarget = PlaybackTarget.Phone },
+                    onSelectDevice = {
+                        selectedDevice = it
+                        playbackTarget = PlaybackTarget.Shield
+                    },
+                    onScan = onScan,
+                    onLogout = onLogout,
+                    onRefreshDevices = {
+                        scope.launch {
+                            runCatching {
+                                val loaded = uniquePlaybackDevices(api.devices())
+                                devices = loaded
+                                selectedDevice = loaded.firstOrNull { it.id == selectedDevice?.id }
+                                    ?: loaded.firstOrNull { it.kind == "tv" }
+                                    ?: loaded.firstOrNull()
+                            }.onFailure { onError(it.message ?: "Device refresh failed") }
+                        }
+                    },
+                )
+            },
+            bottomBar = {
+                Column {
+                    val miniState = if (playbackTarget == PlaybackTarget.Phone) {
+                        PlayerState(
+                            itemId = phoneState.item?.id ?: 0,
+                            title = phoneState.item?.let { displayTitle(it) } ?: "",
+                            state = phoneState.state.ifBlank { "idle" },
+                            positionMs = phoneState.positionMs,
+                            durationMs = phoneState.durationMs,
+                        )
+                    } else {
+                        state
+                    }
+                    MiniPlayer(
+                        session = session,
+                        state = miniState,
+                        target = playbackTarget,
+                        onPlayPause = {
+                            if (playbackTarget == PlaybackTarget.Phone && phoneState.item != null) {
+                                localPlayer.playWhenReady = !localPlayer.isPlaying
+                            } else {
+                                if (state.state == "playing") send("pause") else send("resume")
+                            }
+                        },
+                        onSeek = { delta -> seekTo(miniState.positionMs + delta) },
+                        onClick = {
+                            if (playbackTarget == PlaybackTarget.Phone && phoneState.item != null) {
+                                val item = phoneState.item!!
+                                navigate(Page.LocalPlayer(item, phoneAudioIndex, phoneSubtitleIndex, page), stack = false)
+                            } else if (playbackTarget == PlaybackTarget.Shield) {
+                                navigate(Page.Remote, stack = false)
+                            }
+                        },
+                    )
+                    BottomNavigation(
+                        page = page,
+                        onHome = { page = Page.Home; backStack = emptyList() },
+                        onMovies = { loadMovies(moviePage) },
+                        onShows = { loadShows(showPage) },
+                        onSearch = { page = Page.Search; backStack = emptyList() },
+                        onRemote = {
+                            if (playbackTarget == PlaybackTarget.Phone && phoneState.item != null) {
+                                page = Page.LocalPlayer(phoneState.item!!, phoneAudioIndex, phoneSubtitleIndex, page)
+                            } else if (playbackTarget == PlaybackTarget.Shield) {
+                                page = Page.Remote
+                            } else {
+                                page = Page.Home
+                            }
+                            backStack = emptyList()
+                        },
+                    )
+                }
+            },
+            containerColor = MaterialTheme.colorScheme.background,
+        ) { padding ->
+            Column(Modifier.fillMaxSize().padding(padding)) {
+                if (error.isNotBlank()) Text(error, color = if (error.contains("approved", true)) Accent else MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                if (loading) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
+                }
+                Crossfade(targetState = page, animationSpec = tween(220), label = "page") { current ->
+                    Box(Modifier.fillMaxSize()) {
+                        when (current) {
+                            Page.Home -> HomePage(session, recentMovies, recentShows, onMovie = ::openDetail, onShow = ::openShow)
+                            Page.Movies -> MediaGrid(
+                                title = "Movies",
+                                session = session,
+                                items = movies,
+                                pageIndex = moviePage,
+                                onPrev = { if (moviePage > 0) loadMovies(moviePage - 1) },
+                                onNext = { loadMovies(moviePage + 1) },
+                                onOpen = ::openDetail,
+                            )
+                            Page.Shows -> ShowGrid("TV Shows", session, shows, showPage, onPrev = { if (showPage > 0) loadShows(showPage - 1) }, onNext = { loadShows(showPage + 1) }, onShow = ::openShow)
+                            is Page.Show -> SeasonList(session, current.show, seasons, onBack = ::goBack, onSeason = { openSeason(current.show, it) })
+                            is Page.Season -> EpisodeList(current.show, current.season, episodes, onBack = ::goBack, onOpen = ::openDetail)
+                            is Page.Detail -> DetailPage(
+                                session,
+                                api,
+                                current.item,
+                                playbackTarget = playbackTarget,
+                                selectedDeviceName = selectedDevice?.name,
+                                onBack = ::goBack,
+                                onPlay = { item, audio, subtitle -> play(item.id, audio, subtitle) },
+                                onPlayLocal = ::playLocally,
+                            )
+                            Page.Search -> SearchPage(session, query, { query = it }, searchMovies, searchShows, onMovie = ::openDetail, onShow = ::openShow)
+                            Page.Remote -> Unit
+                            is Page.LocalPlayer -> Unit
+                        }
+                    }
+                }
+            }
+            }
+        }
+        AnimatedVisibility(
+            visible = page is Page.Remote,
+            enter = slideInVertically(animationSpec = tween(260)) { it / 2 } + fadeIn(animationSpec = tween(180)),
+            exit = slideOutVertically(animationSpec = tween(240)) { it / 2 } + fadeOut(animationSpec = tween(160)),
+        ) {
+            RemotePage(
+                session = session,
+                state = state,
+                onBack = { page = Page.Home; backStack = emptyList() },
+                onPause = { send("pause") },
+                onResume = { send("resume") },
+                onStop = { send("stop") },
+                onSeek = { delta -> seekTo(state.positionMs + delta) },
+                onSeekTo = ::seekTo,
+                onJump = { jumpDialog = true },
+                selectedBandwidth = selectedBandwidth,
+                onBandwidth = ::sendBandwidth,
+            )
+        }
+        AnimatedVisibility(
+            visible = page is Page.LocalPlayer,
+            enter = fadeIn(animationSpec = tween(160)),
+            exit = fadeOut(animationSpec = tween(160)),
+        ) {
+            val current = page
+            if (current is Page.LocalPlayer) {
+                LocalPlayerPage(
+                    session = session,
+                    api = api,
+                    player = localPlayer,
+                    item = current.item,
+                    state = phoneState,
+                    selectedAudio = phoneAudioIndex,
+                    selectedSubtitle = phoneSubtitleIndex,
+                    selectedBandwidth = phoneState.bandwidthKbps,
+                    onAudio = { audio ->
+                        loadPhonePlayback(current.item, audio, phoneSubtitleIndex, phoneState.bandwidthKbps ?: 8000, phoneAbsolutePosition())
+                    },
+                    onSubtitle = { subtitle ->
+                        loadPhonePlayback(current.item, phoneAudioIndex, subtitle, phoneState.bandwidthKbps ?: 8000, phoneAbsolutePosition())
+                    },
+                    onBandwidth = { bandwidth ->
+                        loadPhonePlayback(current.item, phoneAudioIndex, phoneSubtitleIndex, bandwidth, phoneAbsolutePosition())
+                    },
+                    onBack = ::goBack,
+                    onStop = {
+                        stopPhonePlayback()
+                        goBack()
+                    },
+                    onSeekTo = ::seekTo,
+                    onError = onError,
+                )
+            }
+        }
+    }
+
+    if (jumpDialog) {
+        JumpDialog(
+            durationMs = state.durationMs,
+            onDismiss = { jumpDialog = false },
+            onJump = {
+                jumpDialog = false
+                seekTo(it)
+            },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CompanionTopAppBar(
+    devices: List<Device>,
+    selectedDevice: Device?,
+    playbackTarget: PlaybackTarget,
+    onSelectPhone: () -> Unit,
+    onSelectDevice: (Device) -> Unit,
+    onScan: () -> Unit,
+    onLogout: () -> Unit,
+    onRefreshDevices: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val targetLabel = if (playbackTarget == PlaybackTarget.Phone) "Phone" else selectedDevice?.displayName() ?: "No TV"
+    val targetIcon = if (playbackTarget == PlaybackTarget.Phone) Icons.Default.PhoneAndroid else Icons.Default.LiveTv
+    TopAppBar(
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Popcorn", fontWeight = FontWeight.Black)
+                Box {
+                    Surface(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable { expanded = true },
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        shape = RoundedCornerShape(999.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(7.dp),
+                        ) {
+                            Icon(targetIcon, contentDescription = null, modifier = Modifier.size(17.dp), tint = MaterialTheme.colorScheme.primary)
+                            Text(targetLabel, maxLines = 1, overflow = TextOverflow.Ellipsis, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            Text("⌄", color = Muted, fontSize = 15.sp)
+                        }
+                    }
+                    DropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false },
+                        modifier = Modifier.background(Surface2),
+                    ) {
+                        DropdownMenuItem(
+                            leadingIcon = { Icon(Icons.Default.PhoneAndroid, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                            text = {
+                                Text(
+                                    "Phone",
+                                    color = TextColor,
+                                    fontWeight = if (playbackTarget == PlaybackTarget.Phone) FontWeight.Black else FontWeight.Normal,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            },
+                            onClick = {
+                                expanded = false
+                                onSelectPhone()
+                            },
+                        )
+                        devices.forEach { device ->
+                            DropdownMenuItem(
+                                leadingIcon = { Icon(Icons.Default.LiveTv, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                                text = {
+                                    Text(
+                                        device.displayName(),
+                                        color = TextColor,
+                                        fontWeight = if (playbackTarget == PlaybackTarget.Shield && selectedDevice?.id == device.id) FontWeight.Black else FontWeight.Normal,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                },
+                                onClick = {
+                                    expanded = false
+                                    onSelectDevice(device)
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        actions = {
+            IconButton(onClick = onScan) {
+                Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan QR")
+            }
+            IconButton(onClick = onLogout) {
+                Icon(Icons.Default.Logout, contentDescription = "Logout")
+            }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            actionIconContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        ),
+    )
+}
+
+@Composable
+fun BottomNavigation(page: Page, onHome: () -> Unit, onMovies: () -> Unit, onShows: () -> Unit, onSearch: () -> Unit, onRemote: () -> Unit) {
+    NavigationBar(
+        containerColor = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.animateContentSize(tween(180)),
+    ) {
+        NavigationBarItem(
+            selected = page is Page.Home,
+            onClick = onHome,
+            icon = { Icon(Icons.Default.Home, contentDescription = null) },
+            label = { Text("Home") },
+        )
+        NavigationBarItem(
+            selected = page is Page.Movies || page is Page.Detail && page.from is Page.Movies,
+            onClick = onMovies,
+            icon = { Icon(Icons.Default.Movie, contentDescription = null) },
+            label = { Text("Movies") },
+        )
+        NavigationBarItem(
+            selected = page is Page.Shows || page is Page.Show || page is Page.Season || page is Page.Detail && page.from !is Page.Movies,
+            onClick = onShows,
+            icon = { Icon(Icons.Default.LiveTv, contentDescription = null) },
+            label = { Text("TV") },
+        )
+        NavigationBarItem(
+            selected = page is Page.Search,
+            onClick = onSearch,
+            icon = { Icon(Icons.Default.Search, contentDescription = null) },
+            label = { Text("Search") },
+        )
+        NavigationBarItem(
+            selected = page is Page.Remote,
+            onClick = onRemote,
+            icon = { Icon(Icons.Default.SettingsRemote, contentDescription = null) },
+            label = { Text("Remote") },
+        )
+    }
+}
+
+@Composable
+fun NavItem(icon: String, label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    Column(
+        modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (selected) NavSelected else Color.Transparent)
+            .animateContentSize(tween(160))
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        Text(icon, color = if (selected) TextColor else Muted, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = if (selected) TextColor else Muted, fontSize = 11.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal, maxLines = 1)
+    }
+}
+
+@Composable
+fun MiniPlayer(session: Session, state: PlayerState, target: PlaybackTarget, onPlayPause: () -> Unit, onSeek: (Long) -> Unit, onClick: () -> Unit) {
+    val active = state.title.isNotBlank()
+    val targetFraction = if (state.durationMs > 0) (state.positionMs.toFloat() / state.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
+    val fraction by animateFloatAsState(targetValue = targetFraction, animationSpec = tween(350), label = "miniProgress")
+    val targetLabel = if (target == PlaybackTarget.Phone) "Phone" else "Shield"
+    ElevatedCard(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp).animateContentSize(tween(180)),
+        colors = CardDefaults.elevatedCardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp),
+    ) {
+        LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth().height(3.dp), color = MaterialTheme.colorScheme.primary, trackColor = Line)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(50.dp).clip(RoundedCornerShape(7.dp)).background(Surface2), contentAlignment = Alignment.Center) {
+                if (state.itemId > 0) {
+                    AsyncImage(imageUrl(session, state.itemId, 0), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                } else {
+                    Text("♪", color = Muted, fontSize = 20.sp)
+                }
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(if (active) state.title else "$targetLabel idle", color = if (active) TextColor else Muted, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("$targetLabel · ${state.state.ifBlank { "idle" }} · ${fmt(state.positionMs)} / ${fmt(state.durationMs)}", color = Muted, fontSize = 12.sp, maxLines = 1)
+            }
+            IconButton(onClick = { onSeek(-30000) }) {
+                Icon(Icons.Default.SkipPrevious, contentDescription = "Back", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = onPlayPause) {
+                Icon(if (state.state == "playing") Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play or pause", tint = MaterialTheme.colorScheme.onSurface)
+            }
+            IconButton(onClick = { onSeek(30000) }) {
+                Icon(Icons.Default.SkipNext, contentDescription = "Forward", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+fun TopBar(devices: List<Device>, selectedDevice: Device?, onDevice: (Device) -> Unit, onRefreshDevices: () -> Unit, onScan: () -> Unit, onLogout: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Surface1)
+            .statusBarsPadding()
+            .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Popcorn", color = Accent, fontWeight = FontWeight.Black, fontSize = 22.sp, modifier = Modifier.weight(1f))
+            TextButton(onClick = onScan) { Text("Scan QR") }
+            TextButton(onClick = onLogout) { Text("Logout") }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(selectedDevice?.name ?: "No Shield", color = TextColor, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            OutlinedButton(onClick = onRefreshDevices) { Text("Refresh") }
+            if (devices.size > 1) OutlinedButton(onClick = {
+                val current = devices.indexOfFirst { it.id == selectedDevice?.id }
+                onDevice(devices[(current + 1).floorMod(devices.size)])
+            }) { Text("Switch") }
+        }
+    }
+}
+
+@Composable
+fun RemoteControls(state: PlayerState, onPause: () -> Unit, onResume: () -> Unit, onStop: () -> Unit, onSeek: (Long) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).clip(RoundedCornerShape(10.dp)).background(Surface1).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(state.title.ifBlank { "Idle" }, color = TextColor, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text("${state.state}  ${fmt(state.positionMs)} / ${fmt(state.durationMs)}", color = Muted, fontSize = 12.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { onSeek(-30000) }, modifier = Modifier.weight(1f)) { Text("-30") }
+            Button(onClick = onResume, colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black), modifier = Modifier.weight(1f)) { Text("Play") }
+            Button(onClick = onPause, modifier = Modifier.weight(1f)) { Text("Pause") }
+            OutlinedButton(onClick = { onSeek(30000) }, modifier = Modifier.weight(1f)) { Text("+30") }
+            OutlinedButton(onClick = onStop, modifier = Modifier.weight(1f)) { Text("Stop") }
+        }
+    }
+}
+
+@Composable
+fun HomePage(session: Session, movies: List<PopItem>, shows: List<ShowSummary>, onMovie: (PopItem) -> Unit, onShow: (ShowSummary) -> Unit) {
+    LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        item { Text("Recently Added Movies", color = TextColor, fontSize = 19.sp, fontWeight = FontWeight.Bold) }
+        item { PosterRow(session, movies, onMovie) }
+        item { Text("Recently Added TV", color = TextColor, fontSize = 19.sp, fontWeight = FontWeight.Bold) }
+        item { ShowRow(session, shows, onShow) }
+    }
+}
+
+@Composable
+fun MediaGrid(title: String, session: Session, items: List<PopItem>, pageIndex: Int, onPrev: () -> Unit, onNext: () -> Unit, onOpen: (PopItem) -> Unit) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+        PagingHeader(title, pageIndex, onPrev, onNext)
+        LazyVerticalGrid(columns = GridCells.Adaptive(120.dp), contentPadding = PaddingValues(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            items(items, key = { it.id }) { item -> MovieCard(session, item, onClick = { onOpen(item) }) }
+        }
+    }
+}
+
+@Composable
+fun ShowGrid(title: String, session: Session, shows: List<ShowSummary>, pageIndex: Int, onPrev: () -> Unit, onNext: () -> Unit, onShow: (ShowSummary) -> Unit) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
+        PagingHeader(title, pageIndex, onPrev, onNext)
+        LazyVerticalGrid(columns = GridCells.Adaptive(120.dp), contentPadding = PaddingValues(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            items(shows, key = { it.libraryId + it.title }) { show -> ShowCard(session, show, onClick = { onShow(show) }) }
+        }
+    }
+}
+
+@Composable
+fun SeasonList(session: Session, show: ShowSummary, seasons: List<SeasonSummary>, onBack: () -> Unit, onSeason: (SeasonSummary) -> Unit) {
+    LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item { HeaderBack(show.title, onBack) }
+        items(seasons, key = { it.seasonNumber }) { season ->
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Surface1).clickable { onSeason(season) }.padding(10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                PosterImage(imageUrl(session, season.posterItemId, season.posterMtimeUnix), Modifier.width(72.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(season.title.ifBlank { "Season ${season.seasonNumber}" }, color = TextColor, fontWeight = FontWeight.Bold)
+                    Text("${season.episodeCount} episodes", color = Muted, fontSize = 12.sp)
+                    if (season.overview.isNotBlank()) Text(season.overview, color = Muted, fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun EpisodeList(show: ShowSummary, season: SeasonSummary, episodes: List<PopItem>, onBack: () -> Unit, onOpen: (PopItem) -> Unit) {
+    LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { HeaderBack("${show.title} · ${season.title.ifBlank { "Season ${season.seasonNumber}" }}", onBack) }
+        items(episodes, key = { it.id }) { episode ->
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Surface1).clickable { onOpen(episode) }.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("${episode.episodeNumber}", color = Accent, fontWeight = FontWeight.Bold, modifier = Modifier.width(28.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(episode.episodeTitle.ifBlank { episode.title }, color = TextColor, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(fmtDuration(episode.durationMs), color = Muted, fontSize = 12.sp)
+                }
+                Button(onClick = { onOpen(episode) }, colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black)) { Text("Open") }
+            }
+        }
+    }
+}
+
+@Composable
+fun SearchPage(session: Session, query: String, onQuery: (String) -> Unit, movies: List<PopItem>, shows: List<ShowSummary>, onMovie: (PopItem) -> Unit, onShow: (ShowSummary) -> Unit) {
+    LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item { PopTextField(query, onQuery, "Search movies and shows") }
+        if (shows.isNotEmpty()) item { Text("Shows", color = TextColor, fontWeight = FontWeight.Bold) }
+        items(shows, key = { it.libraryId + it.title }) { show -> SearchRow(title = show.title, meta = "${show.seasonCount} seasons · ${show.episodeCount} episodes", onClick = { onShow(show) }) }
+        if (movies.isNotEmpty()) item { Text("Movies", color = TextColor, fontWeight = FontWeight.Bold) }
+        items(movies, key = { it.id }) { item -> SearchRow(title = item.title, meta = listOf(item.year.takeIf { it > 0 }?.toString(), fmtDuration(item.durationMs)).filterNotNull().joinToString(" · "), onClick = { onMovie(item) }) }
+    }
+}
+
+@Composable
+fun DetailPage(
+    session: Session,
+    api: Api,
+    item: PopItem,
+    playbackTarget: PlaybackTarget,
+    selectedDeviceName: String?,
+    onBack: () -> Unit,
+    onPlay: (PopItem, Int?, Int?) -> Unit,
+    onPlayLocal: (PopItem, Int?, Int?) -> Unit,
+) {
+    var streams by remember(item.id) { mutableStateOf<List<StreamInfo>>(emptyList()) }
+    var ratings by remember(item.id) { mutableStateOf<ExternalRatings?>(null) }
+    var selectedAudio by remember(item.id) { mutableStateOf<Int?>(null) }
+    var selectedSubtitle by remember(item.id) { mutableStateOf<Int?>(null) }
+    var error by remember(item.id) { mutableStateOf("") }
+    val audioTracks = streams.filter { it.type == "audio" }
+    val subtitleTracks = streams.filter { it.type == "subtitle" }
+
+    LaunchedEffect(item.id) {
+        runCatching { api.streams(item.id) }
+            .onSuccess { loaded ->
+                streams = loaded
+                selectedAudio = loaded.firstOrNull { it.type == "audio" && it.default }?.index ?: loaded.firstOrNull { it.type == "audio" }?.index
+                selectedSubtitle = loaded.firstOrNull { it.type == "subtitle" && it.default }?.index
+            }
+            .onFailure { error = it.message ?: "Could not load streams" }
+        runCatching { api.ratings(item.id) }
+            .onSuccess { ratings = it }
+    }
+
+    LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        item {
+            ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = Surface1), shape = RoundedCornerShape(18.dp)) {
+                Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.Top) {
+                    PosterImage(imageUrl(session, item.id, item.posterMtimeUnix), Modifier.width(132.dp))
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(displayTitle(item), color = TextColor, fontSize = 25.sp, lineHeight = 29.sp, fontWeight = FontWeight.Black, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                        val meta = listOf(
+                            item.year.takeIf { it > 0 }?.toString(),
+                            fmtDuration(item.durationMs),
+                            if (item.kind == "episode") "S%02d E%02d".format(item.seasonNumber, item.episodeNumber) else null,
+                        ).filterNotNull().joinToString(" · ")
+                        if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        RatingBadges(item, ratings)
+                    }
+                }
+            }
+        }
+        item {
+            val targetLabel = if (playbackTarget == PlaybackTarget.Phone) "Phone" else cleanDeviceName(selectedDeviceName ?: "") ?: "TV"
+            Button(
+                onClick = {
+                    if (playbackTarget == PlaybackTarget.Phone) onPlayLocal(item, selectedAudio, selectedSubtitle)
+                    else onPlay(item, selectedAudio, selectedSubtitle)
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black),
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Text("Play on $targetLabel", fontWeight = FontWeight.Black, fontSize = 16.sp)
+            }
+        }
+        if (item.overview.isNotBlank()) {
+            item {
+                ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = Surface1), shape = RoundedCornerShape(16.dp)) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Overview", color = TextColor, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text(item.overview, color = TextColor, fontSize = 14.sp, lineHeight = 20.sp)
+                    }
+                }
+            }
+        }
+        if (error.isNotBlank()) {
+            item { Text(error, color = ErrorRed, fontSize = 12.sp) }
+        }
+        item {
+            ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = Surface1), shape = RoundedCornerShape(16.dp)) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    TrackSection("Audio", audioTracks, selectedAudio, emptyLabel = "Default", onSelect = { selectedAudio = it })
+                    TrackSection("Subtitles", subtitleTracks, selectedSubtitle, emptyLabel = "Off", onSelect = { selectedSubtitle = it })
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun RatingBadges(item: PopItem, ratings: ExternalRatings?) {
+    val imdbId = ratings?.imdbId?.takeIf { it.isNotBlank() } ?: item.imdbId
+    val tmdbId = ratings?.tmdbId?.takeIf { it.isNotBlank() } ?: item.tmdbId
+    val badges = buildList {
+        ratings?.imdbRating?.takeIf { it > 0 }?.let { add("IMDb" to "%.1f".format(it)) }
+        ratings?.tmdbRating?.takeIf { it > 0 }?.let { add("TMDb" to "%.1f".format(it)) }
+        ratings?.rottenTomatoesRating?.takeIf { it > 0 }?.let { add("RT" to "$it%") }
+        ratings?.metacriticRating?.takeIf { it > 0 }?.let { add("MC" to it.toString()) }
+        if (isEmpty()) {
+            item.rating.takeIf { it > 0 }?.let { add("NFO" to "%.1f".format(it)) }
+            imdbId.takeIf { it.isNotBlank() }?.let { add("IMDb" to it.removePrefix("tt")) }
+            tmdbId.takeIf { it.isNotBlank() }?.let { add("TMDb" to it) }
+        }
+    }
+    if (badges.isEmpty()) return
+    Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+        badges.forEach { (label, value) ->
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(if (label == "IMDb") Color(0xFFF5C518) else if (label == "TMDb") Color(0xFF01B4E4) else Surface3)
+                    .padding(horizontal = 9.dp, vertical = 5.dp),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(label, color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                Text(value, color = Color.Black.copy(alpha = .78f), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+fun TrackSection(title: String, tracks: List<StreamInfo>, selected: Int?, emptyLabel: String, onSelect: (Int?) -> Unit) {
+    var expanded by remember(title, tracks, selected) { mutableStateOf(false) }
+    val selectedLabel = tracks.firstOrNull { it.index == selected }?.label() ?: emptyLabel
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        Text(title, color = TextColor, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        Box(Modifier.fillMaxWidth()) {
+            OutlinedButton(
+                onClick = { expanded = true },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+            ) {
+                Text(selectedLabel, color = TextColor, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("⌄", color = Muted, fontSize = 20.sp)
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.background(Surface2),
+            ) {
+                DropdownMenuItem(
+                    text = { Text(emptyLabel, color = TextColor, fontWeight = if (selected == null) FontWeight.Bold else FontWeight.Normal) },
+                    onClick = {
+                        onSelect(null)
+                        expanded = false
+                    },
+                )
+                tracks.forEach { track ->
+                    DropdownMenuItem(
+                        text = { Text(track.label(), color = TextColor, fontWeight = if (selected == track.index) FontWeight.Bold else FontWeight.Normal) },
+                        onClick = {
+                            onSelect(track.index)
+                            expanded = false
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun TrackChoice(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (selected) Accent else Surface1)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, color = if (selected) Color.Black else TextColor, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.weight(1f))
+        if (selected) Text("Selected", color = Color.Black.copy(alpha = .65f), fontSize = 12.sp)
+    }
+}
+
+@Composable
+fun RemotePage(
+    session: Session,
+    state: PlayerState,
+    onBack: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onStop: () -> Unit,
+    onSeek: (Long) -> Unit,
+    onSeekTo: (Long) -> Unit,
+    onJump: () -> Unit,
+    selectedBandwidth: Int?,
+    onBandwidth: (Int?) -> Unit,
+) {
+    val duration = state.durationMs.coerceAtLeast(0)
+    val position = state.positionMs.coerceIn(0, if (duration > 0) duration else Long.MAX_VALUE)
+    var scrub by remember(state.title, duration) { mutableStateOf(position.toFloat()) }
+    var showBandwidthDialog by remember { mutableStateOf(false) }
+    LaunchedEffect(position) { scrub = position.toFloat() }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize().background(Bg).statusBarsPadding().navigationBarsPadding().animateContentSize(tween(180)),
+        contentPadding = PaddingValues(horizontal = 22.dp, vertical = 26.dp),
+        verticalArrangement = Arrangement.spacedBy(22.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        item {
+            Box(Modifier.fillMaxWidth()) {
+                Text("⌄", color = TextColor, fontSize = 34.sp, modifier = Modifier.align(Alignment.CenterStart).clickable(onClick = onBack).padding(8.dp))
+                Text("Now Playing", color = Muted, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
+            }
+        }
+        item {
+            Box(Modifier.fillMaxWidth(.78f).aspectRatio(1f).clip(RoundedCornerShape(26.dp)).background(Surface2), contentAlignment = Alignment.Center) {
+                if (state.itemId > 0) {
+                    AsyncImage(imageUrl(session, state.itemId, 0), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                } else {
+                    Text("♪", color = Muted, fontSize = 56.sp)
+                }
+            }
+        }
+        item {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(state.title.ifBlank { "Shield idle" }, color = TextColor, fontSize = 26.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text("${state.state.ifBlank { "idle" }} on Shield", color = Muted, fontSize = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        item {
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Slider(
+                    value = scrub,
+                    onValueChange = { scrub = it },
+                    onValueChangeFinished = { onSeekTo(scrub.toLong()) },
+                    valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(fmt(position), color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text(fmt(duration), color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                IconButton(onClick = { onSeek(-30000) }, modifier = Modifier.size(64.dp)) {
+                    Icon(Icons.Default.SkipPrevious, contentDescription = "Back 30 seconds", tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(38.dp))
+                }
+                Surface(
+                    modifier = Modifier.size(92.dp),
+                    shape = RoundedCornerShape(999.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .pointerInput(state.state) {
+                                detectTapGestures(
+                                    onTap = { if (state.state == "playing") onPause() else onResume() },
+                                    onLongPress = { onStop() },
+                                )
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(if (state.state == "playing") Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play or pause. Long press to stop.", modifier = Modifier.size(44.dp))
+                    }
+                }
+                IconButton(onClick = { onSeek(30000) }, modifier = Modifier.size(64.dp)) {
+                    Icon(Icons.Default.SkipNext, contentDescription = "Forward 30 seconds", tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(38.dp))
+                }
+            }
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
+                PlayerMaterialIconButton("Jump", Icons.Default.SubdirectoryArrowRight, onJump)
+                PlayerMaterialIconButton(BandwidthOptions.firstOrNull { it.kbps == selectedBandwidth }?.label ?: "Quality", Icons.Default.Speed, { showBandwidthDialog = true })
+                PlayerMaterialIconButton("Back 30", Icons.Default.Replay30, { onSeek(-30000) })
+                PlayerMaterialIconButton("Fwd 30", Icons.Default.Forward30, { onSeek(30000) })
+            }
+        }
+    }
+
+    if (showBandwidthDialog) {
+        BandwidthDialog(
+            selectedBandwidth = selectedBandwidth,
+            onDismiss = { showBandwidthDialog = false },
+            onBandwidth = {
+                onBandwidth(it)
+                showBandwidthDialog = false
+            },
+        )
+    }
+}
+
+@Composable
+fun LocalPlayerPage(
+    session: Session,
+    api: Api,
+    player: ExoPlayer,
+    item: PopItem,
+    state: PhonePlaybackState,
+    selectedAudio: Int?,
+    selectedSubtitle: Int?,
+    selectedBandwidth: Int?,
+    onAudio: (Int?) -> Unit,
+    onSubtitle: (Int?) -> Unit,
+    onBandwidth: (Int?) -> Unit,
+    onBack: () -> Unit,
+    onStop: () -> Unit,
+    onSeekTo: (Long) -> Unit,
+    onError: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    var streams by remember(item.id) { mutableStateOf<List<StreamInfo>>(emptyList()) }
+    var scrub by remember(item.id) { mutableStateOf(state.positionMs.toFloat()) }
+    var dragging by remember(item.id) { mutableStateOf(false) }
+    var showQuality by remember { mutableStateOf(false) }
+    var showAudio by remember { mutableStateOf(false) }
+    var showSubtitles by remember { mutableStateOf(false) }
+    var fullscreen by remember { mutableStateOf(false) }
+    var controlsVisible by remember { mutableStateOf(true) }
+    val audioTracks = streams.filter { it.type == "audio" }
+    val subtitleTracks = streams.filter { it.type == "subtitle" }
+    val duration = state.durationMs.coerceAtLeast(item.durationMs).coerceAtLeast(0)
+    val position = state.positionMs.coerceIn(0, if (duration > 0) duration else Long.MAX_VALUE)
+    val menuOpen = showQuality || showAudio || showSubtitles
+
+    fun revealControls() {
+        controlsVisible = true
+    }
+
+    BackHandler(onBack = onBack)
+
+    DisposableEffect(fullscreen) {
+        setImmersive(context, fullscreen)
+        onDispose { setImmersive(context, false) }
+    }
+
+    LaunchedEffect(item.id) {
+        runCatching { api.streams(item.id) }
+            .onSuccess { streams = it }
+            .onFailure { onError(it.message ?: "Could not load streams") }
+    }
+
+    LaunchedEffect(position) {
+        if (!dragging) scrub = position.toFloat()
+    }
+
+    LaunchedEffect(controlsVisible, state.state, dragging, menuOpen) {
+        if (controlsVisible && state.state == "playing" && !dragging && !menuOpen) {
+            delay(3000)
+            if (state.state == "playing" && !dragging && !menuOpen) controlsVisible = false
+        }
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .then(if (fullscreen) Modifier else Modifier.statusBarsPadding().navigationBarsPadding())
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = {
+                    controlsVisible = !controlsVisible
+                })
+            },
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            AnimatedVisibility(
+                visible = controlsVisible && !fullscreen,
+                enter = fadeIn(animationSpec = tween(140)),
+                exit = fadeOut(animationSpec = tween(180)),
+            ) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = .72f))
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    OutlinedButton(onClick = onBack) { Text("Back") }
+                    Column(Modifier.weight(1f)) {
+                        Text(displayTitle(item), color = TextColor, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text("Playing on phone · ${BandwidthOptions.firstOrNull { it.kbps == selectedBandwidth }?.label ?: "Direct"}", color = Muted, fontSize = 12.sp)
+                    }
+                }
+            }
+            AndroidView(
+                modifier = Modifier.weight(1f).fillMaxWidth().background(Color.Black),
+                factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        useController = false
+                        keepScreenOn = true
+                        this.player = player
+                    }
+                },
+                update = { it.player = player },
+            )
+        }
+
+        AnimatedVisibility(
+            visible = controlsVisible || !player.isPlaying || dragging || menuOpen,
+            enter = fadeIn(animationSpec = tween(140)),
+            exit = fadeOut(animationSpec = tween(180)),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .background(Color.Black.copy(alpha = .68f))
+                    .padding(horizontal = 18.dp, vertical = if (fullscreen) 10.dp else 14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (fullscreen) {
+                    Text(displayTitle(item), color = TextColor, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Slider(
+                    value = scrub.coerceIn(0f, duration.coerceAtLeast(1).toFloat()),
+                    onValueChange = {
+                        revealControls()
+                        dragging = true
+                        scrub = it
+                    },
+                    onValueChangeFinished = {
+                        dragging = false
+                        onSeekTo(scrub.toLong())
+                    },
+                    valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(fmt(if (dragging) scrub.toLong() else position), color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(fmt(duration), color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = { revealControls(); onSeekTo(position - 30000) }) {
+                        Icon(Icons.Default.Replay30, contentDescription = "Back 30 seconds", tint = TextColor, modifier = Modifier.size(34.dp))
+                    }
+                    Surface(
+                        modifier = Modifier.size(76.dp),
+                        shape = RoundedCornerShape(999.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ) {
+                        Box(
+                            Modifier.fillMaxSize().clickable {
+                                revealControls()
+                                player.playWhenReady = !player.isPlaying
+                            },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(if (player.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play or pause", modifier = Modifier.size(40.dp))
+                        }
+                    }
+                    IconButton(onClick = { revealControls(); onSeekTo(position + 30000) }) {
+                        Icon(Icons.Default.Forward30, contentDescription = "Forward 30 seconds", tint = TextColor, modifier = Modifier.size(34.dp))
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
+                    PlayerMaterialIconButton(BandwidthOptions.firstOrNull { it.kbps == selectedBandwidth }?.label ?: "Direct", Icons.Default.Speed, { revealControls(); showQuality = true })
+                    PlayerMaterialIconButton(shortTrackLabel(audioTracks.firstOrNull { it.index == selectedAudio }, "Audio"), Icons.Default.MusicNote, { revealControls(); showAudio = true })
+                    PlayerMaterialIconButton(shortTrackLabel(subtitleTracks.firstOrNull { it.index == selectedSubtitle }, "Subs"), Icons.Default.SubdirectoryArrowRight, { revealControls(); showSubtitles = true })
+                    PlayerMaterialIconButton(if (fullscreen) "Window" else "Full", Icons.Default.LiveTv, { revealControls(); fullscreen = !fullscreen })
+                }
+                OutlinedButton(onClick = { revealControls(); onStop() }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Stop phone playback")
+                }
+            }
+        }
+    }
+
+    if (showQuality) {
+        BandwidthDialog(
+            selectedBandwidth = selectedBandwidth,
+            onDismiss = { showQuality = false },
+            onBandwidth = {
+                showQuality = false
+                onBandwidth(it)
+            },
+        )
+    }
+    if (showAudio) {
+        TrackDialog("Audio", audioTracks, selectedAudio, "Default", { showAudio = false }, {
+            showAudio = false
+            onAudio(it)
+        })
+    }
+    if (showSubtitles) {
+        TrackDialog("Subtitles", subtitleTracks, selectedSubtitle, "Off", { showSubtitles = false }, {
+            showSubtitles = false
+            onSubtitle(it)
+        })
+    }
+}
+
+@Composable
+fun BandwidthSelector(selectedBandwidth: Int?, onBandwidth: (Int?) -> Unit) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Bandwidth", color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.Bold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            BandwidthOptions.forEach { option ->
+                FilterChip(
+                    selected = option.kbps == selectedBandwidth,
+                    onClick = { onBandwidth(option.kbps) },
+                    label = { Text(option.label, fontSize = 12.sp) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun BandwidthDialog(selectedBandwidth: Int?, onDismiss: () -> Unit, onBandwidth: (Int?) -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Playback quality") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                BandwidthOptions.forEach { option ->
+                    TrackChoice(option.label, selectedBandwidth == option.kbps) { onBandwidth(option.kbps) }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+@Composable
+fun TrackDialog(title: String, tracks: List<StreamInfo>, selected: Int?, emptyLabel: String, onDismiss: () -> Unit, onSelect: (Int?) -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TrackChoice(emptyLabel, selected == null) { onSelect(null) }
+                tracks.forEach { track ->
+                    TrackChoice(track.label(), selected == track.index) { onSelect(track.index) }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+@Composable
+fun PlayerIconButton(label: String, icon: String, onClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.width(72.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(vertical = 8.dp),
+    ) {
+        Text(icon, color = Muted, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = Muted, fontSize = 10.sp, maxLines = 1, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+fun PlayerMaterialIconButton(label: String, icon: ImageVector, onClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.width(72.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(vertical = 8.dp),
+    ) {
+        Icon(icon, contentDescription = label, tint = Muted, modifier = Modifier.size(28.dp))
+        Text(label, color = Muted, fontSize = 10.sp, maxLines = 1, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+fun JumpDialog(durationMs: Long, onDismiss: () -> Unit, onJump: (Long) -> Unit) {
+    var value by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Jump to time") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                PopTextField(value, { value = it }, "hh:mm:ss, mm:ss, or minutes")
+                if (durationMs > 0) Text("Runtime ${fmt(durationMs)}", color = Muted, fontSize = 12.sp)
+            }
+        },
+        confirmButton = {
+            Button(onClick = { parseTimeToMs(value)?.let(onJump) }, colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black)) {
+                Text("Jump")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+fun PagingHeader(title: String, pageIndex: Int, onPrev: () -> Unit, onNext: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(title, color = TextColor, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        OutlinedButton(onClick = onPrev, enabled = pageIndex > 0) { Text("Prev") }
+        Text("${pageIndex + 1}", color = Muted)
+        OutlinedButton(onClick = onNext) { Text("Next") }
+    }
+}
+
+@Composable
+fun HeaderBack(title: String, onBack: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = onBack) { Text("Back") }
+        Text(title, color = TextColor, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+fun PosterRow(session: Session, items: List<PopItem>, onClick: (PopItem) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+        items.take(3).forEach { MovieCard(session, it, Modifier.weight(1f), onClick = { onClick(it) }) }
+    }
+}
+
+@Composable
+fun ShowRow(session: Session, shows: List<ShowSummary>, onClick: (ShowSummary) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+        shows.take(3).forEach { ShowCard(session, it, Modifier.weight(1f), onClick = { onClick(it) }) }
+    }
+}
+
+@Composable
+fun MovieCard(session: Session, item: PopItem, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Column(modifier.clip(RoundedCornerShape(8.dp)).background(Surface1).clickable(onClick = onClick).padding(6.dp)) {
+        PosterImage(imageUrl(session, item.id, item.posterMtimeUnix), Modifier.fillMaxWidth())
+        Spacer(Modifier.height(6.dp))
+        Text(item.title, color = TextColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(listOf(item.year.takeIf { it > 0 }?.toString(), fmtDuration(item.durationMs)).filterNotNull().joinToString(" · "), color = Muted, fontSize = 11.sp, maxLines = 1)
+    }
+}
+
+@Composable
+fun ShowCard(session: Session, show: ShowSummary, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Column(modifier.clip(RoundedCornerShape(8.dp)).background(Surface1).clickable(onClick = onClick).padding(6.dp)) {
+        PosterImage(imageUrl(session, show.posterItemId, show.posterMtimeUnix), Modifier.fillMaxWidth())
+        Spacer(Modifier.height(6.dp))
+        Text(show.title, color = TextColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text("${show.seasonCount} seasons", color = Muted, fontSize = 11.sp, maxLines = 1)
+    }
+}
+
+@Composable
+fun PosterImage(url: String, modifier: Modifier) {
+    Box(modifier.aspectRatio(2f / 3f).clip(RoundedCornerShape(6.dp)).background(Surface2), contentAlignment = Alignment.Center) {
+        if (url.isNotBlank()) AsyncImage(url, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) else Text("?", color = Muted)
+    }
+}
+
+@Composable
+fun SearchRow(title: String, meta: String, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Surface1).clickable(onClick = onClick).padding(12.dp)) {
+        Text(title, color = TextColor, fontWeight = FontWeight.Bold)
+        if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 12.sp)
+    }
+}
+
+@Composable
+fun NavButton(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        colors = ButtonDefaults.buttonColors(containerColor = if (selected) Accent else Surface2, contentColor = if (selected) Color.Black else TextColor),
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+        modifier = modifier,
+    ) { Text(label, fontSize = 13.sp, fontWeight = FontWeight.Bold) }
+}
+
+private object CompanionCache {
+    fun readLibraries(context: Context, session: Session): List<Library> {
+        return runCatching {
+            val arr = JSONArray(cacheFile(context, session, "libraries").readText())
+            (0 until arr.length()).map { jsonToLibrary(arr.getJSONObject(it)) }
+        }.getOrDefault(emptyList())
+    }
+
+    fun writeLibraries(context: Context, session: Session, libraries: List<Library>) {
+        runCatching {
+            val arr = JSONArray()
+            libraries.forEach { arr.put(libraryToJson(it)) }
+            cacheFile(context, session, "libraries").writeText(arr.toString())
+        }
+    }
+
+    fun readItems(context: Context, session: Session, key: String): List<PopItem> {
+        return runCatching {
+            val arr = JSONArray(cacheFile(context, session, key).readText())
+            (0 until arr.length()).map { jsonToItem(arr.getJSONObject(it)) }
+        }.getOrDefault(emptyList())
+    }
+
+    fun writeItems(context: Context, session: Session, key: String, items: List<PopItem>) {
+        runCatching {
+            val arr = JSONArray()
+            items.forEach { arr.put(itemToJson(it)) }
+            cacheFile(context, session, key).writeText(arr.toString())
+        }
+    }
+
+    fun readShows(context: Context, session: Session, key: String): List<ShowSummary> {
+        return runCatching {
+            val arr = JSONArray(cacheFile(context, session, key).readText())
+            (0 until arr.length()).map { jsonToShow(arr.getJSONObject(it)) }
+        }.getOrDefault(emptyList())
+    }
+
+    fun writeShows(context: Context, session: Session, key: String, shows: List<ShowSummary>) {
+        runCatching {
+            val arr = JSONArray()
+            shows.forEach { arr.put(showToJson(it)) }
+            cacheFile(context, session, key).writeText(arr.toString())
+        }
+    }
+
+    fun readSeasons(context: Context, session: Session, key: String): List<SeasonSummary> {
+        return runCatching {
+            val arr = JSONArray(cacheFile(context, session, key).readText())
+            (0 until arr.length()).map { jsonToSeason(arr.getJSONObject(it)) }
+        }.getOrDefault(emptyList())
+    }
+
+    fun writeSeasons(context: Context, session: Session, key: String, seasons: List<SeasonSummary>) {
+        runCatching {
+            val arr = JSONArray()
+            seasons.forEach { arr.put(seasonToJson(it)) }
+            cacheFile(context, session, key).writeText(arr.toString())
+        }
+    }
+
+    private fun cacheFile(context: Context, session: Session, key: String): File {
+        val serverKey = session.server.fold(0) { acc, c -> acc * 31 + c.code }.toString()
+        val dir = File(context.filesDir, "popcorn-companion-cache/$serverKey").apply { mkdirs() }
+        return File(dir, "${key.replace(Regex("[^A-Za-z0-9_.-]"), "_")}.json")
+    }
+}
+
+class Api(private val session: Session) {
+    suspend fun login(username: String, password: String): Session = withContext(Dispatchers.IO) {
+        val json = request("/api/auth/login", "POST", JSONObject().put("username", username).put("password", password).toString())
+        val user = json.optJSONObject("user")
+        Session(session.server, json.getString("token"), user?.optString("username").orEmpty())
+    }
+
+    suspend fun completeQr(code: String) = withContext(Dispatchers.IO) {
+        request("/api/auth/qr/complete", "POST", JSONObject().put("code", code).toString())
+    }
+
+    suspend fun libraries(): List<Library> = withContext(Dispatchers.IO) {
+        val arr = requestArray("/api/libraries")
+        (0 until arr.length()).map { jsonToLibrary(arr.getJSONObject(it)) }
+    }
+
+    suspend fun devices(): List<Device> = withContext(Dispatchers.IO) {
+        val arr = requestArray("/api/devices")
+        (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            Device(o.getString("id"), o.optString("name"), o.optString("kind"))
+        }
+    }
+
+    suspend fun deviceState(deviceId: String): PlayerState = withContext(Dispatchers.IO) {
+        val o = request("/api/devices/${enc(deviceId)}/state")
+        PlayerState(o.optLong("itemId"), o.optString("title"), o.optString("state", "idle"), o.optLong("positionMs"), o.optLong("durationMs"))
+    }
+
+    suspend fun sendCommand(deviceId: String, type: String, payload: JSONObject) = withContext(Dispatchers.IO) {
+        requestText("/api/devices/${enc(deviceId)}/commands", "POST", JSONObject().put("type", type).put("payload", payload).toString())
+    }
+
+    suspend fun itemsPage(libraryId: String, limit: Int, offset: Int): List<PopItem> = withContext(Dispatchers.IO) {
+        parseItems(requestArray("/api/items?libraryId=${enc(libraryId)}&limit=$limit&offset=$offset"))
+    }
+
+    suspend fun recentItems(libraryId: String, limit: Int): List<PopItem> = withContext(Dispatchers.IO) {
+        parseItems(requestArray("/api/items?libraryId=${enc(libraryId)}&limit=$limit&sort=recent"))
+    }
+
+    suspend fun showsPage(libraryId: String, limit: Int, offset: Int): List<ShowSummary> = withContext(Dispatchers.IO) {
+        parseShows(requestArray("/api/tv/shows?libraryId=${enc(libraryId)}&limit=$limit&offset=$offset"))
+    }
+
+    suspend fun recentShows(libraryId: String, limit: Int): List<ShowSummary> = withContext(Dispatchers.IO) {
+        parseShows(requestArray("/api/tv/shows?libraryId=${enc(libraryId)}&limit=$limit&sort=recent"))
+    }
+
+    suspend fun seasons(libraryId: String, showTitle: String): List<SeasonSummary> = withContext(Dispatchers.IO) {
+        val arr = requestArray("/api/tv/seasons?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}")
+        (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            SeasonSummary(o.getString("libraryId"), o.getString("showTitle"), o.optInt("seasonNumber"), o.optString("title"), o.optInt("episodeCount"), o.optLong("posterItemId"), o.optLong("posterMtimeUnix"), o.optString("overview"))
+        }
+    }
+
+    suspend fun episodes(libraryId: String, showTitle: String, season: Int): List<PopItem> = withContext(Dispatchers.IO) {
+        parseItems(requestArray("/api/tv/episodes?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}&season=$season"))
+    }
+
+    suspend fun streams(itemId: Long): List<StreamInfo> = withContext(Dispatchers.IO) {
+        val arr = requestArray("/api/items/$itemId/streams")
+        (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            StreamInfo(
+                index = o.optInt("index"),
+                type = o.optString("type"),
+                codec = o.optString("codec"),
+                language = o.optString("language"),
+                title = o.optString("title"),
+                default = o.optBoolean("default"),
+                forced = o.optBoolean("forced"),
+            )
+        }
+    }
+
+    suspend fun ratings(itemId: Long): ExternalRatings = withContext(Dispatchers.IO) {
+        val o = request("/api/items/$itemId/ratings")
+        ExternalRatings(
+            imdbId = o.optString("imdbId"),
+            tmdbId = o.optString("tmdbId"),
+            imdbRating = o.optDouble("imdbRating"),
+            tmdbRating = o.optDouble("tmdbRating"),
+            rottenTomatoesRating = o.optInt("rottenTomatoesRating"),
+            metacriticRating = o.optInt("metacriticRating"),
+        )
+    }
+
+    suspend fun progress(itemId: Long): PlaybackProgress = withContext(Dispatchers.IO) {
+        val o = request("/api/items/$itemId/progress")
+        PlaybackProgress(
+            itemId = o.optLong("itemId", itemId),
+            positionMs = o.optLong("positionMs"),
+            durationMs = o.optLong("durationMs"),
+            completed = o.optBoolean("completed"),
+        )
+    }
+
+    suspend fun saveProgress(itemId: Long, positionMs: Long, durationMs: Long, completed: Boolean) = withContext(Dispatchers.IO) {
+        request(
+            "/api/items/$itemId/progress",
+            "PUT",
+            JSONObject()
+                .put("positionMs", positionMs)
+                .put("durationMs", durationMs)
+                .put("completed", completed)
+                .put("state", if (completed) "ended" else "")
+                .toString(),
+        )
+    }
+
+    suspend fun stopHls(sessionId: String) = withContext(Dispatchers.IO) {
+        requestText("/api/hls/${enc(sessionId)}", "DELETE", null)
+    }
+
+    suspend fun searchMovies(query: String): List<PopItem> = withContext(Dispatchers.IO) {
+        val root = request("/api/search?limit=40&kind=movie&q=${enc(query)}")
+        parseItems(root.optJSONArray("items") ?: JSONArray())
+    }
+
+    suspend fun searchShows(query: String): List<ShowSummary> = withContext(Dispatchers.IO) {
+        parseShows(requestArray("/api/tv/shows?limit=40&q=${enc(query)}"))
+    }
+
+    private fun requestArray(path: String): JSONArray {
+        val text = requestText(path, "GET", null).trim()
+        if (text.isBlank() || text == "null") return JSONArray()
+        if (text.startsWith("[")) return JSONArray(text)
+        return JSONObject(text).optJSONArray("items") ?: JSONArray()
+    }
+
+    private fun request(path: String, method: String = "GET", body: String? = null): JSONObject {
+        val text = requestText(path, method, body).trim()
+        return if (text.isBlank()) JSONObject() else JSONObject(text)
+    }
+
+    private fun requestText(path: String, method: String, body: String?): String {
+        val conn = URL(session.server + path).openConnection() as HttpURLConnection
+        conn.requestMethod = method
+        conn.connectTimeout = 8000
+        conn.readTimeout = 20000
+        if (session.token.isNotBlank()) conn.setRequestProperty("Authorization", "Bearer ${session.token}")
+        if (body != null) {
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.doOutput = true
+            OutputStreamWriter(conn.outputStream).use { it.write(body) }
+        }
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val text = stream.bufferedReader().use { it.readText() }
+        if (code !in 200..299) error(text.ifBlank { "HTTP $code" })
+        return text
+    }
+
+    private fun parseShows(arr: JSONArray): List<ShowSummary> = (0 until arr.length()).map {
+        val o = arr.getJSONObject(it)
+        ShowSummary(o.getString("libraryId"), o.optString("title"), o.optInt("episodeCount"), o.optInt("seasonCount"), o.optLong("posterItemId"), o.optLong("posterMtimeUnix"), o.optString("overview"), o.optDouble("rating"))
+    }
+
+    private fun parseItems(arr: JSONArray): List<PopItem> = (0 until arr.length()).map {
+        val o = arr.getJSONObject(it)
+        PopItem(o.getLong("id"), o.getString("libraryId"), o.optString("kind"), o.optString("title"), o.optInt("year"), o.optLong("durationMs"), o.optLong("posterMtimeUnix"), o.optString("overview"), o.optDouble("rating"), o.optString("imdbId"), o.optString("tmdbId"), o.optString("showTitle"), o.optInt("seasonNumber"), o.optInt("episodeNumber"), o.optString("episodeTitle"))
+    }
+
+    private fun enc(value: String): String = URLEncoder.encode(value, "UTF-8")
+}
+
+private fun jsonToLibrary(o: JSONObject): Library = Library(o.getString("id"), o.optString("name"), o.optString("type", "movies"))
+private fun libraryToJson(library: Library): JSONObject = JSONObject()
+    .put("id", library.id)
+    .put("name", library.name)
+    .put("type", library.type)
+private fun jsonToItem(o: JSONObject): PopItem = PopItem(
+    o.getLong("id"),
+    o.getString("libraryId"),
+    o.optString("kind"),
+    o.optString("title"),
+    o.optInt("year"),
+    o.optLong("durationMs"),
+    o.optLong("posterMtimeUnix"),
+    o.optString("overview"),
+    o.optDouble("rating"),
+    o.optString("imdbId"),
+    o.optString("tmdbId"),
+    o.optString("showTitle"),
+    o.optInt("seasonNumber"),
+    o.optInt("episodeNumber"),
+    o.optString("episodeTitle"),
+)
+private fun itemToJson(item: PopItem): JSONObject = JSONObject()
+    .put("id", item.id)
+    .put("libraryId", item.libraryId)
+    .put("kind", item.kind)
+    .put("title", item.title)
+    .put("year", item.year)
+    .put("durationMs", item.durationMs)
+    .put("posterMtimeUnix", item.posterMtimeUnix)
+    .put("overview", item.overview)
+    .put("rating", item.rating)
+    .put("imdbId", item.imdbId)
+    .put("tmdbId", item.tmdbId)
+    .put("showTitle", item.showTitle)
+    .put("seasonNumber", item.seasonNumber)
+    .put("episodeNumber", item.episodeNumber)
+    .put("episodeTitle", item.episodeTitle)
+private fun jsonToShow(o: JSONObject): ShowSummary = ShowSummary(
+    o.getString("libraryId"),
+    o.optString("title"),
+    o.optInt("episodeCount"),
+    o.optInt("seasonCount"),
+    o.optLong("posterItemId"),
+    o.optLong("posterMtimeUnix"),
+    o.optString("overview"),
+    o.optDouble("rating"),
+)
+private fun showToJson(show: ShowSummary): JSONObject = JSONObject()
+    .put("libraryId", show.libraryId)
+    .put("title", show.title)
+    .put("episodeCount", show.episodeCount)
+    .put("seasonCount", show.seasonCount)
+    .put("posterItemId", show.posterItemId)
+    .put("posterMtimeUnix", show.posterMtimeUnix)
+    .put("overview", show.overview)
+    .put("rating", show.rating)
+private fun jsonToSeason(o: JSONObject): SeasonSummary = SeasonSummary(
+    o.getString("libraryId"),
+    o.getString("showTitle"),
+    o.optInt("seasonNumber"),
+    o.optString("title"),
+    o.optInt("episodeCount"),
+    o.optLong("posterItemId"),
+    o.optLong("posterMtimeUnix"),
+    o.optString("overview"),
+)
+private fun seasonToJson(season: SeasonSummary): JSONObject = JSONObject()
+    .put("libraryId", season.libraryId)
+    .put("showTitle", season.showTitle)
+    .put("seasonNumber", season.seasonNumber)
+    .put("title", season.title)
+    .put("episodeCount", season.episodeCount)
+    .put("posterItemId", season.posterItemId)
+    .put("posterMtimeUnix", season.posterMtimeUnix)
+    .put("overview", season.overview)
+private fun imageUrl(session: Session, itemId: Long, version: Long): String = if (itemId > 0) "${session.server}/api/items/$itemId/image/poster?v=$version" else ""
+private fun streamUrl(session: Session, itemId: Long): String = "${session.server}/api/items/$itemId/stream"
+private fun hlsUrl(session: Session, itemId: Long, hlsSession: String, bandwidthKbps: Int, startMs: Long, audioIndex: Int?, subtitleIndex: Int?): String {
+    val params = mutableListOf(
+        "bandwidth=$bandwidthKbps",
+        "start=${"%.3f".format(java.util.Locale.US, startMs / 1000.0)}",
+    )
+    if (audioIndex != null) params += "audio=$audioIndex"
+    if (subtitleIndex != null) params += "subtitle=$subtitleIndex"
+    return "${session.server}/api/items/$itemId/hls/$hlsSession/index.m3u8?${params.joinToString("&")}"
+}
+private fun displayTitle(item: PopItem): String = item.episodeTitle.ifBlank { item.title }
+private fun shortTrackLabel(track: StreamInfo?, fallback: String): String {
+    if (track == null) return fallback
+    return track.language.takeIf { it.isNotBlank() }?.uppercase()
+        ?: track.title.takeIf { it.isNotBlank() }?.take(10)
+        ?: fallback
+}
+private fun setImmersive(context: Context, enabled: Boolean) {
+    val activity = context as? ComponentActivity ?: return
+    val window = activity.window
+    if (enabled) {
+        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                or View.SYSTEM_UI_FLAG_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            )
+        window.insetsController?.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+        window.insetsController?.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    } else {
+        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+        window.insetsController?.show(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+    }
+}
+private fun fmt(ms: Long): String {
+    val total = (ms / 1000).coerceAtLeast(0)
+    val h = total / 3600
+    val m = (total % 3600) / 60
+    val s = total % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
+}
+private fun fmtDuration(ms: Long): String = if (ms <= 0) "" else "${(ms / 60000).coerceAtLeast(1)}m"
+private fun parseTimeToMs(raw: String): Long? {
+    val text = raw.trim()
+    if (text.isBlank()) return null
+    if (!text.contains(":")) {
+        return text.replace(',', '.').toDoubleOrNull()?.let { (it * 60000).toLong() }
+    }
+    val parts = text.split(":").map { it.trim().toLongOrNull() ?: return null }
+    val seconds = when (parts.size) {
+        2 -> parts[0] * 60 + parts[1]
+        3 -> parts[0] * 3600 + parts[1] * 60 + parts[2]
+        else -> return null
+    }
+    return seconds * 1000
+}
+private fun Int.floorMod(n: Int): Int = ((this % n) + n) % n
+private fun sameServer(a: String, b: String): Boolean = a.trimEnd('/') == b.trimEnd('/')
+private fun Device.displayName(): String = cleanDeviceName(name) ?: id
+private fun cleanDeviceName(raw: String): String? {
+    val trimmed = raw.trim().replace(Regex("\\s+"), " ")
+    if (trimmed.isBlank()) return null
+    return trimmed
+        .replace(Regex("(?i)\\b(shield)\\s+\\1\\b"), "$1")
+        .replace(Regex("\\s+"), " ")
+        .trim()
+}
+private fun uniquePlaybackDevices(devices: List<Device>): List<Device> {
+    val seen = linkedSetOf<String>()
+    return devices.filter { device ->
+        val key = listOf(
+            device.kind.trim().lowercase().ifBlank { "device" },
+            device.displayName().trim().lowercase().ifBlank { device.id.trim().lowercase() },
+        ).joinToString("\u0000")
+        seen.add(key)
+    }
+}
+private fun parseQr(raw: String): ScannedQr? {
+    val text = raw.trim()
+    if (text.isBlank()) return null
+    return runCatching {
+        val json = JSONObject(text)
+        when (json.optString("type")) {
+            "popcorn-shield-setup" -> ScannedQr(
+                type = "popcorn-shield-setup",
+                callback = json.getString("callback"),
+                code = json.getString("code"),
+            )
+            "popcorn-login" -> ScannedQr(
+                type = "popcorn-login",
+                server = json.getString("server").trimEnd('/'),
+                code = json.getString("code"),
+            )
+            else -> null
+        }
+    }.getOrNull() ?: run {
+        val prefix = "popcorn-login:"
+        if (!text.startsWith(prefix)) null else ScannedQr(type = "popcorn-login", code = text.removePrefix(prefix))
+    }
+}
+
+private fun postShieldSetup(callback: String, code: String, session: Session) {
+    val body = JSONObject()
+        .put("code", code)
+        .put("server", session.server.trimEnd('/'))
+        .put("token", session.token)
+        .put("username", session.username)
+        .toString()
+    val conn = URL(callback).openConnection() as HttpURLConnection
+    conn.requestMethod = "POST"
+    conn.connectTimeout = 5000
+    conn.readTimeout = 8000
+    conn.setRequestProperty("Content-Type", "application/json")
+    conn.doOutput = true
+    OutputStreamWriter(conn.outputStream).use { it.write(body) }
+    val codeResult = conn.responseCode
+    val stream = if (codeResult in 200..299) conn.inputStream else conn.errorStream
+    val text = stream.bufferedReader().use { it.readText() }
+    if (codeResult !in 200..299) error(text.ifBlank { "HTTP $codeResult" })
+}

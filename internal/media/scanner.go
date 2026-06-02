@@ -1,0 +1,825 @@
+package media
+
+import (
+	"context"
+	"encoding/json"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"popcorn/internal/config"
+)
+
+var videoExts = map[string]struct{}{
+	".mkv": {}, ".mp4": {}, ".m4v": {}, ".mov": {}, ".avi": {}, ".webm": {}, ".ts": {}, ".wmv": {},
+	".m2ts": {}, ".mts": {}, ".mpg": {}, ".mpeg": {}, ".vob": {}, ".flv": {}, ".divx": {}, ".ogm": {},
+}
+
+var episodePattern = regexp.MustCompile(`(?i)(?:^|[\s._-])s(\d{1,2})e(\d{1,3})(?:[\s._-]|$)`)
+
+type Scanner struct {
+	cfg   config.Config
+	store *Store
+	log   *slog.Logger
+}
+
+func NewScanner(cfg config.Config, store *Store, log *slog.Logger) *Scanner {
+	return &Scanner{cfg: cfg, store: store, log: log}
+}
+
+func (s *Scanner) Scan(ctx context.Context) error {
+	if len(s.cfg.Libraries) == 0 {
+		return nil
+	}
+	for _, lib := range s.cfg.Libraries {
+		if err := s.scanLibrary(ctx, lib); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
+	started := time.Now().UTC().Format(time.RFC3339)
+	stats := &scanStats{}
+	lastProgress := &atomic.Int64{}
+	status := func(state, message string) ScanStatus {
+		filesSeen := stats.filesSeen.Load()
+		mediaFound := stats.mediaFound.Load()
+		return ScanStatus{
+			LibraryID:     lib.ID,
+			StartedAt:     started,
+			Status:        state,
+			Message:       message,
+			FilesSeen:     filesSeen,
+			MediaFound:    mediaFound,
+			ItemsImported: stats.itemsImported.Load(),
+			FilesSkipped:  filesSeen - mediaFound,
+			Errors:        stats.errors.Load(),
+		}
+	}
+	_ = s.store.SetScanStatus(ctx, status("running", ""))
+	s.log.Info("scan library started", "library", lib.ID, "type", lib.Type, "path", lib.Path)
+	snapshot, err := s.store.LibrarySnapshot(ctx, lib.ID)
+	if err != nil {
+		return err
+	}
+	s.log.Debug("scan snapshot loaded", "library", lib.ID, "items", len(snapshot))
+	seen := map[string]struct{}{}
+	var seenMu sync.Mutex
+	jobs := make(chan scanJob, runtime.NumCPU()*2)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var wg sync.WaitGroup
+	var firstErr error
+	var errMu sync.Mutex
+	workers := runtime.NumCPU()
+	if workers < 2 {
+		workers = 2
+	}
+	if workers > 8 {
+		workers = 8
+	}
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				item := s.buildItem(ctx, lib, job.path, job.info, snapshot[job.path])
+				if err := s.store.UpsertItem(ctx, item); err != nil {
+					stats.errors.Add(1)
+					s.log.Warn("scan import failed", "library", lib.ID, "path", job.path, "error", err)
+					errMu.Lock()
+					if firstErr == nil {
+						firstErr = err
+						cancel()
+					}
+					errMu.Unlock()
+					return
+				}
+				imported := stats.itemsImported.Add(1)
+				if imported <= 10 || imported%250 == 0 {
+					s.log.Debug("scan item imported", "library", lib.ID, "imported", imported, "path", job.path, "kind", item.Kind, "title", item.Title)
+				}
+			}
+		}()
+	}
+	walkErr := filepath.WalkDir(lib.Path, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			stats.errors.Add(1)
+			if path == lib.Path {
+				s.log.Error("scan root inaccessible", "library", lib.ID, "path", path, "error", err)
+				return err
+			}
+			s.log.Warn("scan skip", "path", path, "error", err)
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if strings.HasPrefix(name, ".") || name == "@eaDir" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		stats.filesSeen.Add(1)
+		if _, ok := videoExts[strings.ToLower(filepath.Ext(path))]; !ok {
+			return nil
+		}
+		if lib.Type == "movies" && isAuxiliaryVideo(path) {
+			s.log.Debug("scan auxiliary video skipped", "library", lib.ID, "path", path)
+			return nil
+		}
+		mediaFound := stats.mediaFound.Add(1)
+		if mediaFound <= 10 || mediaFound%250 == 0 {
+			s.log.Debug("scan media found", "library", lib.ID, "mediaFound", mediaFound, "path", path)
+		}
+		if mediaFound%500 == 0 {
+			s.storeProgress(context.Background(), lib.ID, started, stats, lastProgress)
+		}
+		info, err := d.Info()
+		if err != nil {
+			stats.errors.Add(1)
+			s.log.Warn("scan stat failed", "library", lib.ID, "path", path, "error", err)
+			return nil
+		}
+		abs, _ := filepath.Abs(path)
+		seenMu.Lock()
+		seen[abs] = struct{}{}
+		seenMu.Unlock()
+		select {
+		case jobs <- scanJob{path: abs, info: info}:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	close(jobs)
+	wg.Wait()
+	errMu.Lock()
+	if firstErr != nil && walkErr == nil {
+		walkErr = firstErr
+	}
+	errMu.Unlock()
+	err = walkErr
+	if err == nil {
+		err = s.store.RemoveMissing(ctx, lib.ID, seen)
+	}
+	finalStatus := status("finished", "")
+	finalStatus.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+	if err != nil {
+		finalStatus.Status = "failed"
+		finalStatus.Message = err.Error()
+	}
+	_ = s.store.SetScanStatus(context.Background(), finalStatus)
+	s.log.Info("scan library finished",
+		"library", lib.ID,
+		"status", finalStatus.Status,
+		"filesSeen", finalStatus.FilesSeen,
+		"mediaFound", finalStatus.MediaFound,
+		"itemsImported", finalStatus.ItemsImported,
+		"filesSkipped", finalStatus.FilesSkipped,
+		"errors", finalStatus.Errors,
+		"message", finalStatus.Message,
+	)
+	return err
+}
+
+func (s *Scanner) storeProgress(ctx context.Context, libraryID, started string, stats *scanStats, last *atomic.Int64) {
+	imported := stats.itemsImported.Load()
+	if imported == last.Load() {
+		return
+	}
+	last.Store(imported)
+	filesSeen := stats.filesSeen.Load()
+	mediaFound := stats.mediaFound.Load()
+	_ = s.store.SetScanStatus(ctx, ScanStatus{
+		LibraryID:     libraryID,
+		StartedAt:     started,
+		Status:        "running",
+		FilesSeen:     filesSeen,
+		MediaFound:    mediaFound,
+		ItemsImported: imported,
+		FilesSkipped:  filesSeen - mediaFound,
+		Errors:        stats.errors.Load(),
+	})
+	s.log.Info("scan progress", "library", libraryID, "filesSeen", filesSeen, "mediaFound", mediaFound, "itemsImported", imported, "errors", stats.errors.Load())
+}
+
+type scanStats struct {
+	filesSeen     atomic.Int64
+	mediaFound    atomic.Int64
+	itemsImported atomic.Int64
+	errors        atomic.Int64
+}
+
+type scanJob struct {
+	path string
+	info os.FileInfo
+}
+
+func (s *Scanner) buildItem(ctx context.Context, lib config.Library, path string, info os.FileInfo, existing Item) Item {
+	nfo := findSidecar(path, []string{".nfo"})
+	nfoMTime := fileMTimeUnix(nfo)
+	meta := readNFO(nfo)
+	title := meta.Title
+	if title == "" {
+		title = cleanTitle(filepath.Base(strings.TrimSuffix(path, filepath.Ext(path))))
+	}
+	kind := "movie"
+	showTitle := ""
+	seasonNumber := 0
+	episodeNumber := 0
+	episodeTitle := ""
+	showNFO := ""
+	if lib.Type == "tv" {
+		kind = "episode"
+		episodeTitle = title
+		showTitle = meta.ShowTitle
+		seasonNumber = meta.Season
+		episodeNumber = meta.Episode
+		if seasonNumber == 0 || episodeNumber == 0 {
+			seasonNumber, episodeNumber = parseEpisodeNumbers(path)
+		}
+		if showTitle == "" {
+			showTitle = readShowTitle(lib.Path, path)
+		}
+		if showTitle == "" {
+			showTitle = fallbackShowTitle(lib.Path, path)
+		}
+		if meta.Rating == 0 || meta.OriginalTitle == "" {
+			showNFO = findShowNFO(lib.Path, path)
+			showMeta := readNFO(showNFO)
+			if meta.Rating == 0 {
+				meta.Rating = showMeta.Rating
+			}
+			if meta.OriginalTitle == "" {
+				meta.OriginalTitle = showMeta.OriginalTitle
+			}
+		}
+		if showNFO == "" {
+			showNFO = findShowNFO(lib.Path, path)
+		}
+		nfoMTime = maxInt64(nfoMTime, fileMTimeUnix(showNFO))
+		title = episodeDisplayTitle(showTitle, seasonNumber, episodeNumber, episodeTitle)
+	}
+	posterPath, backdropPath := artworkPaths(lib, path)
+	posterMTime := fileMTimeUnix(posterPath)
+	backdropMTime := fileMTimeUnix(backdropPath)
+	probed := probeResult{
+		DurationMS: existing.DurationMS,
+		VideoCodec: existing.VideoCodec,
+		AudioCodec: existing.AudioCodec,
+		Width:      existing.Width,
+		Height:     existing.Height,
+	}
+	if existing.Path == "" || existing.SizeBytes != info.Size() || existing.MTimeUnix != info.ModTime().Unix() || existing.DurationMS == 0 {
+		probed = probe(ctx, s.cfg.FFprobePath, path)
+		if probed.DurationMS == 0 && probed.VideoCodec == "" && probed.AudioCodec == "" {
+			s.log.Debug("scan probe returned no media details", "library", lib.ID, "path", path)
+		}
+	}
+	return Item{
+		LibraryID:         lib.ID,
+		Path:              path,
+		Kind:              kind,
+		Title:             title,
+		SortTitle:         sortKey(title),
+		OriginalTitle:     meta.OriginalTitle,
+		Year:              meta.Year,
+		DurationMS:        probed.DurationMS,
+		Container:         strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), "."),
+		VideoCodec:        probed.VideoCodec,
+		AudioCodec:        probed.AudioCodec,
+		IMDbID:            meta.imdbID(),
+		TMDbID:            meta.tmdbID(),
+		TVDbID:            meta.tvdbID(),
+		Width:             probed.Width,
+		Height:            probed.Height,
+		SizeBytes:         info.Size(),
+		MTimeUnix:         info.ModTime().Unix(),
+		NFOPath:           nfo,
+		NFOMTimeUnix:      nfoMTime,
+		PosterPath:        posterPath,
+		PosterMTimeUnix:   posterMTime,
+		BackdropPath:      backdropPath,
+		BackdropMTimeUnix: backdropMTime,
+		Overview:          firstNonEmpty(meta.Plot, meta.Outline),
+		Tagline:           meta.Tagline,
+		Genres:            strings.Join(meta.Genres, ", "),
+		Rating:            meta.Rating,
+		Premiered:         firstNonEmpty(meta.Premiered, meta.Released),
+		ShowTitle:         showTitle,
+		SeasonNumber:      seasonNumber,
+		EpisodeNumber:     episodeNumber,
+		EpisodeTitle:      episodeTitle,
+	}
+}
+
+func artworkPaths(lib config.Library, video string) (string, string) {
+	if lib.Type == "tv" {
+		poster, backdrop := TVShowArtworkPaths(lib.Path, video)
+		if episodeThumb := findSidecar(video, []string{"-thumb.jpg", "-thumb.png", ".thumb.jpg", ".thumb.png"}); episodeThumb != "" {
+			backdrop = episodeThumb
+		}
+		return poster, backdrop
+	}
+	poster := findSidecar(video, []string{"-poster.jpg", "-poster.png", ".jpg", ".png"})
+	backdrop := findSidecar(video, []string{"-fanart.jpg", "-fanart.png", "-backdrop.jpg", "-backdrop.png"})
+	if movieFolder := filepath.Dir(video); movieFolder != filepath.Clean(lib.Path) {
+		if poster == "" {
+			poster = findNamed(movieFolder, []string{"poster.jpg", "poster.png", "folder.jpg", "folder.png"})
+		}
+		if backdrop == "" {
+			backdrop = findNamed(movieFolder, []string{"fanart.jpg", "fanart.png", "backdrop.jpg", "backdrop.png"})
+		}
+	}
+	return poster, backdrop
+}
+
+func TVShowArtworkPaths(root, video string) (string, string) {
+	showDir := showDir(root, video)
+	poster := findNamed(showDir, []string{
+		"poster.jpg", "poster.png",
+		"folder.jpg", "folder.png",
+		"cover.jpg", "cover.png",
+		"tvshow-poster.jpg", "tvshow-poster.png",
+	})
+	backdrop := findNamed(showDir, []string{
+		"fanart.jpg", "fanart.png",
+		"backdrop.jpg", "backdrop.png",
+		"landscape.jpg", "landscape.png",
+		"clearart.jpg", "clearart.png",
+	})
+	return poster, backdrop
+}
+
+func SeasonArtworkPath(video string, seasonNumber int) string {
+	return seasonImagePath(video, seasonNumber)
+}
+
+func seasonImagePath(video string, seasonNumber int) string {
+	if seasonNumber <= 0 {
+		return ""
+	}
+	dir := filepath.Dir(video)
+	show := filepath.Dir(dir)
+	n := fmt.Sprintf("%02d", seasonNumber)
+	names := []string{
+		"season" + n + "-poster.jpg", "season" + n + "-poster.png",
+		"season" + n + ".jpg", "season" + n + ".png",
+		"season" + strconv.Itoa(seasonNumber) + "-poster.jpg", "season" + strconv.Itoa(seasonNumber) + "-poster.png",
+		"season" + strconv.Itoa(seasonNumber) + ".jpg", "season" + strconv.Itoa(seasonNumber) + ".png",
+		"poster.jpg", "poster.png", "folder.jpg", "folder.png",
+	}
+	for _, base := range []string{dir, show} {
+		for _, name := range names {
+			candidate := filepath.Join(base, name)
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+	}
+	return ""
+}
+
+func fileMTimeUnix(path string) int64 {
+	if path == "" {
+		return 0
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.ModTime().Unix()
+}
+
+func maxInt64(a, b int64) int64 {
+	if b > a {
+		return b
+	}
+	return a
+}
+
+func showDir(root, video string) string {
+	dir := filepath.Dir(video)
+	rootAbs, _ := filepath.Abs(root)
+	for current := dir; ; current = filepath.Dir(current) {
+		if _, err := os.Stat(filepath.Join(current, "tvshow.nfo")); err == nil {
+			return current
+		}
+		if current == rootAbs || current == filepath.Dir(current) {
+			break
+		}
+	}
+	rel, err := filepath.Rel(root, video)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return dir
+	}
+	first := strings.Split(rel, string(os.PathSeparator))[0]
+	return filepath.Join(root, first)
+}
+
+type nfoMovie struct {
+	Title         string      `xml:"title"`
+	OriginalTitle string      `xml:"originaltitle"`
+	ID            string      `xml:"id"`
+	IMDbID        string      `xml:"imdbid"`
+	TMDbID        string      `xml:"tmdbid"`
+	TVDbID        string      `xml:"tvdbid"`
+	UniqueIDs     []nfoID     `xml:"uniqueid"`
+	Year          int         `xml:"year"`
+	Plot          string      `xml:"plot"`
+	Outline       string      `xml:"outline"`
+	Tagline       string      `xml:"tagline"`
+	Genres        []string    `xml:"genre"`
+	Rating        float64     `xml:"rating"`
+	Ratings       []nfoRating `xml:"ratings>rating"`
+	Premiered     string      `xml:"premiered"`
+	Released      string      `xml:"releasedate"`
+	ShowTitle     string      `xml:"showtitle"`
+	Season        int         `xml:"season"`
+	Episode       int         `xml:"episode"`
+}
+
+type nfoID struct {
+	Type  string `xml:"type,attr"`
+	Value string `xml:",chardata"`
+}
+
+func (m nfoMovie) imdbID() string {
+	return firstNonEmpty(m.IMDbID, idByType(m.UniqueIDs, "imdb"), imdbID(m.ID))
+}
+
+func (m nfoMovie) tmdbID() string {
+	return firstNonEmpty(m.TMDbID, idByType(m.UniqueIDs, "tmdb"))
+}
+
+func (m nfoMovie) tvdbID() string {
+	return firstNonEmpty(m.TVDbID, idByType(m.UniqueIDs, "tvdb"))
+}
+
+func idByType(ids []nfoID, typ string) string {
+	for _, id := range ids {
+		if strings.EqualFold(strings.TrimSpace(id.Type), typ) {
+			return strings.TrimSpace(id.Value)
+		}
+	}
+	return ""
+}
+
+func imdbID(v string) string {
+	v = strings.TrimSpace(v)
+	if strings.HasPrefix(strings.ToLower(v), "tt") {
+		return v
+	}
+	return ""
+}
+
+type nfoRating struct {
+	Default string  `xml:"default,attr"`
+	Name    string  `xml:"name,attr"`
+	Max     float64 `xml:"max,attr"`
+	Value   float64 `xml:"value"`
+}
+
+func readNFO(path string) nfoMovie {
+	if path == "" {
+		return nfoMovie{}
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nfoMovie{}
+	}
+	var m nfoMovie
+	if err := xml.Unmarshal(b, &m); err != nil {
+		return nfoMovie{}
+	}
+	m.Rating = bestRating(m.Rating, m.Ratings)
+	return m
+}
+
+func ReadNFOIDs(path string) (string, string) {
+	imdbID, tmdbID, _ := ReadNFOExternalIDs(path)
+	return imdbID, tmdbID
+}
+
+func ReadNFOExternalIDs(path string) (string, string, string) {
+	meta := readNFO(path)
+	return meta.imdbID(), meta.tmdbID(), meta.tvdbID()
+}
+
+func ReadNFOSourceRatings(path string) SourceRatings {
+	meta := readNFO(path)
+	var out SourceRatings
+	for _, rating := range meta.Ratings {
+		name := strings.ToLower(strings.TrimSpace(rating.Name))
+		value := normalizeRating(rating.Value, rating.Max)
+		switch {
+		case name == "imdb" || strings.Contains(name, "internet movie"):
+			if value > 0 {
+				out.IMDb = value
+			}
+		case name == "tmdb" || strings.Contains(name, "themoviedb") || strings.Contains(name, "movie db"):
+			if value > 0 {
+				out.TMDb = value
+			}
+		case strings.Contains(name, "rotten") || strings.Contains(name, "tomato"):
+			if rating.Value > 0 {
+				out.RottenTomatoes = normalizePercentRating(rating.Value, rating.Max)
+			}
+		case strings.Contains(name, "metacritic"):
+			if rating.Value > 0 {
+				out.Metacritic = normalizePercentRating(rating.Value, rating.Max)
+			}
+		}
+	}
+	return out
+}
+
+func bestRating(simple float64, ratings []nfoRating) float64 {
+	if simple > 0 {
+		return normalizeRating(simple, 10)
+	}
+	for _, rating := range ratings {
+		if rating.Value > 0 && strings.EqualFold(rating.Default, "true") {
+			return normalizeRating(rating.Value, rating.Max)
+		}
+	}
+	for _, rating := range ratings {
+		if rating.Value > 0 && strings.EqualFold(rating.Name, "imdb") {
+			return normalizeRating(rating.Value, rating.Max)
+		}
+	}
+	for _, rating := range ratings {
+		if rating.Value > 0 {
+			return normalizeRating(rating.Value, rating.Max)
+		}
+	}
+	return 0
+}
+
+func normalizeRating(value, max float64) float64 {
+	if max > 0 && max != 10 {
+		return value / max * 10
+	}
+	return value
+}
+
+func normalizePercentRating(value, max float64) int {
+	if max > 0 && max != 100 {
+		value = value / max * 100
+	}
+	if value < 0 {
+		return 0
+	}
+	if value > 100 {
+		return 100
+	}
+	return int(value + 0.5)
+}
+
+type nfoShow struct {
+	Title string `xml:"title"`
+}
+
+func readShowTitle(root, video string) string {
+	candidate := findShowNFO(root, video)
+	if candidate == "" {
+		return ""
+	}
+	if b, err := os.ReadFile(candidate); err == nil {
+		var show nfoShow
+		if xml.Unmarshal(b, &show) == nil && strings.TrimSpace(show.Title) != "" {
+			return strings.TrimSpace(show.Title)
+		}
+	}
+	return ""
+}
+
+func findShowNFO(root, video string) string {
+	dir := filepath.Dir(video)
+	rootAbs, _ := filepath.Abs(root)
+	for {
+		candidate := filepath.Join(dir, "tvshow.nfo")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		if dir == rootAbs || dir == filepath.Dir(dir) {
+			return ""
+		}
+		dir = filepath.Dir(dir)
+	}
+}
+
+func findSeasonNFO(video string, seasonNumber int) string {
+	dir := filepath.Dir(video)
+	show := filepath.Dir(dir)
+	n := fmt.Sprintf("%02d", seasonNumber)
+	names := []string{
+		"season.nfo",
+		"season" + n + ".nfo",
+		"season" + strconv.Itoa(seasonNumber) + ".nfo",
+	}
+	for _, base := range []string{dir, show} {
+		for _, name := range names {
+			candidate := filepath.Join(base, name)
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate
+			}
+		}
+	}
+	return ""
+}
+
+func fallbackShowTitle(root, video string) string {
+	rel, err := filepath.Rel(root, video)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return cleanTitle(filepath.Base(filepath.Dir(video)))
+	}
+	first := strings.Split(rel, string(os.PathSeparator))[0]
+	return cleanTitle(first)
+}
+
+func parseEpisodeNumbers(path string) (int, int) {
+	matches := episodePattern.FindStringSubmatch(filepath.Base(path))
+	if len(matches) != 3 {
+		return 0, 0
+	}
+	season, _ := strconv.Atoi(matches[1])
+	episode, _ := strconv.Atoi(matches[2])
+	return season, episode
+}
+
+func episodeDisplayTitle(show string, season, episode int, episodeTitle string) string {
+	code := ""
+	if season > 0 && episode > 0 {
+		code = "S" + twoDigits(season) + "E" + twoDigits(episode)
+	}
+	parts := []string{}
+	if show != "" {
+		parts = append(parts, show)
+	}
+	if code != "" {
+		parts = append(parts, code)
+	}
+	if episodeTitle != "" {
+		parts = append(parts, episodeTitle)
+	}
+	if len(parts) == 0 {
+		return "Episode"
+	}
+	return strings.Join(parts, " - ")
+}
+
+func twoDigits(v int) string {
+	if v < 10 {
+		return "0" + strconv.Itoa(v)
+	}
+	return strconv.Itoa(v)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+type probeResult struct {
+	DurationMS int64
+	VideoCodec string
+	AudioCodec string
+	Width      int
+	Height     int
+}
+
+func probe(ctx context.Context, ffprobe, path string) probeResult {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, ffprobe, "-v", "error", "-show_format", "-show_streams", "-of", "json", path)
+	out, err := cmd.Output()
+	if err != nil {
+		return probeResult{}
+	}
+	var raw struct {
+		Format struct {
+			Duration string `json:"duration"`
+		} `json:"format"`
+		Streams []struct {
+			CodecType string `json:"codec_type"`
+			CodecName string `json:"codec_name"`
+			Width     int    `json:"width"`
+			Height    int    `json:"height"`
+		} `json:"streams"`
+	}
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return probeResult{}
+	}
+	var res probeResult
+	if f, err := strconv.ParseFloat(raw.Format.Duration, 64); err == nil {
+		res.DurationMS = int64(f * 1000)
+	}
+	for _, st := range raw.Streams {
+		switch st.CodecType {
+		case "video":
+			if res.VideoCodec == "" {
+				res.VideoCodec = st.CodecName
+				res.Width = st.Width
+				res.Height = st.Height
+			}
+		case "audio":
+			if res.AudioCodec == "" {
+				res.AudioCodec = st.CodecName
+			}
+		}
+	}
+	return res
+}
+
+func findSidecar(video string, names []string) string {
+	dir := filepath.Dir(video)
+	base := strings.TrimSuffix(filepath.Base(video), filepath.Ext(video))
+	for _, name := range names {
+		var candidate string
+		if strings.HasPrefix(name, ".") || strings.HasPrefix(name, "-") {
+			candidate = filepath.Join(dir, base+name)
+		} else {
+			candidate = filepath.Join(dir, name)
+		}
+		if _, err := os.Stat(candidate); err == nil {
+			abs, _ := filepath.Abs(candidate)
+			return abs
+		}
+	}
+	return ""
+}
+
+func findNamed(dir string, names []string) string {
+	for _, name := range names {
+		candidate := filepath.Join(dir, name)
+		if _, err := os.Stat(candidate); err == nil {
+			abs, _ := filepath.Abs(candidate)
+			return abs
+		}
+	}
+	return ""
+}
+
+func isAuxiliaryVideo(path string) bool {
+	name := strings.ToLower(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)))
+	name = strings.ReplaceAll(name, "_", " ")
+	name = strings.ReplaceAll(name, ".", " ")
+	name = strings.ReplaceAll(name, "-", " ")
+	words := strings.Fields(name)
+	if len(words) == 0 {
+		return false
+	}
+	aux := map[string]struct{}{
+		"trailer": {}, "sample": {}, "teaser": {}, "featurette": {}, "extra": {}, "extras": {}, "behind": {},
+	}
+	for _, word := range words {
+		if _, ok := aux[word]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func cleanTitle(name string) string {
+	name = strings.ReplaceAll(name, ".", " ")
+	name = strings.ReplaceAll(name, "_", " ")
+	fields := strings.Fields(name)
+	return strings.Join(fields, " ")
+}
+
+func sortKey(title string) string {
+	key := strings.ToLower(strings.TrimSpace(title))
+	for _, prefix := range []string{"the ", "a ", "an "} {
+		key = strings.TrimPrefix(key, prefix)
+	}
+	return key
+}
+
+func IsVideo(path string) bool {
+	_, ok := videoExts[strings.ToLower(filepath.Ext(path))]
+	return ok
+}
+
+var ErrNotVideo = errors.New("not a supported video file")

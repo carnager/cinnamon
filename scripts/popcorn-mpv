@@ -290,7 +290,7 @@ mpv_get() {
 
 play_item() {
   local item_id="$1"
-  local item title duration_ms progress position_ms resume start_arg stream_url socket state_file mpv_pid status
+  local item title duration_ms progress position_ms resume start_arg stream_url socket_dir socket state_file mpv_pid status
 
   item="$(item_json "$item_id")"
   title="$(jq -r 'if .kind == "episode" then ((.showTitle // .title) + " - " + (.episodeTitle // .title)) else .title end' <<<"$item")"
@@ -307,8 +307,9 @@ play_item() {
   fi
 
   stream_url="$SERVER/api/items/$item_id/stream"
-  socket="$(mktemp -u "/tmp/popcorn-mpv-$item_id.XXXXXX.sock")"
-  state_file="$(mktemp "/tmp/popcorn-mpv-$item_id.XXXXXX.json")"
+  socket_dir="$(mktemp -d "/tmp/popcorn-mpv-$item_id.XXXXXX")"
+  socket="$socket_dir/mpv.sock"
+  state_file="$socket_dir/state.json"
   printf '{"positionMs":0,"durationMs":%s}\n' "$duration_ms" >"$state_file"
 
   save_progress "$item_id" "${position_ms:-0}" "$duration_ms" "start" false
@@ -350,7 +351,7 @@ play_item() {
     fi
   fi
   save_progress "$item_id" "$final_pos" "$final_dur" "stop" "$completed"
-  rm -f "$state_file" "$socket"
+  rm -rf "$socket_dir"
   return "$status"
 }
 

@@ -277,53 +277,6 @@ fun CompanionApp() {
 }
 
 @Composable
-fun LoginView(initialServer: String, error: String, onScan: () -> Unit, onLogin: (String, String, String) -> Unit) {
-    var server by remember(initialServer) { mutableStateOf(initialServer) }
-    var username by remember { mutableStateOf("admin") }
-    var password by remember { mutableStateOf("") }
-    Box(Modifier.fillMaxSize().background(Bg).padding(20.dp), contentAlignment = Alignment.Center) {
-        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("Popcorn Remote", color = Accent, fontSize = 28.sp, fontWeight = FontWeight.Black)
-            PopTextField(server, { server = it }, "Server")
-            PopTextField(username, { username = it }, "Username")
-            PopTextField(password, { password = it }, "Password", password = true)
-            Button(onClick = { onLogin(server, username, password) }, colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black), modifier = Modifier.fillMaxWidth()) {
-                Text("Sign In", fontWeight = FontWeight.Bold)
-            }
-            OutlinedButton(onClick = onScan, modifier = Modifier.fillMaxWidth()) {
-                Text("Scan Shield QR")
-            }
-            if (error.isNotBlank()) Text(error, color = if (error.contains("approved", true)) Accent else ErrorRed)
-        }
-    }
-}
-
-@Composable
-fun PopTextField(value: String, onChange: (String) -> Unit, label: String, password: Boolean = false, modifier: Modifier = Modifier) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onChange,
-        label = { Text(label, color = Muted, fontSize = 14.sp) },
-        singleLine = true,
-        visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
-        textStyle = TextStyle(color = TextColor, fontSize = 17.sp, fontWeight = FontWeight.Medium),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = TextColor,
-            unfocusedTextColor = TextColor,
-            focusedContainerColor = Surface1,
-            unfocusedContainerColor = Surface1,
-            focusedBorderColor = Blue,
-            unfocusedBorderColor = Line,
-            cursorColor = Blue,
-            focusedLabelColor = Blue,
-            unfocusedLabelColor = Muted,
-        ),
-        shape = RoundedCornerShape(10.dp),
-        modifier = modifier.fillMaxWidth(),
-    )
-}
-
-@Composable
 fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLogout: () -> Unit, onScan: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()

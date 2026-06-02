@@ -1,0 +1,117 @@
+package dev.popcorn.tv
+
+import org.json.JSONObject
+
+data class StreamInfo(
+    val index: Int,
+    val type: String,
+    val codec: String,
+    val language: String,
+    val title: String,
+    val default: Boolean,
+    val forced: Boolean,
+) {
+    fun label(): String {
+        val parts = mutableListOf<String>()
+        if (title.isNotBlank()) parts.add(title)
+        if (language.isNotBlank()) parts.add(language.uppercase())
+        if (codec.isNotBlank()) parts.add(codec)
+        if (forced) parts.add("(forced)")
+        return parts.joinToString(" \u2022 ").ifBlank { "Track ${index}" }
+    }
+}
+
+data class BandwidthOption(val label: String, val kbps: Int?)
+
+val BandwidthOptions = listOf(
+    BandwidthOption("Direct", null),
+    BandwidthOption("3 mbit", 3000),
+    BandwidthOption("5 mbit", 5000),
+    BandwidthOption("8 mbit", 8000),
+    BandwidthOption("10 mbit", 10000),
+    BandwidthOption("15 mbit", 15000),
+)
+
+data class Session(val server: String, val token: String, val username: String = "")
+data class User(val id: Long, val username: String, val displayName: String)
+data class Library(val id: String, val name: String, val type: String)
+
+data class ShowSummary(
+    val libraryId: String,
+    val title: String,
+    val episodeCount: Int,
+    val seasonCount: Int,
+    val posterItemId: Long,
+    val posterMtimeUnix: Long,
+    val backdropItemId: Long,
+    val backdropMtimeUnix: Long,
+    val overview: String,
+    val genres: String,
+    val rating: Double,
+)
+
+data class SeasonSummary(
+    val libraryId: String,
+    val showTitle: String,
+    val seasonNumber: Int,
+    val title: String,
+    val episodeCount: Int,
+    val durationMs: Long,
+    val posterItemId: Long,
+    val posterMtimeUnix: Long,
+    val backdropItemId: Long,
+    val overview: String,
+    val rating: Double,
+)
+
+data class PlaybackProgress(val itemId: Long, val positionMs: Long, val durationMs: Long, val completed: Boolean)
+data class ShowProgress(val libraryId: String, val showTitle: String, val episodeCount: Int, val completedCount: Int, val completed: Boolean)
+data class Watchlist(val items: List<PopItem>, val shows: List<ShowSummary>)
+data class RemoteCommand(val id: Long, val type: String, val payload: JSONObject)
+data class PlayerRemoteCommand(val id: Long, val type: String, val payload: JSONObject)
+data class QRLoginStart(val code: String, val expiresAt: String)
+
+data class ExternalRatings(
+    val imdbId: String,
+    val tmdbId: String,
+    val localRating: Double,
+    val imdbRating: Double,
+    val tmdbRating: Double,
+    val rottenTomatoesRating: Int,
+    val metacriticRating: Int,
+)
+
+data class PopItem(
+    val id: Long,
+    val libraryId: String,
+    val kind: String,
+    val title: String,
+    val year: Int,
+    val durationMs: Long,
+    val posterPath: String,
+    val posterMtimeUnix: Long,
+    val backdropPath: String,
+    val backdropMtimeUnix: Long,
+    val overview: String,
+    val genres: String,
+    val rating: Double,
+    val showTitle: String,
+    val seasonNumber: Int,
+    val episodeNumber: Int,
+    val episodeTitle: String,
+)
+
+data class CachedList<T>(val entries: List<T>, val fullyLoaded: Boolean)
+
+sealed interface Screen {
+    data object Loading : Screen
+    data object Login : Screen
+    data object Home : Screen
+    data object Watchlist : Screen
+    data class LibraryPage(val library: Library) : Screen
+    data object Search : Screen
+    data class Show(val show: ShowSummary, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false) : Screen
+    data class Season(val show: ShowSummary, val season: SeasonSummary, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false) : Screen
+    data class Detail(val item: PopItem, val fromShow: ShowSummary?, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false) : Screen
+    data class Player(val item: PopItem, val audioIndex: Int?, val subtitleIndex: Int?) : Screen
+}

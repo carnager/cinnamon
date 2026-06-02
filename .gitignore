@@ -2,6 +2,7 @@
 .gomodcache/
 .claude/
 Screenshots/
+dist/
 .gradle/
 build/
 android-tv/.gradle/

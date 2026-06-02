@@ -44,6 +44,14 @@ Run the server tests and build both Android release APKs with:
 
 Set `POPCORN_CHECK_ANDROID=0` to run only Go tests, or `POPCORN_CHECK_GO=0` to build only the Android apps.
 
+Create a versioned release bundle with:
+
+```sh
+./scripts/release
+```
+
+The bundle is written to `dist/<git-version>/` and contains `popcornd`, the TV APK, the companion APK, example config, systemd unit, and SHA-256 checksums.
+
 ## API
 
 - `GET /api/health`

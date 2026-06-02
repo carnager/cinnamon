@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+version="${POPCORN_RELEASE_VERSION:-$(cd "$repo_root" && git describe --tags --always --dirty)}"
+out_dir="${POPCORN_RELEASE_DIR:-$repo_root/dist/$version}"
+
+mkdir -p "$out_dir"
+
+echo "==> release $version"
+echo "==> output $out_dir"
+
+echo "==> go test ./..."
+(cd "$repo_root" && go test ./...)
+
+echo "==> build popcornd"
+(cd "$repo_root" && go build -trimpath -ldflags "-s -w" -o "$out_dir/popcornd" ./cmd/popcornd)
+
+echo "==> build Android APKs"
+(cd "$repo_root/android-tv" && gradle :app:assembleRelease :companion:assembleRelease)
+
+cp "$repo_root/android-tv/app/build/outputs/apk/release/app-release.apk" "$out_dir/popcorn-tv-$version.apk"
+cp "$repo_root/android-tv/companion/build/outputs/apk/release/companion-release.apk" "$out_dir/popcorn-companion-$version.apk"
+cp "$repo_root/config.example.json" "$out_dir/config.example.json"
+cp "$repo_root/packaging/popcornd.service" "$out_dir/popcornd.service"
+
+(
+  cd "$out_dir"
+  sha256sum popcornd "popcorn-tv-$version.apk" "popcorn-companion-$version.apk" config.example.json popcornd.service > SHA256SUMS
+)
+
+echo "==> wrote:"
+find "$out_dir" -maxdepth 1 -type f -printf '  %f\n' | sort

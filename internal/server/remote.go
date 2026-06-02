@@ -43,11 +43,8 @@ func (a *App) remoteRegisterDevice(w http.ResponseWriter, r *http.Request) {
 	if id == "" {
 		id = "dev_" + randomHex(12)
 	}
-	name := strings.TrimSpace(in.Name)
-	if name == "" {
-		name = "Popcorn TV"
-	}
-	kind := strings.TrimSpace(in.Kind)
+	name := cleanRemoteName(in.Name, "Popcorn TV")
+	kind := cleanRemoteKind(in.Kind)
 	if kind == "" {
 		kind = "tv"
 	}
@@ -82,12 +79,20 @@ ORDER BY last_seen_at DESC`, user.ID)
 	}
 	defer rows.Close()
 	out := []remoteDevice{}
+	seen := map[string]bool{}
 	for rows.Next() {
 		var device remoteDevice
 		if err := rows.Scan(&device.ID, &device.Name, &device.Kind, &device.LastSeenAt); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		device.Name = cleanRemoteName(device.Name, "Popcorn TV")
+		device.Kind = cleanRemoteKind(device.Kind)
+		key := remoteDeviceKey(device.Kind, device.Name)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		out = append(out, device)
 	}
 	writeJSON(w, http.StatusOK, out)
@@ -141,6 +146,8 @@ WHERE p.code = ? AND p.expires_at > ?`, code, time.Now().UTC().Format(time.RFC33
 		http.Error(w, "invalid or expired pairing code", http.StatusNotFound)
 		return
 	}
+	device.Name = cleanRemoteName(device.Name, "Popcorn TV")
+	device.Kind = cleanRemoteKind(device.Kind)
 	_, err = a.store.DB().ExecContext(r.Context(), `UPDATE remote_devices SET user_id = ?, last_seen_at = CURRENT_TIMESTAMP WHERE id = ?`, user.ID, device.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -318,6 +325,63 @@ func cleanRemoteID(v string) string {
 		}
 	}
 	return b.String()
+}
+
+func cleanRemoteName(v, fallback string) string {
+	parts := strings.Fields(strings.TrimSpace(v))
+	if len(parts) == 0 {
+		return fallback
+	}
+	for {
+		repeated := false
+		for n := len(parts) / 2; n >= 1; n-- {
+			if equalFoldSlice(parts[:n], parts[n:2*n]) {
+				parts = append(parts[:n], parts[2*n:]...)
+				repeated = true
+				break
+			}
+		}
+		if !repeated {
+			break
+		}
+	}
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if len(out) > 0 && strings.EqualFold(out[len(out)-1], part) {
+			continue
+		}
+		out = append(out, part)
+	}
+	name := strings.Join(out, " ")
+	if name == "" {
+		return fallback
+	}
+	return name
+}
+
+func equalFoldSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !strings.EqualFold(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func cleanRemoteKind(v string) string {
+	return strings.ToLower(strings.TrimSpace(v))
+}
+
+func remoteDeviceKey(kind, name string) string {
+	kind = cleanRemoteKind(kind)
+	if kind == "" {
+		kind = "device"
+	}
+	name = strings.ToLower(cleanRemoteName(name, ""))
+	return kind + "\x00" + name
 }
 
 func randomHex(n int) string {

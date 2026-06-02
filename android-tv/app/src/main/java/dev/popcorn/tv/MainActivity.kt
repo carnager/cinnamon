@@ -1,7 +1,6 @@
 package dev.popcorn.tv
 
 import android.content.Context
-import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.activity.ComponentActivity
@@ -292,7 +291,7 @@ fun PopcornApp() {
         val active = session ?: return@LaunchedEffect
         val api = Api(active)
         val registered = runCatching {
-            api.registerDevice(deviceId.ifBlank { null }, "Shield ${Build.MODEL}".trim())
+            api.registerDevice(deviceId.ifBlank { null }, shieldDeviceName())
         }.getOrNull()
         if (registered != null && registered.isNotBlank() && registered != deviceId) {
             deviceId = registered
@@ -672,4 +671,3 @@ fun PopcornApp() {
 // ── Login ──
 
 // ── Home ──
-

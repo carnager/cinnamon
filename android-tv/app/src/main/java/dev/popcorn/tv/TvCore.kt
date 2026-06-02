@@ -1,6 +1,7 @@
 package dev.popcorn.tv
 
 import android.content.Context
+import android.os.Build
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -67,6 +68,15 @@ fun imageUrl(session: Session?, itemId: Long, kind: String, version: Long = 0): 
     if (session == null || itemId <= 0) return ""
     val suffix = if (version > 0) "?v=$version" else ""
     return "${session.server}/api/items/$itemId/image/$kind$suffix"
+}
+
+fun shieldDeviceName(model: String = Build.MODEL): String {
+    val cleaned = model
+        .trim()
+        .replace(Regex("\\s+"), " ")
+        .replace(Regex("(?i)\\bshield\\b"), "Shield")
+    if (cleaned.isBlank()) return "Shield"
+    return if (Regex("(?i)\\bshield\\b").containsMatchIn(cleaned)) cleaned else "Shield $cleaned"
 }
 
 fun playbackUrl(

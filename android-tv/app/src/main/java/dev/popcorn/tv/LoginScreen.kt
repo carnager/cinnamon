@@ -1,7 +1,6 @@
 package dev.popcorn.tv
 
 import android.graphics.Bitmap
-import android.os.Build
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -80,7 +79,7 @@ fun LoginView(initialServer: String, error: String, onLogin: (String, String, St
                 .put("type", "popcorn-shield-setup")
                 .put("callback", callback)
                 .put("code", code)
-                .put("deviceName", "Shield ${Build.MODEL}".trim())
+                .put("deviceName", shieldDeviceName())
                 .toString()
             runCatching {
                 withContext(Dispatchers.IO) { socket.use { it.acceptShieldSetup(code) } }

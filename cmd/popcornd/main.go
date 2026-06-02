@@ -54,14 +54,10 @@ func main() {
 	})
 	defer app.Close()
 
-	if cfg.ScanOnStart {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), cfg.ScanTimeout)
-			defer cancel()
-			if err := media.NewScanner(cfg, store, log).Scan(ctx); err != nil {
-				log.Error("startup scan failed", "error", err)
-			}
-		}()
+	scanCtx, stopScanner := context.WithCancel(context.Background())
+	defer stopScanner()
+	if cfg.ScanOnStart || cfg.AutoScan {
+		go media.NewAutoScanner(cfg, store, log).Run(scanCtx)
 	}
 
 	httpServer := &http.Server{
@@ -81,6 +77,7 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
+	stopScanner()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

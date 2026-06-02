@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"popcorn/internal/config"
 )
@@ -194,6 +195,59 @@ func TestBuildItemUsesTVShowMetadataAndArtwork(t *testing.T) {
 	}
 }
 
+func TestScanPathsRefreshesChangedSidecarOnly(t *testing.T) {
+	store, ctx := newTestStore(t)
+	root := t.TempDir()
+	movieDir := filepath.Join(root, "Movies", "Hoppers")
+	mustMkdirAll(t, movieDir)
+	video := filepath.Join(movieDir, "Hoppers.mkv")
+	nfo := filepath.Join(movieDir, "Hoppers.nfo")
+	mustWrite(t, video, "fake video")
+	mustWrite(t, nfo, `<movie><title>Old Hoppers</title></movie>`)
+	mustChtimes(t, video, 1000)
+	mustChtimes(t, nfo, 1000)
+	info := mustStat(t, video)
+	if err := store.UpsertItem(ctx, Item{
+		LibraryID:    "movies",
+		Path:         video,
+		Kind:         "movie",
+		Title:        "Old Hoppers",
+		SortTitle:    "old hoppers",
+		DurationMS:   123_000,
+		SizeBytes:    info.Size(),
+		MTimeUnix:    info.ModTime().Unix(),
+		NFOPath:      nfo,
+		NFOMTimeUnix: fileMTimeUnix(nfo),
+	}); err != nil {
+		t.Fatalf("upsert existing item: %v", err)
+	}
+
+	mustWrite(t, nfo, `<movie><title>New Hoppers</title><plot>Fresh sidecar.</plot></movie>`)
+	mustChtimes(t, nfo, 2000)
+	scanner := NewScanner(config.Config{FFprobePath: "ffprobe"}, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := scanner.ScanPaths(ctx, config.Library{ID: "movies", Type: "movies", Path: filepath.Join(root, "Movies")}, []string{nfo}); err != nil {
+		t.Fatalf("scan changed nfo: %v", err)
+	}
+
+	items, err := store.AllItems(ctx)
+	if err != nil {
+		t.Fatalf("list items: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %#v, want one item", items)
+	}
+	item := items[0]
+	if item.Title != "New Hoppers" || item.Overview != "Fresh sidecar." {
+		t.Fatalf("item after sidecar refresh = title %q overview %q, want updated nfo data", item.Title, item.Overview)
+	}
+	if item.DurationMS != 123_000 {
+		t.Fatalf("duration = %d, want existing probe data reused", item.DurationMS)
+	}
+	if item.NFOMTimeUnix != fileMTimeUnix(nfo) {
+		t.Fatalf("nfo mtime = %d, want %d", item.NFOMTimeUnix, fileMTimeUnix(nfo))
+	}
+}
+
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {
@@ -204,6 +258,14 @@ func mustMkdirAll(t *testing.T, path string) {
 func mustWrite(t *testing.T, path string, data string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustChtimes(t *testing.T, path string, unix int64) {
+	t.Helper()
+	when := time.Unix(unix, 0)
+	if err := os.Chtimes(path, when, when); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -3,6 +3,7 @@ package media
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -107,6 +108,29 @@ func (s *Store) RemoveMissing(ctx context.Context, libraryID string, seen map[st
 		if _, err := s.db.ExecContext(ctx, `DELETE FROM media_items WHERE path = ?`, path); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (s *Store) RemovePaths(ctx context.Context, libraryID string, paths []string) error {
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM media_items WHERE library_id = ? AND path = ?`, libraryID, path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) RemovePathPrefix(ctx context.Context, libraryID, prefix string) error {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		return nil
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM media_items WHERE library_id = ? AND (path = ? OR path LIKE ?)`, libraryID, prefix, prefix+string(filepath.Separator)+"%"); err != nil {
+		return err
 	}
 	return nil
 }

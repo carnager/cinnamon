@@ -50,6 +50,164 @@ func (s *Scanner) Scan(ctx context.Context) error {
 	return nil
 }
 
+func (s *Scanner) ScanPaths(ctx context.Context, lib config.Library, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	started := time.Now().UTC().Format(time.RFC3339)
+	stats := &scanStats{}
+	_ = s.store.SetScanStatus(ctx, ScanStatus{LibraryID: lib.ID, StartedAt: started, Status: "running", Message: "incremental"})
+	s.log.Info("incremental scan started", "library", lib.ID, "paths", len(paths))
+	snapshot, err := s.store.LibrarySnapshot(ctx, lib.ID)
+	if err != nil {
+		return err
+	}
+	jobs := map[string]scanJob{}
+	removed := map[string]struct{}{}
+	for _, path := range paths {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err := s.collectScanJobs(ctx, lib, path, snapshot, jobs, removed, stats); err != nil {
+			stats.errors.Add(1)
+			s.log.Warn("incremental scan path failed", "library", lib.ID, "path", path, "error", err)
+		}
+	}
+	for prefix := range removed {
+		if err := s.store.RemovePathPrefix(ctx, lib.ID, prefix); err != nil {
+			return err
+		}
+	}
+	for _, job := range jobs {
+		item := s.buildItem(ctx, lib, job.path, job.info, snapshot[job.path])
+		if err := s.store.UpsertItem(ctx, item); err != nil {
+			stats.errors.Add(1)
+			return err
+		}
+		stats.itemsImported.Add(1)
+	}
+	finalStatus := ScanStatus{
+		LibraryID:     lib.ID,
+		StartedAt:     started,
+		FinishedAt:    time.Now().UTC().Format(time.RFC3339),
+		Status:        "finished",
+		Message:       "incremental",
+		FilesSeen:     stats.filesSeen.Load(),
+		MediaFound:    stats.mediaFound.Load(),
+		ItemsImported: stats.itemsImported.Load(),
+		FilesSkipped:  stats.filesSeen.Load() - stats.mediaFound.Load(),
+		Errors:        stats.errors.Load(),
+	}
+	_ = s.store.SetScanStatus(context.Background(), finalStatus)
+	s.log.Info("incremental scan finished",
+		"library", lib.ID,
+		"paths", len(paths),
+		"mediaFound", finalStatus.MediaFound,
+		"itemsImported", finalStatus.ItemsImported,
+		"removedPrefixes", len(removed),
+		"errors", finalStatus.Errors,
+	)
+	return nil
+}
+
+func (s *Scanner) collectScanJobs(ctx context.Context, lib config.Library, path string, snapshot map[string]Item, jobs map[string]scanJob, removed map[string]struct{}, stats *scanStats) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = filepath.Clean(path)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			removed[abs] = struct{}{}
+			return nil
+		}
+		return err
+	}
+	if info.IsDir() {
+		return filepath.WalkDir(abs, func(candidate string, d os.DirEntry, err error) error {
+			if err != nil {
+				stats.errors.Add(1)
+				return nil
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if d.IsDir() {
+				name := d.Name()
+				if strings.HasPrefix(name, ".") || name == "@eaDir" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			return s.addScanFile(ctx, lib, candidate, snapshot, jobs, stats)
+		})
+	}
+	if _, ok := videoExts[strings.ToLower(filepath.Ext(abs))]; ok {
+		return s.addScanFile(ctx, lib, abs, snapshot, jobs, stats)
+	}
+	if !isMetadataOrArtwork(abs) {
+		stats.filesSeen.Add(1)
+		return nil
+	}
+	root := filepath.Dir(abs)
+	return filepath.WalkDir(root, func(candidate string, d os.DirEntry, err error) error {
+		if err != nil {
+			stats.errors.Add(1)
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if strings.HasPrefix(name, ".") || name == "@eaDir" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		return s.addScanFile(ctx, lib, candidate, snapshot, jobs, stats)
+	})
+}
+
+func (s *Scanner) addScanFile(ctx context.Context, lib config.Library, path string, snapshot map[string]Item, jobs map[string]scanJob, stats *scanStats) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	stats.filesSeen.Add(1)
+	if _, ok := videoExts[strings.ToLower(filepath.Ext(path))]; !ok {
+		return nil
+	}
+	if lib.Type == "movies" && isAuxiliaryVideo(path) {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if abs, err := filepath.Abs(path); err == nil {
+				_ = s.store.RemovePaths(ctx, lib.ID, []string{abs})
+			}
+			return nil
+		}
+		return err
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = filepath.Clean(path)
+	}
+	stats.mediaFound.Add(1)
+	existing := snapshot[abs]
+	if existing.Path != "" &&
+		existing.SizeBytes == info.Size() &&
+		existing.MTimeUnix == info.ModTime().Unix() &&
+		existing.NFOMTimeUnix == expectedNFOMTime(lib, abs) &&
+		existing.PosterMTimeUnix == expectedPosterMTime(lib, abs) &&
+		existing.BackdropMTimeUnix == expectedBackdropMTime(lib, abs) {
+		return nil
+	}
+	jobs[abs] = scanJob{path: abs, info: info}
+	return nil
+}
+
 func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
 	started := time.Now().UTC().Format(time.RFC3339)
 	stats := &scanStats{}
@@ -348,6 +506,34 @@ func artworkPaths(lib config.Library, video string) (string, string) {
 		}
 	}
 	return poster, backdrop
+}
+
+func expectedNFOMTime(lib config.Library, video string) int64 {
+	nfo := findSidecar(video, []string{".nfo"})
+	mtime := fileMTimeUnix(nfo)
+	if lib.Type == "tv" {
+		mtime = maxInt64(mtime, fileMTimeUnix(findShowNFO(lib.Path, video)))
+	}
+	return mtime
+}
+
+func expectedPosterMTime(lib config.Library, video string) int64 {
+	poster, _ := artworkPaths(lib, video)
+	return fileMTimeUnix(poster)
+}
+
+func expectedBackdropMTime(lib config.Library, video string) int64 {
+	_, backdrop := artworkPaths(lib, video)
+	return fileMTimeUnix(backdrop)
+}
+
+func isMetadataOrArtwork(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".nfo", ".jpg", ".jpeg", ".png", ".webp":
+		return true
+	default:
+		return false
+	}
 }
 
 func TVShowArtworkPaths(root, video string) (string, string) {

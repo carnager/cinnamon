@@ -25,6 +25,7 @@ func TestLoadMergesFileDefaultsAndEnvironment(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", dataDir)
 	t.Setenv("POPCORN_DATABASE", dbPath)
 	t.Setenv("POPCORN_TMDB_READ_ACCESS_TOKEN", "read-token")
+	t.Setenv("POPCORN_AUTO_SCAN_INTERVAL", "30m")
 
 	configPath := writeConfig(t, `{
 		"listen": ":9999",
@@ -33,6 +34,8 @@ func TestLoadMergesFileDefaultsAndEnvironment(t *testing.T) {
 			{"id": " movies ", "name": " Movies ", "path": " /media/movies/../Movies ", "type": ""}
 		],
 		"scanOnStart": false,
+		"autoScan": false,
+		"autoScanDebounce": "5s",
 		"scanTimeout": "12m"
 	}`)
 
@@ -54,6 +57,15 @@ func TestLoadMergesFileDefaultsAndEnvironment(t *testing.T) {
 	}
 	if cfg.ScanTimeout != 12*time.Minute {
 		t.Fatalf("scan timeout = %s, want 12m", cfg.ScanTimeout)
+	}
+	if cfg.AutoScan {
+		t.Fatalf("autoScan = true, want false from config")
+	}
+	if cfg.AutoScanDebounce != 5*time.Second {
+		t.Fatalf("auto scan debounce = %s, want 5s", cfg.AutoScanDebounce)
+	}
+	if cfg.AutoScanInterval != 30*time.Minute {
+		t.Fatalf("auto scan interval = %s, want env override 30m", cfg.AutoScanInterval)
 	}
 	if len(cfg.Libraries) != 1 {
 		t.Fatalf("libraries = %#v, want one library", cfg.Libraries)

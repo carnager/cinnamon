@@ -31,6 +31,9 @@ type Config struct {
 	TMDbReadToken     string        `json:"tmdbReadAccessToken"`
 	OMDbAPIKey        string        `json:"omdbApiKey"`
 	ScanOnStart       bool          `json:"scanOnStart"`
+	AutoScan          bool          `json:"autoScan"`
+	AutoScanDebounce  time.Duration `json:"-"`
+	AutoScanInterval  time.Duration `json:"-"`
 	ScanTimeout       time.Duration `json:"-"`
 }
 
@@ -57,6 +60,9 @@ type diskConfig struct {
 	TMDbReadToken     string    `json:"tmdbReadAccessToken"`
 	OMDbAPIKey        string    `json:"omdbApiKey"`
 	ScanOnStart       *bool     `json:"scanOnStart"`
+	AutoScan          *bool     `json:"autoScan"`
+	AutoScanDebounce  string    `json:"autoScanDebounce"`
+	AutoScanInterval  string    `json:"autoScanInterval"`
 	ScanTimeout       string    `json:"scanTimeout"`
 }
 
@@ -106,6 +112,9 @@ func defaults() Config {
 		TraktClientSecret: defaultTraktClientSecret,
 		TraktAPIURL:       "https://api.trakt.tv",
 		ScanOnStart:       true,
+		AutoScan:          true,
+		AutoScanDebounce:  3 * time.Second,
+		AutoScanInterval:  15 * time.Minute,
 		ScanTimeout:       30 * time.Minute,
 	}
 }
@@ -156,6 +165,19 @@ func merge(cfg *Config, raw diskConfig) {
 	if raw.ScanOnStart != nil {
 		cfg.ScanOnStart = *raw.ScanOnStart
 	}
+	if raw.AutoScan != nil {
+		cfg.AutoScan = *raw.AutoScan
+	}
+	if raw.AutoScanDebounce != "" {
+		if d, err := time.ParseDuration(raw.AutoScanDebounce); err == nil {
+			cfg.AutoScanDebounce = d
+		}
+	}
+	if raw.AutoScanInterval != "" {
+		if d, err := time.ParseDuration(raw.AutoScanInterval); err == nil {
+			cfg.AutoScanInterval = d
+		}
+	}
 	if raw.ScanTimeout != "" {
 		if d, err := time.ParseDuration(raw.ScanTimeout); err == nil {
 			cfg.ScanTimeout = d
@@ -202,6 +224,19 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("POPCORN_OMDB_API_KEY"); v != "" {
 		cfg.OMDbAPIKey = v
+	}
+	if v := os.Getenv("POPCORN_AUTO_SCAN"); v != "" {
+		cfg.AutoScan = parseBool(v, cfg.AutoScan)
+	}
+	if v := os.Getenv("POPCORN_AUTO_SCAN_DEBOUNCE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.AutoScanDebounce = d
+		}
+	}
+	if v := os.Getenv("POPCORN_AUTO_SCAN_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.AutoScanInterval = d
+		}
 	}
 	if v := os.Getenv("POPCORN_LIBRARY"); v != "" {
 		libraryType := os.Getenv("POPCORN_LIBRARY_TYPE")
@@ -250,4 +285,15 @@ func validate(cfg Config) error {
 		return errors.New("windows listen addresses should include host, for example 127.0.0.1:8097")
 	}
 	return nil
+}
+
+func parseBool(v string, fallback bool) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
 }

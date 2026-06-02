@@ -942,32 +942,6 @@ fun CompanionTopAppBar(
     )
 }
 
-@Composable
-fun TopBar(devices: List<Device>, selectedDevice: Device?, onDevice: (Device) -> Unit, onRefreshDevices: () -> Unit, onScan: () -> Unit, onLogout: () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .background(Surface1)
-            .statusBarsPadding()
-            .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Popcorn", color = Accent, fontWeight = FontWeight.Black, fontSize = 22.sp, modifier = Modifier.weight(1f))
-            TextButton(onClick = onScan) { Text("Scan QR") }
-            TextButton(onClick = onLogout) { Text("Logout") }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(selectedDevice?.name ?: "No Shield", color = TextColor, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            OutlinedButton(onClick = onRefreshDevices) { Text("Refresh") }
-            if (devices.size > 1) OutlinedButton(onClick = {
-                val current = devices.indexOfFirst { it.id == selectedDevice?.id }
-                onDevice(devices[(current + 1).floorMod(devices.size)])
-            }) { Text("Switch") }
-        }
-    }
-}
-
 fun displayTitle(item: PopItem): String = item.episodeTitle.ifBlank { item.title }
 fun fmtDuration(ms: Long): String = if (ms <= 0) "" else "${(ms / 60000).coerceAtLeast(1)}m"
 private fun Int.floorMod(n: Int): Int = ((this % n) + n) % n

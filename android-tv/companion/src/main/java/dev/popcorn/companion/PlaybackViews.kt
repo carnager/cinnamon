@@ -131,21 +131,6 @@ fun MiniPlayer(session: Session, state: PlayerState, target: PlaybackTarget, onP
 }
 
 @Composable
-fun RemoteControls(state: PlayerState, onPause: () -> Unit, onResume: () -> Unit, onStop: () -> Unit, onSeek: (Long) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).clip(RoundedCornerShape(10.dp)).background(Surface1).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(state.title.ifBlank { "Idle" }, color = TextColor, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text("${state.state}  ${formatTime(state.positionMs)} / ${formatTime(state.durationMs)}", color = Muted, fontSize = 12.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { onSeek(-30000) }, modifier = Modifier.weight(1f)) { Text("-30") }
-            Button(onClick = onResume, colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black), modifier = Modifier.weight(1f)) { Text("Play") }
-            Button(onClick = onPause, modifier = Modifier.weight(1f)) { Text("Pause") }
-            OutlinedButton(onClick = { onSeek(30000) }, modifier = Modifier.weight(1f)) { Text("+30") }
-            OutlinedButton(onClick = onStop, modifier = Modifier.weight(1f)) { Text("Stop") }
-        }
-    }
-}
-
-@Composable
 fun RemotePage(
     session: Session,
     state: PlayerState,
@@ -463,22 +448,6 @@ fun LocalPlayerPage(
 }
 
 @Composable
-fun BandwidthSelector(selectedBandwidth: Int?, onBandwidth: (Int?) -> Unit) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Bandwidth", color = MaterialTheme.colorScheme.onBackground, fontWeight = FontWeight.Bold)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-            BandwidthOptions.forEach { option ->
-                FilterChip(
-                    selected = option.kbps == selectedBandwidth,
-                    onClick = { onBandwidth(option.kbps) },
-                    label = { Text(option.label, fontSize = 12.sp) },
-                )
-            }
-        }
-    }
-}
-
-@Composable
 fun BandwidthDialog(selectedBandwidth: Int?, onDismiss: () -> Unit, onBandwidth: (Int?) -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -509,18 +478,6 @@ fun TrackDialog(title: String, tracks: List<StreamInfo>, selected: Int?, emptyLa
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
     )
-}
-
-@Composable
-fun PlayerIconButton(label: String, icon: String, onClick: () -> Unit) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-        modifier = Modifier.width(72.dp).clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(vertical = 8.dp),
-    ) {
-        Text(icon, color = Muted, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-        Text(label, color = Muted, fontSize = 10.sp, maxLines = 1, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-    }
 }
 
 @Composable

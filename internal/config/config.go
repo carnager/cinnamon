@@ -214,9 +214,13 @@ func applyEnv(cfg *Config) {
 
 func normalize(cfg *Config) {
 	for i, lib := range cfg.Libraries {
+		path := strings.TrimSpace(lib.Path)
 		cfg.Libraries[i].ID = strings.TrimSpace(lib.ID)
 		cfg.Libraries[i].Name = strings.TrimSpace(lib.Name)
-		cfg.Libraries[i].Path = filepath.Clean(strings.TrimSpace(lib.Path))
+		cfg.Libraries[i].Path = path
+		if path != "" {
+			cfg.Libraries[i].Path = filepath.Clean(path)
+		}
 		cfg.Libraries[i].Type = strings.TrimSpace(lib.Type)
 		if cfg.Libraries[i].Type == "" {
 			cfg.Libraries[i].Type = "movies"

@@ -13,3 +13,4 @@ android-tv/local.properties
 /popcorn
 /popcornd
 config.json
+config.toml

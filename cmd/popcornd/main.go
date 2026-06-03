@@ -19,7 +19,7 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "", "path to config.json")
+	configPath := flag.String("config", "", "path to config.toml or config.json")
 	flag.Parse()
 
 	cfg, err := config.Load(*configPath)

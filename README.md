@@ -5,9 +5,9 @@ Popcorn is a small Jellyfin-adjacent media daemon. The first version focuses on 
 ## Run
 
 ```sh
-cp config.example.json config.json
-$EDITOR config.json
-go run ./cmd/popcornd -config config.json
+cp config.example.toml config.toml
+$EDITOR config.toml
+go run ./cmd/popcornd -config config.toml
 ```
 
 Open `http://localhost:8097`.
@@ -15,7 +15,7 @@ Open `http://localhost:8097`.
 For scanner diagnostics, run with debug logging:
 
 ```sh
-POPCORN_LOG_LEVEL=debug go run ./cmd/popcornd -config config.json
+POPCORN_LOG_LEVEL=debug go run ./cmd/popcornd -config config.toml
 ```
 
 Build a daemon binary with:
@@ -103,9 +103,18 @@ The scanner expects TinyMediaManager-style local assets. It reads title/year fro
 
 Libraries must declare a type:
 
-```json
-{ "id": "movies", "name": "Movies", "type": "movies", "path": "/media/movies" }
-{ "id": "tv", "name": "TV Shows", "type": "tv", "path": "/media/tv" }
+```toml
+[[libraries]]
+id = "movies"
+name = "Movies"
+type = "movies"
+path = "/media/movies"
+
+[[libraries]]
+id = "tv"
+name = "TV Shows"
+type = "tv"
+path = "/media/tv"
 ```
 
 TV libraries scan videos as episodes. Popcorn reads `showtitle`, `season`, `episode`, and episode `title` from episode `.nfo` files, falls back to `tvshow.nfo` for the show title, and then falls back to the first folder below the library root.
@@ -124,7 +133,7 @@ The web UI uses that to seek outside the currently buffered transcode output by 
 
 ## Trakt
 
-Popcorn ships with Trakt app credentials for the device-auth flow. You can override them with `traktClientId` and `traktClientSecret` in `config.json` or with `POPCORN_TRAKT_CLIENT_ID` and `POPCORN_TRAKT_CLIENT_SECRET`.
+Popcorn ships with Trakt app credentials for the device-auth flow. You can override them with `traktClientId` and `traktClientSecret` in `config.toml` or with `POPCORN_TRAKT_CLIENT_ID` and `POPCORN_TRAKT_CLIENT_SECRET`.
 
 Each Popcorn user connects Trakt separately:
 

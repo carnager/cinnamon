@@ -8,11 +8,13 @@ import (
 )
 
 func TestLoadRejectsLibraryWithEmptyPath(t *testing.T) {
-	configPath := writeConfig(t, `{
-		"libraries": [
-			{"id": "movies", "name": "Movies", "path": "   ", "type": "movies"}
-		]
-	}`)
+	configPath := writeTOMLConfig(t, `
+[[libraries]]
+id = "movies"
+name = "Movies"
+path = "   "
+type = "movies"
+`)
 
 	if _, err := Load(configPath); err == nil {
 		t.Fatalf("Load accepted a library with an empty path")
@@ -27,17 +29,20 @@ func TestLoadMergesFileDefaultsAndEnvironment(t *testing.T) {
 	t.Setenv("POPCORN_TMDB_READ_ACCESS_TOKEN", "read-token")
 	t.Setenv("POPCORN_AUTO_SCAN_INTERVAL", "30m")
 
-	configPath := writeConfig(t, `{
-		"listen": ":9999",
-		"logLevel": "debug",
-		"libraries": [
-			{"id": " movies ", "name": " Movies ", "path": " /media/movies/../Movies ", "type": ""}
-		],
-		"scanOnStart": false,
-		"autoScan": false,
-		"autoScanDebounce": "5s",
-		"scanTimeout": "12m"
-	}`)
+	configPath := writeTOMLConfig(t, `
+listen = ":9999"
+logLevel = "debug"
+scanOnStart = false
+autoScan = false
+autoScanDebounce = "5s"
+scanTimeout = "12m"
+
+[[libraries]]
+id = " movies "
+name = " Movies "
+path = " /media/movies/../Movies "
+type = ""
+`)
 
 	cfg, err := Load(configPath)
 	if err != nil {
@@ -76,6 +81,24 @@ func TestLoadMergesFileDefaultsAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoadSupportsJSONConfigFallback(t *testing.T) {
+	configPath := writeJSONConfig(t, `{
+		"listen": ":9999",
+		"logLevel": "warn",
+		"libraries": [
+			{"id": "movies", "name": "Movies", "path": "/media/movies", "type": "movies"}
+		]
+	}`)
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load JSON: %v", err)
+	}
+	if cfg.Listen != ":9999" || cfg.LogLevel != "warn" {
+		t.Fatalf("json config = %#v, want listen :9999 and warn log level", cfg)
+	}
+}
+
 func TestLoadSupportsSingleLibraryEnvironmentOverride(t *testing.T) {
 	t.Setenv("POPCORN_LIBRARY", "/media/tv")
 	t.Setenv("POPCORN_LIBRARY_TYPE", "tv")
@@ -93,7 +116,16 @@ func TestLoadSupportsSingleLibraryEnvironmentOverride(t *testing.T) {
 	}
 }
 
-func writeConfig(t *testing.T, body string) string {
+func writeTOMLConfig(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return path
+}
+
+func writeJSONConfig(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {

@@ -21,12 +21,12 @@ echo "==> build Android APKs"
 
 cp "$repo_root/android-tv/app/build/outputs/apk/release/app-release.apk" "$out_dir/popcorn-tv-$version.apk"
 cp "$repo_root/android-tv/companion/build/outputs/apk/release/companion-release.apk" "$out_dir/popcorn-companion-$version.apk"
-cp "$repo_root/config.example.json" "$out_dir/config.example.json"
+cp "$repo_root/config.example.toml" "$out_dir/config.example.toml"
 cp "$repo_root/packaging/popcornd.service" "$out_dir/popcornd.service"
 
 (
   cd "$out_dir"
-  sha256sum popcornd "popcorn-tv-$version.apk" "popcorn-companion-$version.apk" config.example.json popcornd.service > SHA256SUMS
+  sha256sum popcornd "popcorn-tv-$version.apk" "popcorn-companion-$version.apk" config.example.toml popcornd.service > SHA256SUMS
 )
 
 echo "==> wrote:"

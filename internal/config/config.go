@@ -3,11 +3,14 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const (
@@ -16,54 +19,54 @@ const (
 )
 
 type Config struct {
-	Listen            string        `json:"listen"`
-	LogLevel          string        `json:"logLevel"`
-	DatabasePath      string        `json:"databasePath"`
-	Libraries         []Library     `json:"libraries"`
-	FFmpegPath        string        `json:"ffmpegPath"`
-	FFprobePath       string        `json:"ffprobePath"`
-	HWAccel           string        `json:"hwAccel"`
-	HWDevice          string        `json:"hwDevice"`
-	TraktClientID     string        `json:"traktClientId"`
-	TraktClientSecret string        `json:"traktClientSecret"`
-	TraktAPIURL       string        `json:"traktApiUrl"`
-	TMDbAPIKey        string        `json:"tmdbApiKey"`
-	TMDbReadToken     string        `json:"tmdbReadAccessToken"`
-	OMDbAPIKey        string        `json:"omdbApiKey"`
-	ScanOnStart       bool          `json:"scanOnStart"`
-	AutoScan          bool          `json:"autoScan"`
+	Listen            string        `json:"listen" toml:"listen"`
+	LogLevel          string        `json:"logLevel" toml:"logLevel"`
+	DatabasePath      string        `json:"databasePath" toml:"databasePath"`
+	Libraries         []Library     `json:"libraries" toml:"libraries"`
+	FFmpegPath        string        `json:"ffmpegPath" toml:"ffmpegPath"`
+	FFprobePath       string        `json:"ffprobePath" toml:"ffprobePath"`
+	HWAccel           string        `json:"hwAccel" toml:"hwAccel"`
+	HWDevice          string        `json:"hwDevice" toml:"hwDevice"`
+	TraktClientID     string        `json:"traktClientId" toml:"traktClientId"`
+	TraktClientSecret string        `json:"traktClientSecret" toml:"traktClientSecret"`
+	TraktAPIURL       string        `json:"traktApiUrl" toml:"traktApiUrl"`
+	TMDbAPIKey        string        `json:"tmdbApiKey" toml:"tmdbApiKey"`
+	TMDbReadToken     string        `json:"tmdbReadAccessToken" toml:"tmdbReadAccessToken"`
+	OMDbAPIKey        string        `json:"omdbApiKey" toml:"omdbApiKey"`
+	ScanOnStart       bool          `json:"scanOnStart" toml:"scanOnStart"`
+	AutoScan          bool          `json:"autoScan" toml:"autoScan"`
 	AutoScanDebounce  time.Duration `json:"-"`
 	AutoScanInterval  time.Duration `json:"-"`
 	ScanTimeout       time.Duration `json:"-"`
 }
 
 type Library struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Path string `json:"path"`
-	Type string `json:"type"`
+	ID   string `json:"id" toml:"id"`
+	Name string `json:"name" toml:"name"`
+	Path string `json:"path" toml:"path"`
+	Type string `json:"type" toml:"type"`
 }
 
 type diskConfig struct {
-	Listen            string    `json:"listen"`
-	LogLevel          string    `json:"logLevel"`
-	DatabasePath      string    `json:"databasePath"`
-	Libraries         []Library `json:"libraries"`
-	FFmpegPath        string    `json:"ffmpegPath"`
-	FFprobePath       string    `json:"ffprobePath"`
-	HWAccel           string    `json:"hwAccel"`
-	HWDevice          string    `json:"hwDevice"`
-	TraktClientID     string    `json:"traktClientId"`
-	TraktClientSecret string    `json:"traktClientSecret"`
-	TraktAPIURL       string    `json:"traktApiUrl"`
-	TMDbAPIKey        string    `json:"tmdbApiKey"`
-	TMDbReadToken     string    `json:"tmdbReadAccessToken"`
-	OMDbAPIKey        string    `json:"omdbApiKey"`
-	ScanOnStart       *bool     `json:"scanOnStart"`
-	AutoScan          *bool     `json:"autoScan"`
-	AutoScanDebounce  string    `json:"autoScanDebounce"`
-	AutoScanInterval  string    `json:"autoScanInterval"`
-	ScanTimeout       string    `json:"scanTimeout"`
+	Listen            string    `json:"listen" toml:"listen"`
+	LogLevel          string    `json:"logLevel" toml:"logLevel"`
+	DatabasePath      string    `json:"databasePath" toml:"databasePath"`
+	Libraries         []Library `json:"libraries" toml:"libraries"`
+	FFmpegPath        string    `json:"ffmpegPath" toml:"ffmpegPath"`
+	FFprobePath       string    `json:"ffprobePath" toml:"ffprobePath"`
+	HWAccel           string    `json:"hwAccel" toml:"hwAccel"`
+	HWDevice          string    `json:"hwDevice" toml:"hwDevice"`
+	TraktClientID     string    `json:"traktClientId" toml:"traktClientId"`
+	TraktClientSecret string    `json:"traktClientSecret" toml:"traktClientSecret"`
+	TraktAPIURL       string    `json:"traktApiUrl" toml:"traktApiUrl"`
+	TMDbAPIKey        string    `json:"tmdbApiKey" toml:"tmdbApiKey"`
+	TMDbReadToken     string    `json:"tmdbReadAccessToken" toml:"tmdbReadAccessToken"`
+	OMDbAPIKey        string    `json:"omdbApiKey" toml:"omdbApiKey"`
+	ScanOnStart       *bool     `json:"scanOnStart" toml:"scanOnStart"`
+	AutoScan          *bool     `json:"autoScan" toml:"autoScan"`
+	AutoScanDebounce  string    `json:"autoScanDebounce" toml:"autoScanDebounce"`
+	AutoScanInterval  string    `json:"autoScanInterval" toml:"autoScanInterval"`
+	ScanTimeout       string    `json:"scanTimeout" toml:"scanTimeout"`
 }
 
 func Load(path string) (Config, error) {
@@ -77,7 +80,7 @@ func Load(path string) (Config, error) {
 			return Config{}, err
 		}
 		var raw diskConfig
-		if err := json.Unmarshal(b, &raw); err != nil {
+		if err := decodeDiskConfig(path, b, &raw); err != nil {
 			return Config{}, err
 		}
 		merge(&cfg, raw)
@@ -88,6 +91,20 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func decodeDiskConfig(path string, b []byte, raw *diskConfig) error {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".toml":
+		if err := toml.Unmarshal(b, raw); err != nil {
+			return fmt.Errorf("parse TOML config: %w", err)
+		}
+	default:
+		if err := json.Unmarshal(b, raw); err != nil {
+			return fmt.Errorf("parse JSON config: %w", err)
+		}
+	}
+	return nil
 }
 
 func defaults() Config {

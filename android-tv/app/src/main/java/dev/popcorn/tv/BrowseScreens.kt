@@ -414,12 +414,24 @@ fun GenreSidePanel(
 @Composable
 fun GenreFilterRow(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
+    val background = when {
+        selected && focused -> Accent
+        selected -> AccentDim
+        focused -> Surface3
+        else -> Color.Transparent
+    }
+    val border = when {
+        selected && focused -> Color.White
+        focused -> FocusGlow
+        selected -> Accent.copy(alpha = .55f)
+        else -> Color.Transparent
+    }
     Row(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(6.dp))
-            .background(if (selected) Accent else if (focused) Surface2 else Color.Transparent)
-            .border(1.dp, if (focused && !selected) FocusGlow else Color.Transparent, RoundedCornerShape(6.dp))
+            .background(background)
+            .border(1.dp, border, RoundedCornerShape(6.dp))
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .tvActivate(onClick)

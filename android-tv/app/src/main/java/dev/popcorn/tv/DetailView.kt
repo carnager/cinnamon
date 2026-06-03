@@ -186,13 +186,25 @@ fun DetailView(item: PopItem, session: Session?, onPlay: (Int?, Int?) -> Unit) {
 @Composable
 private fun TrackRow(label: String, selected: Boolean, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
+    val background = when {
+        selected && focused -> Accent.copy(alpha = .24f)
+        selected -> Accent.copy(alpha = .13f)
+        focused -> Surface2
+        else -> Color.Transparent
+    }
+    val border = when {
+        selected && focused -> Color.White
+        focused -> FocusGlow
+        selected -> Accent.copy(alpha = .35f)
+        else -> Color.Transparent
+    }
     Row(
         Modifier
             .fillMaxWidth()
             .padding(vertical = 1.dp)
             .clip(RoundedCornerShape(5.dp))
-            .background(if (selected) Accent.copy(alpha = .15f) else if (focused) Surface2 else Color.Transparent)
-            .border(1.dp, if (focused) FocusGlow else if (selected) Accent.copy(alpha = .3f) else Color.Transparent, RoundedCornerShape(5.dp))
+            .background(background)
+            .border(1.dp, border, RoundedCornerShape(5.dp))
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .tvActivate(onClick)

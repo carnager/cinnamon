@@ -215,7 +215,7 @@ fun PopcornApp() {
                     if (itemId > 0) {
                         runCatching { Api(activeSession).item(itemId) }
                             .onSuccess { item ->
-                                lastDetail = Screen.Detail(item, null)
+                                lastDetail = Screen.Detail(item, null, fromHome = true)
                                 val audio = command.payload.optIntOrNull("audioIndex")
                                 val subtitle = command.payload.optIntOrNull("subtitleIndex")
                                 screen = Screen.Player(item, audio, subtitle)
@@ -458,11 +458,11 @@ fun PopcornApp() {
             Screen.Watchlist -> screen = Screen.Home
             is Screen.LibraryPage -> screen = Screen.Home
             Screen.Search -> screen = Screen.Home
-            is Screen.Show -> screen = if (s.fromSearch) Screen.Search else if (s.fromWatchlist) Screen.Watchlist else if (activeLibrary?.type == "tv") Screen.LibraryPage(activeLibrary!!) else Screen.Home
-            is Screen.Season -> screen = Screen.Show(s.show, fromSearch = s.fromSearch, fromWatchlist = s.fromWatchlist)
+            is Screen.Show -> screen = if (s.fromSearch) Screen.Search else if (s.fromWatchlist) Screen.Watchlist else if (s.fromHome) Screen.Home else if (activeLibrary?.type == "tv") Screen.LibraryPage(activeLibrary!!) else Screen.Home
+            is Screen.Season -> screen = Screen.Show(s.show, fromHome = s.fromHome, fromSearch = s.fromSearch, fromWatchlist = s.fromWatchlist)
             is Screen.Detail -> {
                 lastDetail = null
-                screen = if (s.fromSearch) Screen.Search else if (s.fromShow != null) Screen.Show(s.fromShow, fromWatchlist = s.fromWatchlist) else if (s.fromWatchlist) Screen.Watchlist else if (activeLibrary != null) Screen.LibraryPage(activeLibrary!!) else Screen.Home
+                screen = if (s.fromSearch) Screen.Search else if (s.fromShow != null) Screen.Show(s.fromShow, fromHome = s.fromHome, fromWatchlist = s.fromWatchlist) else if (s.fromWatchlist) Screen.Watchlist else if (s.fromHome) Screen.Home else if (activeLibrary != null) Screen.LibraryPage(activeLibrary!!) else Screen.Home
             }
             is Screen.Player -> {
                 screen = if (lastDetail != null) lastDetail!! else Screen.Home
@@ -524,8 +524,8 @@ fun PopcornApp() {
                 session = null
                 screen = Screen.Login
             },
-            onItem = { screen = Screen.Detail(it, null, fromWatchlist = true) },
-            onShow = { screen = Screen.Show(it, fromWatchlist = true) },
+            onItem = { screen = Screen.Detail(it, null, fromHome = true) },
+            onShow = { screen = Screen.Show(it, fromHome = true) },
             onItemMenu = { item, requester -> openItemWatchMenu(item, requester) },
             onShowMenu = { show, requester -> openShowWatchMenu(show, requester) },
         )
@@ -551,8 +551,8 @@ fun PopcornApp() {
                 session = null
                 screen = Screen.Login
             },
-            onItem = { screen = Screen.Detail(it, null) },
-            onShow = { screen = Screen.Show(it) },
+            onItem = { screen = Screen.Detail(it, null, fromWatchlist = true) },
+            onShow = { screen = Screen.Show(it, fromWatchlist = true) },
             onItemMenu = { item, requester -> openItemWatchMenu(item, requester) },
             onShowMenu = { show, requester -> openShowWatchMenu(show, requester) },
         )
@@ -609,13 +609,13 @@ fun PopcornApp() {
         is Screen.Show -> ShowView(
             session = session,
             show = current.show,
-            onSeason = { season -> screen = Screen.Season(current.show, season, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist) },
+            onSeason = { season -> screen = Screen.Season(current.show, season, fromHome = current.fromHome, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist) },
         )
         is Screen.Season -> SeasonView(
             session = session,
             show = current.show,
             season = current.season,
-            onEpisode = { screen = Screen.Detail(it, current.show, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist) },
+            onEpisode = { screen = Screen.Detail(it, current.show, fromHome = current.fromHome, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist) },
         )
         is Screen.Detail -> DetailView(
             item = current.item,

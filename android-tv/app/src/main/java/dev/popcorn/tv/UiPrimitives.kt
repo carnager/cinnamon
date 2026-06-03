@@ -40,6 +40,11 @@ import coil.request.ImageRequest
 @Composable
 fun FocusButton(label: String, primary: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
+    val border = when {
+        focused && primary -> Color.White
+        focused -> FocusGlow
+        else -> Color.Transparent
+    }
     Box(
         modifier
             .clip(RoundedCornerShape(6.dp))
@@ -50,7 +55,7 @@ fun FocusButton(label: String, primary: Boolean, modifier: Modifier = Modifier, 
                     if (focused) Surface3 else Surface2
                 }
             )
-            .border(2.dp, if (focused) FocusGlow else Color.Transparent, RoundedCornerShape(6.dp))
+            .border(2.dp, border, RoundedCornerShape(6.dp))
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .tvActivate(onClick)
@@ -102,11 +107,23 @@ fun SizedAsyncImage(
 @Composable
 fun Pill(text: String, selected: Boolean, badge: String? = null, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
+    val background = when {
+        selected && focused -> Accent
+        selected -> AccentDim
+        focused -> Surface3
+        else -> Color.Transparent
+    }
+    val border = when {
+        selected && focused -> Color.White
+        focused -> FocusGlow
+        selected -> Accent.copy(alpha = .55f)
+        else -> Line
+    }
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .background(if (selected) Accent else if (focused) Surface2 else Color.Transparent)
-            .border(1.dp, if (focused && !selected) FocusGlow else if (!selected) Line else Color.Transparent, RoundedCornerShape(999.dp))
+            .background(background)
+            .border(1.dp, border, RoundedCornerShape(999.dp))
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .tvActivate(onClick)

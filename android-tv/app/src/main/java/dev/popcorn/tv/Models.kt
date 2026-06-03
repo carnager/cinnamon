@@ -110,8 +110,8 @@ sealed interface Screen {
     data object Watchlist : Screen
     data class LibraryPage(val library: Library) : Screen
     data object Search : Screen
-    data class Show(val show: ShowSummary, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false) : Screen
-    data class Season(val show: ShowSummary, val season: SeasonSummary, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false) : Screen
-    data class Detail(val item: PopItem, val fromShow: ShowSummary?, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false) : Screen
+    data class Show(val show: ShowSummary, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false) : Screen
+    data class Season(val show: ShowSummary, val season: SeasonSummary, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false) : Screen
+    data class Detail(val item: PopItem, val fromShow: ShowSummary?, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false) : Screen
     data class Player(val item: PopItem, val audioIndex: Int?, val subtitleIndex: Int?) : Screen
 }

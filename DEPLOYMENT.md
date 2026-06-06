@@ -52,12 +52,54 @@ dist/v0.1.0-39-g6ce8f7d-dirty/popcorn-companion-v0.1.0-39-g6ce8f7d-dirty.apk
 
 ## APK Updates
 
-Do not make `scripts/release` upload APKs to the server. It only builds them and prints the local paths.
+By default, `scripts/release` only builds APKs and prints the local paths.
 
 Upload APKs manually in the web admin settings, App Updates section:
 
 - Android TV: upload `dist/<git-version>/popcorn-tv-<git-version>.apk`
 - Phone Companion: upload `dist/<git-version>/popcorn-companion-<git-version>.apk`
+
+Or publish APKs from the command line through the same admin upload API:
+
+```sh
+POPCORN_UPLOAD_SERVER=https://popcorn.example \
+POPCORN_UPLOAD_USER=admin \
+POPCORN_UPLOAD_PASSWORD='...' \
+scripts/upload-app-update tv dist/<git-version>/popcorn-tv-<git-version>.apk "release notes"
+
+POPCORN_UPLOAD_SERVER=https://popcorn.example \
+POPCORN_UPLOAD_USER=admin \
+POPCORN_UPLOAD_PASSWORD='...' \
+scripts/upload-app-update companion dist/<git-version>/popcorn-companion-<git-version>.apk "release notes"
+```
+
+Set `POPCORN_RELEASE_UPLOAD=1` while running `scripts/release` to upload both
+APKs automatically after the build:
+
+```sh
+POPCORN_RELEASE_UPLOAD=1 \
+POPCORN_UPLOAD_SERVER=https://popcorn.example \
+POPCORN_UPLOAD_USER=admin \
+POPCORN_UPLOAD_PASSWORD='...' \
+POPCORN_RELEASE_NOTES='Short release notes' \
+JAVA_HOME=/usr/lib/jvm/java-21-openjdk scripts/release
+```
+
+For convenience, setting `POPCORN_UPLOAD_SERVER` without
+`POPCORN_RELEASE_UPLOAD` also enables upload. Set `POPCORN_RELEASE_UPLOAD=0`
+to force build-only mode.
+
+Use app-specific notes if needed:
+
+```sh
+POPCORN_RELEASE_UPLOAD=1 \
+POPCORN_TV_RELEASE_NOTES='TV changes' \
+POPCORN_COMPANION_RELEASE_NOTES='Phone changes' \
+POPCORN_UPLOAD_SERVER=https://popcorn.example \
+POPCORN_UPLOAD_USER=admin \
+POPCORN_UPLOAD_PASSWORD='...' \
+scripts/release
+```
 
 On the server, uploaded APKs are stored next to the database under:
 
@@ -87,6 +129,17 @@ The upload handler also writes the active update metadata back into:
 ```text
 /home/carnager/.config/popcorn/popcornd.toml
 ```
+
+Clients discover updates through:
+
+```text
+/api/app/tv/update?versionCode=<installed-code>
+/api/app/companion/update?versionCode=<installed-code>
+```
+
+The TV app checks on startup/resume and periodically. The phone companion checks
+on startup and periodically, and opens the update dialog once for each newly
+published version.
 
 ## Server Deployment On Gemenon
 

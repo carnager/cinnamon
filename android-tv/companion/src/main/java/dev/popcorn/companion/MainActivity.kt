@@ -314,6 +314,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     var selectedBandwidth by remember { mutableStateOf<Int?>(null) }
     var companionUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
     var showUpdateDialog by remember { mutableStateOf(false) }
+    var announcedCompanionUpdate by remember { mutableIntStateOf(0) }
     var playbackTarget by remember { mutableStateOf(PlaybackTarget.Shield) }
     var phoneState by remember { mutableStateOf(PhonePlaybackState()) }
     var phoneAudioIndex by remember { mutableStateOf<Int?>(null) }
@@ -337,6 +338,14 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     fun reportError(error: Throwable, fallback: String) {
         if (error is CancellationException) return
         onError(error.message ?: fallback)
+    }
+
+    fun publishCompanionUpdate(info: AppUpdateInfo?) {
+        companionUpdate = info
+        if (info?.available == true && info.versionCode > 0 && info.versionCode != announcedCompanionUpdate) {
+            announcedCompanionUpdate = info.versionCode
+            showUpdateDialog = true
+        }
     }
 
     fun refreshMarkers() {
@@ -644,7 +653,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
             }
         }
         runCatching {
-            companionUpdate = runCatching { api.companionUpdate(BuildConfig.VERSION_CODE) }.getOrNull()
+            publishCompanionUpdate(runCatching { api.companionUpdate(BuildConfig.VERSION_CODE) }.getOrNull())
             refreshMarkers()
             libraries = api.libraries()
             CompanionCache.writeLibraries(context, session, libraries)
@@ -667,6 +676,13 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
             }
         }.onFailure { reportError(it, "Load failed") }
         loading = false
+    }
+
+    LaunchedEffect(session) {
+        while (true) {
+            delay(5 * 60 * 1000)
+            publishCompanionUpdate(runCatching { api.companionUpdate(BuildConfig.VERSION_CODE) }.getOrNull())
+        }
     }
 
     LaunchedEffect(selectedDevice?.id) {

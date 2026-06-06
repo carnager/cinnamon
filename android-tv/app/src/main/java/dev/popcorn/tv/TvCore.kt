@@ -112,4 +112,22 @@ fun playbackUrl(
     return "$server/api/items/$itemId/hls/$hlsSessionId/index.m3u8?${params.joinToString("&")}"
 }
 
+fun trailerUrl(session: Session?, itemId: Long): String {
+    return "${session?.server.orEmpty()}/api/items/$itemId/trailer"
+}
+
+fun themeUrl(session: Session?, libraryId: String, showTitle: String): String {
+    val server = session?.server.orEmpty()
+    return "$server/api/tv/theme?libraryId=${urlEncode(libraryId)}&showTitle=${urlEncode(showTitle)}&stream=1"
+}
+
+fun youtubeTrailerSearchUrl(title: String, year: Int): String {
+    val query = listOf(title, year.takeIf { it > 0 }?.toString(), "trailer")
+        .filterNotNull()
+        .joinToString(" ")
+    return "https://www.youtube.com/results?search_query=${urlEncode(query)}"
+}
+
+private fun urlEncode(value: String): String = java.net.URLEncoder.encode(value, "UTF-8")
+
 fun dp(context: Context, value: Int): Int = (value * context.resources.displayMetrics.density).toInt()

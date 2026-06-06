@@ -33,13 +33,21 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,12 +55,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -120,12 +131,17 @@ fun AppChrome(
     onUpdates: () -> Unit,
     onScan: () -> Unit,
     onLogout: () -> Unit,
+    navFocusRequester: FocusRequester? = null,
+    onSideNavigationExit: (() -> Boolean)? = null,
+    suppressSideNavigationExpansion: Boolean = false,
     topBar: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
-    Row(Modifier.fillMaxSize().background(Bg)) {
-        SideNavigation(libraries, selected, onHome, onLibrary, onWatchlist, onSearch)
-        Column(Modifier.fillMaxSize().background(Bg)) {
+    val fallbackNavFocusRequester = remember { FocusRequester() }
+    val resolvedNavFocusRequester = navFocusRequester ?: fallbackNavFocusRequester
+    Row(Modifier.fillMaxSize()) {
+        SideNavigation(libraries, selected, onHome, onLibrary, onWatchlist, onSearch, resolvedNavFocusRequester, onSideNavigationExit, suppressSideNavigationExpansion)
+        Column(Modifier.fillMaxSize()) {
             if (topBar != null) {
                 topBar()
             } else {
@@ -137,59 +153,86 @@ fun AppChrome(
 }
 
 @Composable
-fun SideNavigation(libraries: List<Library>, selected: String, onHome: () -> Unit, onLibrary: (Library) -> Unit, onWatchlist: () -> Unit, onSearch: () -> Unit) {
+fun SideNavigation(libraries: List<Library>, selected: String, onHome: () -> Unit, onLibrary: (Library) -> Unit, onWatchlist: () -> Unit, onSearch: () -> Unit, firstFocusRequester: FocusRequester, onExit: (() -> Boolean)? = null, expansionSuppressed: Boolean = false) {
     var expanded by remember { mutableStateOf(false) }
+    var hasFocus by remember { mutableStateOf(false) }
+    val expansionAllowed by rememberUpdatedState(!expansionSuppressed)
     val width by animateDpAsState(if (expanded) 190.dp else 66.dp, label = "nav-width")
     val movieLibrary = libraries.firstOrNull { it.type == "movies" || it.type == "movie" }
     val tvLibrary = libraries.firstOrNull { it.type == "tv" }
+    LaunchedEffect(hasFocus) {
+        if (hasFocus) {
+            delay(140)
+            if (expansionAllowed) expanded = true
+        } else {
+            expanded = false
+        }
+    }
+    LaunchedEffect(expansionSuppressed) {
+        if (expansionSuppressed) expanded = false
+    }
     Column(
         Modifier
             .width(width)
             .fillMaxSize()
-            .background(SurfaceColor)
-            .border(1.dp, Line)
-            .onFocusChanged { expanded = it.hasFocus }
+            .background(Color.Black.copy(alpha = .52f))
+            .border(1.dp, Color.White.copy(alpha = .10f))
+            .onFocusChanged { hasFocus = it.hasFocus }
             .padding(horizontal = 10.dp, vertical = 18.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text("P", color = Accent, fontSize = 24.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(bottom = 18.dp))
-        SideNavigationItem(symbol = "H", label = "Home", expanded = expanded, selected = selected == "home", onClick = onHome)
+        SideNavigationItem(icon = Icons.Filled.Home, label = "Home", expanded = expanded, selected = selected == "home", focusRequester = firstFocusRequester, onRight = onExit, onClick = onHome)
         if (movieLibrary != null) {
-            SideNavigationItem(symbol = "M", label = movieLibrary.name, expanded = expanded, selected = selected == movieLibrary.id, onClick = { onLibrary(movieLibrary) })
+            SideNavigationItem(icon = Icons.Filled.Movie, label = movieLibrary.name, expanded = expanded, selected = selected == movieLibrary.id, onRight = onExit, onClick = { onLibrary(movieLibrary) })
         }
         if (tvLibrary != null) {
-            SideNavigationItem(symbol = "TV", label = tvLibrary.name, expanded = expanded, selected = selected == tvLibrary.id, onClick = { onLibrary(tvLibrary) })
+            SideNavigationItem(icon = Icons.Filled.LiveTv, label = tvLibrary.name, expanded = expanded, selected = selected == tvLibrary.id, onRight = onExit, onClick = { onLibrary(tvLibrary) })
         }
-        SideNavigationItem(symbol = "WL", label = "Watchlist", expanded = expanded, selected = selected == "watchlist", onClick = onWatchlist)
-        SideNavigationItem(symbol = "S", label = "Search", expanded = expanded, selected = selected == "search", onClick = onSearch)
+        SideNavigationItem(icon = Icons.Filled.Bookmark, label = "Watchlist", expanded = expanded, selected = selected == "watchlist", onRight = onExit, onClick = onWatchlist)
+        SideNavigationItem(icon = Icons.Filled.Search, label = "Search", expanded = expanded, selected = selected == "search", onRight = onExit, onClick = onSearch)
     }
 }
 
 @Composable
-fun SideNavigationItem(symbol: String, label: String, expanded: Boolean, selected: Boolean, onClick: () -> Unit) {
+fun SideNavigationItem(icon: ImageVector, label: String, expanded: Boolean, selected: Boolean, focusRequester: FocusRequester? = null, onRight: (() -> Boolean)? = null, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val background = when {
-        focused -> Accent
-        selected -> AccentDim
+        focused && selected -> Accent.copy(alpha = .94f)
+        focused -> Color.White.copy(alpha = .16f)
+        selected -> Accent.copy(alpha = .30f)
         else -> Color.Transparent
     }
-    val contentColor = if (focused || selected) Color.Black else TextColor
+    val contentColor = if (focused && selected) Color.Black else TextColor
     Row(
         Modifier
             .fillMaxWidth()
             .height(44.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(background)
-            .border(1.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(10.dp))
+            .border(1.dp, if (focused) Color.White.copy(alpha = .78f) else if (selected) Accent.copy(alpha = .48f) else Color.Transparent, RoundedCornerShape(10.dp))
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .onFocusChanged { focused = it.isFocused }
             .focusable()
+            .onKeyEvent {
+                if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionRight && onRight != null) {
+                    onRight()
+                } else {
+                    false
+                }
+            }
             .tvActivate(onClick)
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(symbol, color = contentColor, fontSize = 15.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(28.dp), textAlign = TextAlign.Center)
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = contentColor,
+            modifier = Modifier.size(24.dp).width(28.dp),
+        )
         if (expanded) {
             Text(label, color = contentColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
@@ -201,7 +244,7 @@ fun PageTopActions(session: Session?, showUpdate: Boolean, onUpdates: () -> Unit
     Row(
         Modifier
             .fillMaxWidth()
-            .background(SurfaceColor)
+            .background(Color.Black.copy(alpha = .46f))
             .padding(horizontal = 26.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -217,7 +260,7 @@ fun TopBar(session: Session?, libraries: List<Library>, selected: String, showUp
     Row(
         Modifier
             .fillMaxWidth()
-            .background(SurfaceColor)
+            .background(Color.Black.copy(alpha = .46f))
             .padding(horizontal = 28.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -381,7 +424,25 @@ fun LibraryPageView(
     onShowMenu: (ShowSummary, FocusRequester?) -> Unit,
 ) {
     var restoreGridFocus by remember(activeLibrary.id, pageIndex, selectedGenre) { mutableStateOf<FocusRequester?>(null) }
+    var focusedBackdrop by remember(activeLibrary.id) { mutableStateOf<BrowseBackdropPreview?>(null) }
+    var suppressSideNavigationExpansion by remember { mutableStateOf(false) }
+    val navFocusRequester = remember { FocusRequester() }
+    val filterFocusRequester = remember { FocusRequester() }
+    val alphabetFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(suppressSideNavigationExpansion) {
+        if (suppressSideNavigationExpansion) {
+            delay(900)
+            suppressSideNavigationExpansion = false
+        }
+    }
+    LaunchedEffect(loading, suppressSideNavigationExpansion, alphabet.size, selectedSort) {
+        if (suppressSideNavigationExpansion && !loading && selectedSort.isBlank() && alphabet.isNotEmpty()) {
+            delay(120)
+            runCatching { alphabetFocusRequester.requestFocus() }
+        }
+    }
     Box(Modifier.fillMaxSize().background(Bg)) {
+        BrowseBackdropLayer(session, focusedBackdrop)
         AppChrome(
             session,
             libraries,
@@ -394,6 +455,17 @@ fun LibraryPageView(
             onUpdates = onUpdates,
             onScan = onScan,
             onLogout = onLogout,
+            navFocusRequester = navFocusRequester,
+            onSideNavigationExit = {
+                val target = restoreGridFocus
+                if (target != null) {
+                    target.requestFocus()
+                    true
+                } else {
+                    false
+                }
+            },
+            suppressSideNavigationExpansion = suppressSideNavigationExpansion,
             topBar = {
                 LibraryFilterBar(
                     session = session,
@@ -405,6 +477,7 @@ fun LibraryPageView(
                     selectedMinRating = selectedMinRating,
                     selectedSeenStatus = selectedSeenStatus,
                     genres = genres,
+                    firstFocusRequester = filterFocusRequester,
                     onSort = onSort,
                     onGenre = onGenre,
                     onMinRating = onMinRating,
@@ -430,8 +503,21 @@ fun LibraryPageView(
                         initialFocusKey = initialFocusKey,
                         alphabetTitle = { it.title },
                         alphabetEntries = alphabet.takeIf { selectedSort.isBlank() } ?: emptyList(),
-                        onAlphabet = onAlphabet,
-                    ) { show, autoFocus, column, focusRequester ->
+                        onAlphabet = { entry ->
+                            suppressSideNavigationExpansion = true
+                            onAlphabet(entry)
+                        },
+                        alphabetFocusRequester = alphabetFocusRequester,
+                        restoreFocus = {
+                            val target = restoreGridFocus
+                            if (target != null) {
+                                target.requestFocus()
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                    ) { show, autoFocus, column, firstRow, rightEdge, focusRequester ->
                         ShowCard(
                             session = session,
                             show = show,
@@ -439,7 +525,25 @@ fun LibraryPageView(
                             watchlisted = watchlistShows.contains("${show.libraryId}\n${show.title.lowercase()}"),
                             autoFocus = autoFocus,
                             focusRequester = focusRequester,
-                            onFocus = { restoreGridFocus = focusRequester },
+                            onFocus = {
+                                restoreGridFocus = focusRequester
+                                focusedBackdrop = show.backdropPreview()
+                            },
+                            onLeftEdge = if (column == 0) {
+                                { navFocusRequester.requestFocus(); true }
+                            } else {
+                                null
+                            },
+                            onRightEdge = if (rightEdge && selectedSort.isBlank() && alphabet.isNotEmpty()) {
+                                { alphabetFocusRequester.requestFocus(); true }
+                            } else {
+                                null
+                            },
+                            onUp = if (firstRow) {
+                                { filterFocusRequester.requestFocus(); true }
+                            } else {
+                                null
+                            },
                             onClick = { onShow(show) },
                             onLongClick = { requester -> onShowMenu(show, requester) },
                         )
@@ -451,8 +555,21 @@ fun LibraryPageView(
                         initialFocusKey = initialFocusKey,
                         alphabetTitle = { it.title },
                         alphabetEntries = alphabet.takeIf { selectedSort.isBlank() } ?: emptyList(),
-                        onAlphabet = onAlphabet,
-                    ) { item, autoFocus, column, focusRequester ->
+                        onAlphabet = { entry ->
+                            suppressSideNavigationExpansion = true
+                            onAlphabet(entry)
+                        },
+                        alphabetFocusRequester = alphabetFocusRequester,
+                        restoreFocus = {
+                            val target = restoreGridFocus
+                            if (target != null) {
+                                target.requestFocus()
+                                true
+                            } else {
+                                false
+                            }
+                        },
+                    ) { item, autoFocus, column, firstRow, rightEdge, focusRequester ->
                         ItemCard(
                             session = session,
                             item = item,
@@ -460,7 +577,25 @@ fun LibraryPageView(
                             watchlisted = watchlistItems.contains(item.id),
                             autoFocus = autoFocus,
                             focusRequester = focusRequester,
-                            onFocus = { restoreGridFocus = focusRequester },
+                            onFocus = {
+                                restoreGridFocus = focusRequester
+                                focusedBackdrop = item.backdropPreview()
+                            },
+                            onLeftEdge = if (column == 0) {
+                                { navFocusRequester.requestFocus(); true }
+                            } else {
+                                null
+                            },
+                            onRightEdge = if (rightEdge && selectedSort.isBlank() && alphabet.isNotEmpty()) {
+                                { alphabetFocusRequester.requestFocus(); true }
+                            } else {
+                                null
+                            },
+                            onUp = if (firstRow) {
+                                { filterFocusRequester.requestFocus(); true }
+                            } else {
+                                null
+                            },
                             onClick = { onItem(item) },
                             onLongClick = { requester -> onItemMenu(item, requester) },
                         )
@@ -473,6 +608,62 @@ fun LibraryPageView(
 
 fun showFocusKey(show: ShowSummary): String = "${show.libraryId}\n${show.title.lowercase()}"
 
+private data class BrowseBackdropPreview(val itemId: Long, val type: String, val version: Long)
+
+private fun PopItem.backdropPreview(): BrowseBackdropPreview? = when {
+    backdropPath.isNotBlank() -> BrowseBackdropPreview(id, "backdrop", backdropMtimeUnix)
+    posterPath.isNotBlank() -> BrowseBackdropPreview(id, "poster", posterMtimeUnix)
+    else -> null
+}
+
+private fun ShowSummary.backdropPreview(): BrowseBackdropPreview? = when {
+    backdropItemId > 0 -> BrowseBackdropPreview(backdropItemId, "backdrop", backdropMtimeUnix)
+    posterItemId > 0 -> BrowseBackdropPreview(posterItemId, "poster", posterMtimeUnix)
+    else -> null
+}
+
+@Composable
+private fun BrowseBackdropLayer(session: Session?, preview: BrowseBackdropPreview?) {
+    if (session != null && preview != null) {
+        SizedAsyncImage(
+            model = imageUrl(session, preview.itemId, preview.type, preview.version),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
+            widthPx = if (preview.type == "backdrop") 1920 else 900,
+            heightPx = if (preview.type == "backdrop") 1080 else 900,
+            authToken = session.token,
+        )
+    }
+    Box(
+        Modifier.fillMaxSize().background(
+            Brush.verticalGradient(
+                colors = listOf(
+                    Bg.copy(alpha = .26f),
+                    Bg.copy(alpha = .68f),
+                    Bg.copy(alpha = .96f),
+                    Bg,
+                ),
+                startY = 0f,
+                endY = 780f,
+            ),
+        ),
+    )
+    Box(
+        Modifier.fillMaxSize().background(
+            Brush.horizontalGradient(
+                colors = listOf(
+                    Bg.copy(alpha = .36f),
+                    Bg.copy(alpha = .76f),
+                    Bg.copy(alpha = .94f),
+                ),
+                startX = 0f,
+                endX = 900f,
+            ),
+        ),
+    )
+}
+
 @Composable
 fun LibraryFilterBar(
     session: Session?,
@@ -484,6 +675,7 @@ fun LibraryFilterBar(
     selectedMinRating: Double,
     selectedSeenStatus: String,
     genres: List<String>,
+    firstFocusRequester: FocusRequester? = null,
     onSort: (String) -> Unit,
     onGenre: (String) -> Unit,
     onMinRating: (Double) -> Unit,
@@ -504,7 +696,7 @@ fun LibraryFilterBar(
     Box(
         Modifier
             .fillMaxWidth()
-            .background(SurfaceColor)
+            .background(Color.Black.copy(alpha = .46f))
             .padding(horizontal = 26.dp, vertical = 10.dp),
     ) {
         Row(
@@ -515,7 +707,7 @@ fun LibraryFilterBar(
             Text(activeLibrary.name, color = TextColor, fontSize = 22.sp, fontWeight = FontWeight.Black)
             Text(countLabel, color = Muted, fontSize = 12.sp)
             Spacer(Modifier.width(10.dp))
-            Pill(text = "Sort: ${sortLabel(selectedSort)}", selected = openDropdown == LibraryDropdown.Sort || selectedSort.isNotBlank(), onClick = { openDropdown = LibraryDropdown.Sort })
+            Pill(text = "Sort: ${sortLabel(selectedSort)}", selected = openDropdown == LibraryDropdown.Sort || selectedSort.isNotBlank(), modifier = if (firstFocusRequester != null) Modifier.focusRequester(firstFocusRequester) else Modifier, onClick = { openDropdown = LibraryDropdown.Sort })
             Pill(text = seenLabel(selectedSeenStatus), selected = openDropdown == LibraryDropdown.Seen || selectedSeenStatus.isNotBlank(), onClick = { openDropdown = LibraryDropdown.Seen })
             Pill(text = ratingLabel(selectedMinRating), selected = openDropdown == LibraryDropdown.Rating || selectedMinRating > 0.0, onClick = { openDropdown = LibraryDropdown.Rating })
             Pill(text = genreLabel, selected = openDropdown == LibraryDropdown.Genre || selectedGenres.isNotEmpty(), onClick = { openDropdown = LibraryDropdown.Genre })
@@ -625,8 +817,8 @@ private fun FilterPopup(title: String, options: List<FilterOption>, checkboxes: 
                 .padding(top = 58.dp, end = 24.dp)
                 .width(340.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(SurfaceColor)
-                .border(1.dp, Line, RoundedCornerShape(10.dp))
+                .background(Color.Black.copy(alpha = .72f))
+                .border(1.dp, Color.White.copy(alpha = .16f), RoundedCornerShape(10.dp))
                 .onKeyEvent {
                     if (it.type == KeyEventType.KeyUp && (it.key == Key.Back || it.key == Key.DirectionLeft || it.key == Key.DirectionRight)) {
                         onClose()
@@ -1030,7 +1222,7 @@ fun GenreBrowserView(
         Row(
             Modifier
                 .fillMaxWidth()
-                .background(SurfaceColor)
+                .background(Color.Black.copy(alpha = .46f))
                 .padding(horizontal = 28.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1054,7 +1246,7 @@ fun GenreBrowserView(
 
         Row(Modifier.fillMaxSize()) {
             LazyColumn(
-                modifier = Modifier.width(220.dp).fillMaxSize().background(SurfaceColor.copy(alpha = .55f)),
+                modifier = Modifier.width(220.dp).fillMaxSize().background(Color.Black.copy(alpha = .38f)),
                 contentPadding = PaddingValues(start = 18.dp, end = 12.dp, top = 18.dp, bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
@@ -1079,13 +1271,13 @@ fun GenreBrowserView(
                 if (activeLibrary?.type == "tv") {
                     val filtered = showGenrePairs.filter { (_, genres) -> genres.any { it.equals(selectedGenre, ignoreCase = true) } }.map { it.first }
                     BrowserHeader(selectedGenre, "${filtered.size} shows")
-                    PosterGrid(entries = filtered, key = { it.title }) { show, _, _, _ ->
+                    PosterGrid(entries = filtered, key = { it.title }) { show, _, _, _, _, _ ->
                         ShowCard(session, show, autoFocus = false, onClick = { onShow(show) })
                     }
                 } else {
                     val filtered = itemGenrePairs.filter { (_, genres) -> genres.any { it.equals(selectedGenre, ignoreCase = true) } }.map { it.first }
                     BrowserHeader(selectedGenre, "${filtered.size} movies")
-                    PosterGrid(entries = filtered, key = { it.id }) { item, _, _, _ ->
+                    PosterGrid(entries = filtered, key = { it.id }) { item, _, _, _, _, _ ->
                         ItemCard(session, item, autoFocus = false, onClick = { onItem(item) })
                     }
                 }

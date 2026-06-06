@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: scripts/upload-app-update tv|companion APK [release notes]
+
+Uploads an APK through Popcorn's admin API, which records the update in the
+database and syncs the server TOML config. Clients will see it via their normal
+/api/app/<app>/update check.
+
+Environment:
+  POPCORN_UPLOAD_SERVER       Popcorn server URL, e.g. https://popcorn.example
+  POPCORN_UPLOAD_USER         admin username
+  POPCORN_UPLOAD_PASSWORD     admin password
+  POPCORN_UPLOAD_VERSION_CODE optional positive integer override
+  POPCORN_UPLOAD_VERSION_NAME optional version name override
+  POPCORN_UPDATE_NOTES        release notes if not passed as an argument
+EOF
+}
+
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+  usage
+  exit 2
+fi
+
+app="$1"
+apk="$2"
+notes="${3:-${POPCORN_UPDATE_NOTES:-}}"
+
+case "$app" in
+  tv|companion) ;;
+  *)
+    echo "app must be 'tv' or 'companion'" >&2
+    exit 2
+    ;;
+esac
+
+if [[ ! -f "$apk" ]]; then
+  echo "APK not found: $apk" >&2
+  exit 2
+fi
+
+for cmd in curl jq; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "required command not found: $cmd" >&2
+    exit 2
+  fi
+done
+
+server="${POPCORN_UPLOAD_SERVER:-${POPCORN_SERVER:-}}"
+username="${POPCORN_UPLOAD_USER:-${POPCORN_USER:-}}"
+password="${POPCORN_UPLOAD_PASSWORD:-${POPCORN_PASSWORD:-}}"
+
+if [[ -z "$server" ]]; then
+  read -r -p "Popcorn server [http://localhost:8097]: " server
+  server="${server:-http://localhost:8097}"
+fi
+if [[ -z "$username" ]]; then
+  read -r -p "Popcorn admin username: " username
+fi
+if [[ -z "$password" ]]; then
+  read -r -s -p "Popcorn admin password: " password
+  echo
+fi
+
+server="${server%/}"
+login_body="$(jq -n --arg username "$username" --arg password "$password" '{username:$username,password:$password}')"
+login_response="$(
+  curl -fsS \
+    -H "Content-Type: application/json" \
+    -d "$login_body" \
+    "$server/api/auth/login"
+)"
+token="$(printf '%s' "$login_response" | jq -r '.token // empty')"
+if [[ -z "$token" ]]; then
+  echo "login returned no token" >&2
+  printf '%s\n' "$login_response" >&2
+  exit 1
+fi
+
+curl_args=(
+  -fsS
+  -H "Authorization: Bearer $token"
+  -F "apk=@$apk"
+  -F "notes=$notes"
+)
+if [[ -n "${POPCORN_UPLOAD_VERSION_CODE:-}" ]]; then
+  curl_args+=(-F "versionCode=$POPCORN_UPLOAD_VERSION_CODE")
+fi
+if [[ -n "${POPCORN_UPLOAD_VERSION_NAME:-}" ]]; then
+  curl_args+=(-F "versionName=$POPCORN_UPLOAD_VERSION_NAME")
+fi
+
+response="$(curl "${curl_args[@]}" "$server/api/app/$app/upload")"
+printf '%s\n' "$response" | jq .
+
+version_code="$(printf '%s' "$response" | jq -r '.versionCode // empty')"
+version_name="$(printf '%s' "$response" | jq -r '.versionName // empty')"
+if [[ -n "$version_code" && -n "$version_name" ]]; then
+  echo
+  echo "Published $app update $version_name ($version_code)."
+  echo "Clients will see it on their next update check."
+fi

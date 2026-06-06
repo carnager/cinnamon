@@ -121,7 +121,7 @@ fun SearchView(
                             is SearchResult.Movie -> "movie:${it.item.id}"
                         }
                     },
-                ) { result, _, _, focusRequester ->
+                ) { result, _, _, _, _, focusRequester ->
                     when (result) {
                         is SearchResult.Show -> ShowCard(
                             session,

@@ -8,6 +8,7 @@ commit="$(cd "$repo_root" && git rev-parse --short HEAD 2>/dev/null || true)"
 build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 android_version_code="${POPCORN_ANDROID_VERSION_CODE:-$(($(date -u +%s) / 60))}"
 android_version_name="${POPCORN_ANDROID_VERSION_NAME:-$version}"
+release_upload="${POPCORN_RELEASE_UPLOAD:-}"
 
 if [[ -z "${JAVA_HOME:-}" && -d /usr/lib/jvm/java-21-openjdk ]]; then
   export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
@@ -43,10 +44,45 @@ echo "==> wrote:"
 find "$out_dir" -maxdepth 1 -type f -printf '  %f\n' | sort
 
 echo
-echo "==> upload these APKs in the web admin App Updates screen:"
-echo "  Android TV:       $out_dir/popcorn-tv-$version.apk"
-echo "  Phone Companion:  $out_dir/popcorn-companion-$version.apk"
-echo
 echo "==> APK version metadata:"
 echo "  versionCode:      $android_version_code"
 echo "  versionName:      $android_version_name"
+
+if [[ -z "$release_upload" && -n "${POPCORN_UPLOAD_SERVER:-}" ]]; then
+  release_upload=1
+fi
+
+case "${release_upload,,}" in
+  1|true|yes)
+    upload_updates=1
+    ;;
+  ""|0|false|no)
+    upload_updates=0
+    ;;
+  *)
+    echo "POPCORN_RELEASE_UPLOAD must be 1/true/yes or 0/false/no" >&2
+    exit 2
+    ;;
+esac
+
+if [[ "$upload_updates" == 1 ]]; then
+  echo
+  echo "==> upload Android TV update"
+  POPCORN_UPLOAD_VERSION_CODE="$android_version_code" \
+    POPCORN_UPLOAD_VERSION_NAME="$android_version_name" \
+    POPCORN_UPDATE_NOTES="${POPCORN_TV_RELEASE_NOTES:-${POPCORN_RELEASE_NOTES:-}}" \
+    "$repo_root/scripts/upload-app-update" tv "$out_dir/popcorn-tv-$version.apk"
+
+  echo
+  echo "==> upload Phone Companion update"
+  POPCORN_UPLOAD_VERSION_CODE="$android_version_code" \
+    POPCORN_UPLOAD_VERSION_NAME="$android_version_name" \
+    POPCORN_UPDATE_NOTES="${POPCORN_COMPANION_RELEASE_NOTES:-${POPCORN_RELEASE_NOTES:-}}" \
+    "$repo_root/scripts/upload-app-update" companion "$out_dir/popcorn-companion-$version.apk"
+else
+  echo
+  echo "==> upload these APKs in the web admin App Updates screen,"
+  echo "==> or publish them with scripts/upload-app-update:"
+  echo "  Android TV:       $out_dir/popcorn-tv-$version.apk"
+  echo "  Phone Companion:  $out_dir/popcorn-companion-$version.apk"
+fi

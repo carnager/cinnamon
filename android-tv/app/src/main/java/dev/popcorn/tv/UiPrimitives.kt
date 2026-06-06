@@ -109,21 +109,21 @@ fun SizedAsyncImage(
 }
 
 @Composable
-fun Pill(text: String, selected: Boolean, badge: String? = null, onClick: () -> Unit) {
+fun Pill(text: String, selected: Boolean, badge: String? = null, modifier: Modifier = Modifier, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val background = when {
-        selected && focused -> Accent
-        selected -> AccentDim
-        focused -> Surface3
-        else -> Color.Transparent
+        selected && focused -> Accent.copy(alpha = .94f)
+        selected -> Accent.copy(alpha = .30f)
+        focused -> Color.White.copy(alpha = .16f)
+        else -> Color.White.copy(alpha = .075f)
     }
     val border = when {
-        focused -> FocusGlow
-        selected -> Accent.copy(alpha = .5f)
-        else -> Line.copy(alpha = .6f)
+        focused -> Color.White.copy(alpha = .78f)
+        selected -> Accent.copy(alpha = .52f)
+        else -> Color.White.copy(alpha = .14f)
     }
     Row(
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(999.dp))
             .background(background)
             .border(1.dp, border, RoundedCornerShape(999.dp))
@@ -134,9 +134,9 @@ fun Pill(text: String, selected: Boolean, badge: String? = null, onClick: () -> 
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(text, color = if (selected) Color.Black else TextColor, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        Text(text, color = if (selected && focused) Color.Black else TextColor, fontWeight = FontWeight.Bold, fontSize = 13.sp)
         if (badge != null) {
-            Text(badge, color = if (selected) Color.Black.copy(alpha = .6f) else Muted, fontSize = 10.sp)
+            Text(badge, color = if (selected && focused) Color.Black.copy(alpha = .6f) else Muted, fontSize = 10.sp)
         }
     }
 }

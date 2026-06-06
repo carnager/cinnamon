@@ -64,6 +64,7 @@ fun DetailView(
     watched: Boolean,
     watchlisted: Boolean,
     onPlay: (Int?, Int?, Long) -> Unit,
+    onTrailer: (Boolean) -> Unit,
     onWatchedChange: (Boolean) -> Unit,
     onWatchlistChange: (Boolean) -> Unit,
     onBack: () -> Unit,
@@ -78,6 +79,7 @@ fun DetailView(
     var selectedSubtitle by remember(item.id) { mutableStateOf<Int?>(null) }
     var streamsLoaded by remember(item.id) { mutableStateOf(false) }
     var externalRatings by remember(item.id) { mutableStateOf<ExternalRatings?>(null) }
+    var sidecars by remember(item.id) { mutableStateOf(SidecarStatus()) }
     var audioMenuOpen by remember { mutableStateOf(false) }
     var subtitleMenuOpen by remember { mutableStateOf(false) }
     var fullTextOpen by remember { mutableStateOf(false) }
@@ -117,6 +119,13 @@ fun DetailView(
         externalRatings = null
         runCatching { Api(active).ratings(item.id) }
             .onSuccess { externalRatings = it }
+    }
+
+    LaunchedEffect(item.id) {
+        val active = session ?: return@LaunchedEffect
+        sidecars = SidecarStatus()
+        runCatching { Api(active).itemSidecars(item.id) }
+            .onSuccess { sidecars = it }
     }
 
     LaunchedEffect(item.id) {
@@ -224,6 +233,7 @@ fun DetailView(
                         onPlay(selectedAudio, selectedSubtitle, 0L)
                     }
                 },
+                onTrailer = { onTrailer(sidecars.trailer) },
                 onWatchedChange = { onWatchedChange(!watched) },
                 onWatchlistChange = { onWatchlistChange(!watchlisted) },
             )
@@ -317,6 +327,7 @@ private fun DetailHeroContent(
     onSubtitle: () -> Unit,
     onFullText: () -> Unit,
     onPlay: () -> Unit,
+    onTrailer: () -> Unit,
     onWatchedChange: () -> Unit,
     onWatchlistChange: () -> Unit,
 ) {
@@ -432,6 +443,13 @@ private fun DetailHeroContent(
                     onUp = { requestDetailFocus(descriptionFocus) },
                     onDown = { requestDetailFocus(castFocus) },
                     onClick = onPlay,
+                )
+                ActionToggle(
+                    label = "Trailer",
+                    active = false,
+                    onUp = { requestDetailFocus(descriptionFocus) },
+                    onDown = { requestDetailFocus(castFocus) },
+                    onClick = onTrailer,
                 )
                 ActionToggle(
                     label = if (watched) "Seen" else "Mark seen",

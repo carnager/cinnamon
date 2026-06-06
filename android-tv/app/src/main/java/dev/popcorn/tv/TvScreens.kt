@@ -35,10 +35,16 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import kotlinx.coroutines.delay
 
 @Composable
@@ -65,6 +71,14 @@ fun ShowView(
     var focusedSeason by remember(show.libraryId, show.title) { mutableStateOf<SeasonSummary?>(null) }
     var focusedEpisode by remember(show.libraryId, show.title) { mutableStateOf<PopItem?>(null) }
     var showingEpisodes by remember(show.libraryId, show.title) { mutableStateOf(startWithEpisodes) }
+    var themeAvailable by remember(show.libraryId, show.title) { mutableStateOf(false) }
+
+    LaunchedEffect(show.libraryId, show.title, session) {
+        val active = session ?: return@LaunchedEffect
+        themeAvailable = false
+        runCatching { Api(active).showTheme(show.libraryId, show.title) }
+            .onSuccess { themeAvailable = it.theme }
+    }
 
     LaunchedEffect(show.libraryId, show.title, refreshToken) {
         val active = session ?: return@LaunchedEffect
@@ -105,6 +119,10 @@ fun ShowView(
     BackHandler(enabled = showingEpisodes && !startWithEpisodes) {
         showingEpisodes = false
         focusedEpisode = null
+    }
+
+    if (themeAvailable) {
+        ThemeMusicPlayer(session = session, show = show)
     }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
@@ -660,3 +678,32 @@ private fun seasonTitle(season: SeasonSummary): String {
 }
 
 fun seasonFocusKey(season: SeasonSummary): String = "${season.libraryId}:${season.showTitle}:${season.seasonNumber}"
+
+@Composable
+private fun ThemeMusicPlayer(session: Session?, show: ShowSummary) {
+    val context = LocalContext.current
+    val url = remember(session?.server, show.libraryId, show.title) {
+        themeUrl(session, show.libraryId, show.title)
+    }
+    val player = remember(url, session?.token) {
+        val httpFactory = DefaultHttpDataSource.Factory().apply {
+            val token = session?.token.orEmpty()
+            if (token.isNotBlank()) {
+                setDefaultRequestProperties(mapOf("Authorization" to "Bearer $token"))
+            }
+        }
+        ExoPlayer.Builder(context)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
+            .build()
+            .apply {
+                setMediaItem(MediaItem.fromUri(url))
+                repeatMode = Player.REPEAT_MODE_ONE
+                volume = 0.28f
+                prepare()
+                playWhenReady = true
+            }
+    }
+    androidx.compose.runtime.DisposableEffect(player) {
+        onDispose { player.release() }
+    }
+}

@@ -134,6 +134,8 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/items/{id}/hls/{session}/{segment}", a.hlsSegment)
 	mux.HandleFunc("DELETE /api/hls/{session}", a.hlsStop)
 	mux.HandleFunc("GET /api/items/{id}/image/{kind}", a.image)
+	mux.Handle("GET /web", noCache(popcornWebFiles("/web")))
+	mux.Handle("GET /web/", noCache(popcornWebFiles("/web")))
 	mux.Handle("GET /popcorn", noCache(popcornWebFiles("/popcorn")))
 	mux.Handle("GET /popcorn/", noCache(popcornWebFiles("/popcorn")))
 	mux.Handle("/", noCache(popcornWebFiles("")))
@@ -521,10 +523,6 @@ func noCache(next http.Handler) http.Handler {
 func popcornWebFiles(mount string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
-			http.NotFound(w, r)
-			return
-		}
-		if r.URL.Path == "/web" || strings.HasPrefix(r.URL.Path, "/web/") {
 			http.NotFound(w, r)
 			return
 		}

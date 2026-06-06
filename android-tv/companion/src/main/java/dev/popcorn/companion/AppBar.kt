@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.DropdownMenu
@@ -45,6 +46,8 @@ fun CompanionTopAppBar(
     onSelectPhone: () -> Unit,
     onSelectDevice: (Device) -> Unit,
     onScan: () -> Unit,
+    showUpdate: Boolean,
+    onUpdate: () -> Unit,
     onLogout: () -> Unit,
     onRefreshDevices: () -> Unit,
 ) {
@@ -118,6 +121,11 @@ fun CompanionTopAppBar(
             }
         },
         actions = {
+            if (showUpdate) {
+                IconButton(onClick = onUpdate) {
+                    Icon(Icons.Default.SystemUpdate, contentDescription = "Update app")
+                }
+            }
             IconButton(onClick = onScan) {
                 Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan QR")
             }

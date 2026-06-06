@@ -13,21 +13,26 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-val Bg = Color(0xFF08090C)
-val SurfaceColor = Color(0xFF111319)
-val Surface2 = Color(0xFF181C26)
-val Surface3 = Color(0xFF1E2331)
-val Line = Color(0xFF283043)
-val TextColor = Color(0xFFE8ECF2)
-val Muted = Color(0xFF8B93A5)
-val Accent = Color(0xFF4FD1A5)
-val AccentDim = Color(0xFF2A8B6E)
-val Gold = Color(0xFFF0C040)
-val ErrorRed = Color(0xFFFF8B8B)
-val FocusGlow = Color(0xFF4FD1A5)
-val CardShape = RoundedCornerShape(8.dp)
+// ── Plex-inspired palette ──
+val Bg = Color(0xFF0D0D0F)
+val SurfaceColor = Color(0xFF18181C)
+val Surface2 = Color(0xFF222228)
+val Surface3 = Color(0xFF2C2C34)
+val Line = Color(0xFF38384A)
+val TextColor = Color(0xFFF0F0F2)
+val Muted = Color(0xFF88889A)
+val Accent = Color(0xFFE5A00D)
+val AccentDim = Color(0xFFB8800A)
+val Gold = Color(0xFFE5A00D)
+val ErrorRed = Color(0xFFFF6B6B)
+val FocusGlow = Color(0xFFFFFFFF)
+val CardShape = RoundedCornerShape(6.dp)
+val TvPageMaxWidth = 1200.dp
+val TvDetailMaxWidth = 880.dp
 
 object PlayerOsdBridge {
     var handler: ((AndroidKeyEvent) -> Boolean)? = null
@@ -54,6 +59,12 @@ fun fmtDuration(ms: Long): String {
     val h = total / 3600
     val m = (total % 3600) / 60
     return if (h > 0) "${h}h ${m}m" else "${m}m"
+}
+
+fun fmtEndsAround(ms: Long): String {
+    if (ms <= 0) return ""
+    val endTime = LocalTime.now().plusSeconds(ms / 1000)
+    return "Ends around ${endTime.format(DateTimeFormatter.ofPattern("HH:mm"))}"
 }
 
 fun fmtClock(ms: Long): String {

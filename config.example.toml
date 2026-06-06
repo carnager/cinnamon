@@ -13,8 +13,22 @@ omdbApiKey = ""
 scanOnStart = true
 autoScan = true
 autoScanDebounce = "3s"
-autoScanInterval = "15m"
+autoScanInterval = "6h"
+autoScanWatchDepth = 0
 scanTimeout = "30m"
+
+# Optional static Android self-update support for deployments where the server
+# can read APK files from local paths. For normal use, upload release APKs from
+# the web admin App Updates screen instead.
+# [appUpdate]
+# tvApkPath = "/opt/popcorn/popcorn-tv-latest.apk"
+# tvVersionCode = 26060305
+# tvVersionName = "0.2.0"
+# tvReleaseNotes = "Popcorn 0.2.0"
+# companionApkPath = "/opt/popcorn/popcorn-companion-latest.apk"
+# companionVersionCode = 26060305
+# companionVersionName = "0.2.0"
+# companionReleaseNotes = "Popcorn 0.2.0"
 
 [[libraries]]
 id = "movies"

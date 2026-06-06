@@ -102,9 +102,12 @@ type traktMovieSource struct {
 	SyncWatched      int
 	UserWatched      int
 	History          int
+	AllHistory       int
+	AllHistoryMovies int
 	SyncWatchedDebug traktPageDebug
 	UserWatchedDebug traktPageDebug
 	HistoryDebug     traktPageDebug
+	AllHistoryDebug  traktPageDebug
 }
 
 type traktShowSource struct {
@@ -131,14 +134,23 @@ func (a *App) traktWatchedMovies(ctx context.Context, bearer string) (traktMovie
 	if err != nil {
 		return traktMovieSource{}, err
 	}
+	var allHistory []traktHistoryItem
+	allHistoryDebug, err := a.traktPaged(ctx, bearer, "/sync/history", &allHistory)
+	if err != nil {
+		return traktMovieSource{}, err
+	}
+	allHistoryMovies := traktMoviesFromHistory(allHistory)
 	return traktMovieSource{
-		Items:            mergeTraktMovies(syncWatched, userWatched, history),
+		Items:            mergeTraktMovies(syncWatched, userWatched, history, allHistoryMovies),
 		SyncWatched:      len(syncWatched),
 		UserWatched:      len(userWatched),
 		History:          len(uniqueTraktMovies(history)),
+		AllHistory:       len(allHistory),
+		AllHistoryMovies: len(uniqueTraktMovies(allHistoryMovies)),
 		SyncWatchedDebug: syncDebug,
 		UserWatchedDebug: userDebug,
 		HistoryDebug:     historyDebug,
+		AllHistoryDebug:  allHistoryDebug,
 	}, nil
 }
 

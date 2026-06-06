@@ -36,6 +36,8 @@ data class Session(val server: String, val token: String, val username: String =
 data class User(val id: Long, val username: String, val displayName: String)
 data class Library(val id: String, val name: String, val type: String)
 
+data class AlphabetEntry(val letter: String, val offset: Int, val count: Int)
+
 data class ShowSummary(
     val libraryId: String,
     val title: String,
@@ -81,37 +83,94 @@ data class ExternalRatings(
     val metacriticRating: Int,
 )
 
+data class Actor(
+    val name: String,
+    val role: String,
+    val thumb: String,
+)
+
+data class ActorInfo(
+    val name: String,
+    val tmdbId: String,
+    val imdbId: String,
+    val biography: String,
+    val birthday: String,
+    val deathday: String,
+    val placeOfBirth: String,
+    val knownForDepartment: String,
+    val profilePath: String,
+    val source: String,
+)
+
+data class ActorDetail(
+    val actor: Actor,
+    val info: ActorInfo,
+    val profileUrl: String,
+    val movies: List<PopItem>,
+    val shows: List<ShowSummary>,
+)
+
 data class PopItem(
     val id: Long,
     val libraryId: String,
     val kind: String,
     val title: String,
+    val originalTitle: String,
     val year: Int,
     val durationMs: Long,
+    val videoCodec: String,
+    val audioCodec: String,
+    val imdbId: String,
+    val tmdbId: String,
+    val tvdbId: String,
+    val width: Int,
+    val height: Int,
     val posterPath: String,
     val posterMtimeUnix: Long,
     val backdropPath: String,
     val backdropMtimeUnix: Long,
     val overview: String,
+    val tagline: String,
+    val officialRating: String,
     val genres: String,
+    val tags: String,
+    val studios: String,
+    val directors: String,
+    val writers: String,
+    val countries: String,
+    val premiered: String,
     val rating: Double,
     val showTitle: String,
     val seasonNumber: Int,
     val episodeNumber: Int,
     val episodeTitle: String,
+    val actors: List<Actor> = emptyList(),
 )
 
 data class CachedList<T>(val entries: List<T>, val fullyLoaded: Boolean)
+data class AppUpdateInfo(
+    val configured: Boolean,
+    val available: Boolean,
+    val versionCode: Int,
+    val versionName: String,
+    val notes: String,
+    val apkUrl: String,
+    val sha256: String,
+    val sizeBytes: Long,
+    val error: String,
+)
 
 sealed interface Screen {
     data object Loading : Screen
     data object Login : Screen
     data object Home : Screen
     data object Watchlist : Screen
+    data object Updates : Screen
     data class LibraryPage(val library: Library) : Screen
     data object Search : Screen
-    data class Show(val show: ShowSummary, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false) : Screen
-    data class Season(val show: ShowSummary, val season: SeasonSummary, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false) : Screen
-    data class Detail(val item: PopItem, val fromShow: ShowSummary?, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false) : Screen
-    data class Player(val item: PopItem, val audioIndex: Int?, val subtitleIndex: Int?) : Screen
+    data class Show(val show: ShowSummary, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null) : Screen
+    data class Season(val show: ShowSummary, val season: SeasonSummary, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null) : Screen
+    data class Detail(val item: PopItem, val fromShow: ShowSummary?, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null) : Screen
+    data class Actor(val actor: dev.popcorn.tv.Actor) : Screen
+    data class Player(val item: PopItem, val audioIndex: Int?, val subtitleIndex: Int?, val startPositionMs: Long = 0L) : Screen
 }

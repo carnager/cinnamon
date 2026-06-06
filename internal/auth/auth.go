@@ -47,6 +47,13 @@ type CreateUserInput struct {
 	IsAdmin     bool
 }
 
+type UpdateUserInput struct {
+	DisplayName *string
+	Password    string
+	IsAdmin     *bool
+	Disabled    *bool
+}
+
 func NewStore(db *sql.DB) *Store {
 	return &Store{db: db}
 }
@@ -117,6 +124,59 @@ func (s *Store) Users(ctx context.Context) ([]User, error) {
 func (s *Store) User(ctx context.Context, id int64) (User, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, username, display_name, is_admin, disabled, created_at FROM users WHERE id = ?`, id)
 	return scanUser(row)
+}
+
+func (s *Store) UpdateUser(ctx context.Context, id int64, in UpdateUserInput) (User, error) {
+	user, err := s.User(ctx, id)
+	if err != nil {
+		return User{}, err
+	}
+	displayName := user.DisplayName
+	isAdmin := user.IsAdmin
+	disabled := user.Disabled
+	if in.DisplayName != nil {
+		displayName = strings.TrimSpace(*in.DisplayName)
+		if displayName == "" {
+			displayName = user.Username
+		}
+	}
+	if in.IsAdmin != nil {
+		isAdmin = *in.IsAdmin
+	}
+	if in.Disabled != nil {
+		disabled = *in.Disabled
+	}
+	if in.Password != "" && len(in.Password) < 6 {
+		return User{}, fmt.Errorf("password must be at least 6 characters")
+	}
+	if in.Password != "" {
+		hash, err := hashPassword(in.Password)
+		if err != nil {
+			return User{}, err
+		}
+		_, err = s.db.ExecContext(ctx, `
+UPDATE users
+SET display_name = ?, password_hash = ?, is_admin = ?, disabled = ?, updated_at = CURRENT_TIMESTAMP
+WHERE id = ?`, displayName, hash, boolInt(isAdmin), boolInt(disabled), id)
+		if err != nil {
+			return User{}, err
+		}
+	} else {
+		_, err = s.db.ExecContext(ctx, `
+UPDATE users
+SET display_name = ?, is_admin = ?, disabled = ?, updated_at = CURRENT_TIMESTAMP
+WHERE id = ?`, displayName, boolInt(isAdmin), boolInt(disabled), id)
+		if err != nil {
+			return User{}, err
+		}
+	}
+	return s.User(ctx, id)
+}
+
+func (s *Store) EnabledAdminCount(ctx context.Context) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE is_admin = 1 AND disabled = 0`).Scan(&count)
+	return count, err
 }
 
 func (s *Store) Authenticate(ctx context.Context, username, password string) (User, error) {

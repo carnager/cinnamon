@@ -4,6 +4,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val popcornAndroidVersionCode = providers.environmentVariable("POPCORN_ANDROID_VERSION_CODE").map(String::toInt).getOrElse(1)
+val popcornAndroidVersionName = providers.environmentVariable("POPCORN_ANDROID_VERSION_NAME").getOrElse("0.1.0")
+
 android {
     namespace = "dev.popcorn.companion"
     compileSdk = 36
@@ -12,8 +15,12 @@ android {
         applicationId = "dev.popcorn.companion"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = popcornAndroidVersionCode
+        versionName = popcornAndroidVersionName
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {
@@ -44,6 +51,7 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.core:core-ktx:1.16.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
     implementation("com.journeyapps:zxing-android-embedded:4.3.0")

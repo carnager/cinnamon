@@ -77,6 +77,8 @@ fun PopcornApp() {
     var shows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
     var homeMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var homeShows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
+    var continueMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
+    var continueEpisodes by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var recentMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var recentShows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
     var completedItems by remember { mutableStateOf<Set<Long>>(emptySet()) }
@@ -85,6 +87,7 @@ fun PopcornApp() {
     var watchlistShows by remember { mutableStateOf<Set<String>>(emptySet()) }
     var watchlistMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var watchlistTvShows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
+    var updateAvailable by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -94,12 +97,26 @@ fun PopcornApp() {
     var pageIndex by remember { mutableStateOf(0) }
     var pageHasNext by remember { mutableStateOf(false) }
     var selectedGenre by remember { mutableStateOf("") }
+    var selectedSort by remember { mutableStateOf("") }
+    var selectedMinRating by remember { mutableStateOf(0.0) }
+    var selectedSeenStatus by remember { mutableStateOf("") }
     var libraryGenres by remember { mutableStateOf<List<String>>(emptyList()) }
+    var libraryAlphabet by remember { mutableStateOf<List<AlphabetEntry>>(emptyList()) }
     var watchMenu by remember { mutableStateOf<WatchMenuState?>(null) }
     var deviceId by remember { mutableStateOf(prefs.getString("remoteDeviceId", "") ?: "") }
+    var preferredBandwidthKbps by remember {
+        val savedBandwidth = prefs.getInt("preferredBandwidthKbps", -1)
+        mutableStateOf(BandwidthOptions.firstOrNull { it.kbps == savedBandwidth }?.kbps)
+    }
     var lastRemoteCommandId by remember { mutableStateOf(prefs.getLong("remoteCommandId", 0L)) }
     var pendingPlayerCommand by remember { mutableStateOf<PlayerRemoteCommand?>(null) }
     var lastDetail by remember { mutableStateOf<Screen.Detail?>(null) }
+    var lastPlayerReturnScreen by remember { mutableStateOf<Screen?>(null) }
+    var lastActorReturnScreen by remember { mutableStateOf<Screen?>(null) }
+    var libraryFocusKey by remember { mutableStateOf<Any?>(null) }
+    var showFocusSeason by remember { mutableStateOf<Int?>(null) }
+    var seasonFocusEpisode by remember { mutableStateOf<Long?>(null) }
+    var visibleContentRefresh by remember { mutableStateOf(0L) }
 
     fun showKey(show: ShowSummary): String = "${show.libraryId}\n${show.title.lowercase()}"
 
@@ -115,6 +132,23 @@ fun PopcornApp() {
         }
     }
 
+    suspend fun loadContinueRows(api: Api): Pair<List<PopItem>, List<PopItem>> {
+        val resumable = api.progressList()
+            .filter { progress ->
+                val duration = progress.durationMs
+                val position = progress.positionMs
+                !progress.completed &&
+                    duration > 0 &&
+                    position >= 30_000 &&
+                    position < (duration - 90_000).coerceAtLeast(30_000)
+            }
+            .take(40)
+        val entries = resumable.mapNotNull { progress ->
+            runCatching { api.item(progress.itemId) }.getOrNull()
+        }
+        return entries.filter { it.kind == "movie" }.take(24) to entries.filter { it.kind == "episode" }.take(24)
+    }
+
     fun refreshWatchlist(activeSession: Session) {
         scope.launch {
             runCatching {
@@ -124,6 +158,12 @@ fun PopcornApp() {
                 watchlistItems = list.items.map { it.id }.toSet()
                 watchlistShows = list.shows.map { showKey(it) }.toSet()
             }
+        }
+    }
+
+    fun refreshUpdateAvailable(activeSession: Session) {
+        scope.launch {
+            updateAvailable = runCatching { Api(activeSession).tvUpdate(BuildConfig.VERSION_CODE).available }.getOrDefault(false)
         }
     }
 
@@ -218,7 +258,7 @@ fun PopcornApp() {
                                 lastDetail = Screen.Detail(item, null, fromHome = true)
                                 val audio = command.payload.optIntOrNull("audioIndex")
                                 val subtitle = command.payload.optIntOrNull("subtitleIndex")
-                                screen = Screen.Player(item, audio, subtitle)
+                                screen = Screen.Player(item, audio, subtitle, 0L)
                             }
                             .onFailure { error = it.message ?: "Remote play failed" }
                     }
@@ -270,20 +310,12 @@ fun PopcornApp() {
         )
     }
 
-    DisposableEffect(session) {
-        val activeSession = session
-        val lifecycle = (context as? ComponentActivity)?.lifecycle
-        if (activeSession == null || lifecycle == null) {
-            onDispose { }
-        } else {
-            val observer = LifecycleEventObserver { _, event ->
-                if (event == Lifecycle.Event.ON_RESUME) {
-                    refreshProgress(activeSession)
-                    refreshWatchlist(activeSession)
-                }
-            }
-            lifecycle.addObserver(observer)
-            onDispose { lifecycle.removeObserver(observer) }
+    fun scanLibraries() {
+        val active = session ?: return
+        scope.launch {
+            runCatching { Api(active).scanLibraries() }
+                .onSuccess { error = "Library scan started" }
+                .onFailure { error = it.message ?: "Scan failed" }
         }
     }
 
@@ -327,6 +359,9 @@ fun PopcornApp() {
                 refreshProgress(activeSession)
                 refreshWatchlist(activeSession)
                 val api = Api(activeSession)
+                val (resumeMovies, resumeEpisodes) = loadContinueRows(api)
+                continueMovies = resumeMovies
+                continueEpisodes = resumeEpisodes
                 if (movieLib != null) {
                     homeMovies = api.itemsPage(movieLib.id, 150, 0)
                     recentMovies = api.recentItems(movieLib.id, 24)
@@ -342,7 +377,7 @@ fun PopcornApp() {
         }
     }
 
-    fun loadLibraryPage(library: Library, activeSession: Session, page: Int = 0, genre: String = selectedGenre) {
+    fun loadLibraryPage(library: Library, activeSession: Session, page: Int = 0, genre: String = selectedGenre, sort: String = selectedSort, minRating: Double = selectedMinRating, seenStatus: String = selectedSeenStatus) {
         loadGeneration += 1
         val generation = loadGeneration
         scope.launch {
@@ -357,7 +392,13 @@ fun PopcornApp() {
             } else {
                 genre
             }
+            val activeSort = if (page == 0 && library.id != previousLibraryID) "" else sort
+            val activeMinRating = if (page == 0 && library.id != previousLibraryID) 0.0 else minRating
+            val activeSeenStatus = if (page == 0 && library.id != previousLibraryID) "" else seenStatus
             selectedGenre = activeGenre
+            selectedSort = activeSort
+            selectedMinRating = activeMinRating
+            selectedSeenStatus = activeSeenStatus
             pageIndex = page.coerceAtLeast(0)
             libraryFullyLoaded = false
             loadingMore = false
@@ -366,17 +407,18 @@ fun PopcornApp() {
                 refreshProgress(activeSession)
                 refreshWatchlist(activeSession)
                 val api = Api(activeSession)
-                val pageSize = 50
-                val offset = pageIndex * pageSize
+                val pageSize = 500
+                val offset = pageIndex
                 libraryGenres = api.genres(library.id)
+                libraryAlphabet = if (activeSort.isBlank()) api.alphabet(library.id, if (library.type == "tv") "tv" else "movie", activeGenre) else emptyList()
                 if (library.type == "tv") {
-                    val pageItems = api.showsPage(library.id, pageSize, offset, activeGenre)
+                    val pageItems = api.showsPage(library.id, pageSize, offset, activeGenre, activeSort, activeMinRating, activeSeenStatus)
                     if (generation != loadGeneration) return@launch
                     shows = pageItems
                     pageHasNext = pageItems.size == pageSize
                     libraryFullyLoaded = pageItems.size < pageSize
                 } else {
-                    val pageItems = api.itemsPage(library.id, pageSize, offset, activeGenre)
+                    val pageItems = api.itemsPage(library.id, pageSize, offset, activeGenre, activeSort, activeMinRating, activeSeenStatus)
                     if (generation != loadGeneration) return@launch
                     items = pageItems
                     pageHasNext = pageItems.size == pageSize
@@ -384,41 +426,73 @@ fun PopcornApp() {
                 }
             }.onFailure { error = it.message ?: "Load failed" }
             loading = false
+            if (generation == loadGeneration && !libraryFullyLoaded) {
+                scope.launch {
+                    loadingMore = true
+                    runCatching {
+                        val api = Api(activeSession)
+                        val pageSize = 500
+                        val canUpdateLibraryCache = pageIndex == 0 && activeGenre.isBlank() && activeSort.isBlank() && activeMinRating <= 0.0 && activeSeenStatus.isBlank()
+                        var offset = pageIndex + if (library.type == "tv") shows.size else items.size
+                        while (true) {
+                            if (library.type == "tv") {
+                                val pageItems = api.showsPage(library.id, pageSize, offset, activeGenre, activeSort, activeMinRating, activeSeenStatus)
+                                if (generation != loadGeneration) return@launch
+                                shows = (shows + pageItems).distinctBy { showKey(it) }
+                                if (canUpdateLibraryCache) {
+                                    AppCache.writeShows(context, activeSession, library.id, shows, pageItems.size < pageSize)
+                                }
+                                if (pageItems.size < pageSize) break
+                                offset += pageSize
+                            } else {
+                                val pageItems = api.itemsPage(library.id, pageSize, offset, activeGenre, activeSort, activeMinRating, activeSeenStatus)
+                                if (generation != loadGeneration) return@launch
+                                items = (items + pageItems).distinctBy { it.id }
+                                if (canUpdateLibraryCache) {
+                                    AppCache.writeItems(context, activeSession, library.id, items, pageItems.size < pageSize)
+                                }
+                                if (pageItems.size < pageSize) break
+                                offset += pageSize
+                            }
+                            delay(32)
+                        }
+                        libraryFullyLoaded = true
+                    }.onFailure { error = it.message ?: "Load failed" }
+                    loadingMore = false
+                }
+            }
         }
     }
 
-    fun loadRemainingLibrary() {
-        val library = activeLibrary ?: return
-        val activeSession = session ?: return
-        if (libraryFullyLoaded || loadingMore) return
-        val generation = loadGeneration
-        scope.launch {
-            loadingMore = true
-            runCatching {
-                val api = Api(activeSession)
-                val pageSize = 500
-                var offset = if (library.type == "tv") shows.size else items.size
-                while (true) {
-                    if (library.type == "tv") {
-                        val page = api.showsPage(library.id, pageSize, offset)
-                        if (generation != loadGeneration) return@launch
-                        shows = shows + page
-                        AppCache.writeShows(context, activeSession, library.id, shows, page.size < pageSize)
-                        if (page.size < pageSize) break
-                        offset += pageSize
-                    } else {
-                        val page = api.itemsPage(library.id, pageSize, offset)
-                        if (generation != loadGeneration) return@launch
-                        items = items + page
-                        AppCache.writeItems(context, activeSession, library.id, items, page.size < pageSize)
-                        if (page.size < pageSize) break
-                        offset += pageSize
+    DisposableEffect(session) {
+        val activeSession = session
+        val lifecycle = (context as? ComponentActivity)?.lifecycle
+        if (activeSession == null || lifecycle == null) {
+            onDispose { }
+        } else {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) {
+                    refreshProgress(activeSession)
+                    refreshWatchlist(activeSession)
+                    refreshUpdateAvailable(activeSession)
+                    when (val current = screen) {
+                        Screen.Home -> if (libraries.isNotEmpty()) loadHome(activeSession, libraries)
+                        is Screen.LibraryPage -> loadLibraryPage(current.library, activeSession, pageIndex, selectedGenre, selectedSort, selectedMinRating, selectedSeenStatus)
+                        is Screen.Show, is Screen.Season -> visibleContentRefresh += 1
+                        else -> Unit
                     }
-                    delay(32)
                 }
-                libraryFullyLoaded = true
-            }.onFailure { error = it.message ?: "Load failed" }
-            loadingMore = false
+            }
+            lifecycle.addObserver(observer)
+            onDispose { lifecycle.removeObserver(observer) }
+        }
+    }
+
+    LaunchedEffect(session) {
+        val active = session ?: return@LaunchedEffect
+        while (true) {
+            updateAvailable = runCatching { Api(active).tvUpdate(BuildConfig.VERSION_CODE).available }.getOrDefault(false)
+            delay(5 * 60 * 1000)
         }
     }
 
@@ -442,6 +516,7 @@ fun PopcornApp() {
                 session = updated
             }
             libraries = api.libraries()
+            updateAvailable = runCatching { api.tvUpdate(BuildConfig.VERSION_CODE).available }.getOrDefault(false)
             AppCache.writeLibraries(context, active, libraries)
             refreshProgress(active)
             refreshWatchlist(active)
@@ -453,19 +528,38 @@ fun PopcornApp() {
         }
     }
 
+    fun returnFromDetail(s: Screen.Detail) {
+        lastDetail = null
+        screen = if (s.fromActor != null) {
+            Screen.Actor(s.fromActor)
+        } else if (s.fromSearch && s.fromShow == null) {
+            Screen.Search
+        } else if (s.fromShow != null) {
+            Screen.Show(s.fromShow, fromHome = s.fromHome, fromSearch = s.fromSearch, fromWatchlist = s.fromWatchlist, fromActor = s.fromActor)
+        } else if (s.fromWatchlist) {
+            Screen.Watchlist
+        } else if (s.fromHome) {
+            Screen.Home
+        } else if (activeLibrary != null) {
+            Screen.LibraryPage(activeLibrary!!)
+        } else {
+            Screen.Home
+        }
+    }
+
     BackHandler(enabled = screen !is Screen.Home && screen !is Screen.Login) {
         when (val s = screen) {
             Screen.Watchlist -> screen = Screen.Home
+            Screen.Updates -> screen = Screen.Home
             is Screen.LibraryPage -> screen = Screen.Home
             Screen.Search -> screen = Screen.Home
-            is Screen.Show -> screen = if (s.fromSearch) Screen.Search else if (s.fromWatchlist) Screen.Watchlist else if (s.fromHome) Screen.Home else if (activeLibrary?.type == "tv") Screen.LibraryPage(activeLibrary!!) else Screen.Home
-            is Screen.Season -> screen = Screen.Show(s.show, fromHome = s.fromHome, fromSearch = s.fromSearch, fromWatchlist = s.fromWatchlist)
-            is Screen.Detail -> {
-                lastDetail = null
-                screen = if (s.fromSearch) Screen.Search else if (s.fromShow != null) Screen.Show(s.fromShow, fromHome = s.fromHome, fromWatchlist = s.fromWatchlist) else if (s.fromWatchlist) Screen.Watchlist else if (s.fromHome) Screen.Home else if (activeLibrary != null) Screen.LibraryPage(activeLibrary!!) else Screen.Home
-            }
+            is Screen.Show -> screen = if (s.fromActor != null) Screen.Actor(s.fromActor) else if (s.fromSearch) Screen.Search else if (s.fromWatchlist) Screen.Watchlist else if (s.fromHome) Screen.Home else if (activeLibrary?.type == "tv") Screen.LibraryPage(activeLibrary!!) else Screen.Home
+            is Screen.Season -> screen = Screen.Show(s.show, fromHome = s.fromHome, fromSearch = s.fromSearch, fromWatchlist = s.fromWatchlist, fromActor = s.fromActor)
+            is Screen.Detail -> returnFromDetail(s)
+            is Screen.Actor -> screen = lastActorReturnScreen ?: Screen.Home
             is Screen.Player -> {
-                screen = if (lastDetail != null) lastDetail!! else Screen.Home
+                screen = lastPlayerReturnScreen ?: lastDetail ?: Screen.Home
+                lastPlayerReturnScreen = null
                 session?.let { active -> refreshProgress(active) }
             }
             else -> screen = Screen.Home
@@ -506,12 +600,15 @@ fun PopcornApp() {
             completedShows = completedShows,
             watchlistItems = watchlistItems,
             watchlistShows = watchlistShows,
+            continueMovies = continueMovies,
+            continueEpisodes = continueEpisodes,
             recentMovies = recentMovies,
             recentShows = recentShows,
             watchlistMovies = watchlistMovies,
             watchlistTvShows = watchlistTvShows,
             error = error,
             loading = loading,
+            showUpdate = updateAvailable,
             onHome = { session?.let { loadHome(it, libraries) } },
             onLibrary = { lib -> session?.let { loadLibraryPage(lib, it, 0, "") } },
             onWatchlist = {
@@ -519,13 +616,18 @@ fun PopcornApp() {
                 screen = Screen.Watchlist
             },
             onSearch = { screen = Screen.Search },
+            onUpdates = { screen = Screen.Updates },
+            onScan = ::scanLibraries,
             onLogout = {
                 prefs.edit().clear().apply()
                 session = null
                 screen = Screen.Login
             },
             onItem = { screen = Screen.Detail(it, null, fromHome = true) },
-            onShow = { screen = Screen.Show(it, fromHome = true) },
+            onShow = {
+                showFocusSeason = null
+                screen = Screen.Show(it, fromHome = true)
+            },
             onItemMenu = { item, requester -> openItemWatchMenu(item, requester) },
             onShowMenu = { show, requester -> openShowWatchMenu(show, requester) },
         )
@@ -539,6 +641,7 @@ fun PopcornApp() {
             watchlistItems = watchlistItems,
             watchlistShows = watchlistShows,
             error = error,
+            showUpdate = updateAvailable,
             onHome = { session?.let { loadHome(it, libraries) } },
             onLibrary = { lib -> session?.let { loadLibraryPage(lib, it, 0, "") } },
             onWatchlist = {
@@ -546,13 +649,18 @@ fun PopcornApp() {
                 screen = Screen.Watchlist
             },
             onSearch = { screen = Screen.Search },
+            onUpdates = { screen = Screen.Updates },
+            onScan = ::scanLibraries,
             onLogout = {
                 prefs.edit().clear().apply()
                 session = null
                 screen = Screen.Login
             },
             onItem = { screen = Screen.Detail(it, null, fromWatchlist = true) },
-            onShow = { screen = Screen.Show(it, fromWatchlist = true) },
+            onShow = {
+                showFocusSeason = null
+                screen = Screen.Show(it, fromWatchlist = true)
+            },
             onItemMenu = { item, requester -> openItemWatchMenu(item, requester) },
             onShowMenu = { show, requester -> openShowWatchMenu(show, requester) },
         )
@@ -571,7 +679,12 @@ fun PopcornApp() {
             pageIndex = pageIndex,
             pageHasNext = pageHasNext,
             selectedGenre = selectedGenre,
+            selectedSort = selectedSort,
+            selectedMinRating = selectedMinRating,
+            selectedSeenStatus = selectedSeenStatus,
             genres = libraryGenres,
+            initialFocusKey = libraryFocusKey,
+            showUpdate = updateAvailable,
             onHome = { session?.let { loadHome(it, libraries) } },
             onLibrary = { lib -> session?.let { loadLibraryPage(lib, it, 0, "") } },
             onWatchlist = {
@@ -579,6 +692,8 @@ fun PopcornApp() {
                 screen = Screen.Watchlist
             },
             onSearch = { screen = Screen.Search },
+            onUpdates = { screen = Screen.Updates },
+            onScan = ::scanLibraries,
             onLogout = {
                 prefs.edit().clear().apply()
                 session = null
@@ -586,9 +701,21 @@ fun PopcornApp() {
             },
             onPreviousPage = { session?.let { loadLibraryPage(current.library, it, pageIndex - 1) } },
             onNextPage = { session?.let { loadLibraryPage(current.library, it, pageIndex + 1) } },
-            onGenre = { genre -> session?.let { loadLibraryPage(current.library, it, 0, genre) } },
-            onItem = { screen = Screen.Detail(it, null) },
-            onShow = { screen = Screen.Show(it) },
+            onGenre = { genre -> session?.let { loadLibraryPage(current.library, it, 0, genre, selectedSort, selectedMinRating, selectedSeenStatus) } },
+            onSort = { sort -> session?.let { loadLibraryPage(current.library, it, 0, selectedGenre, sort, selectedMinRating, selectedSeenStatus) } },
+            onMinRating = { minRating -> session?.let { loadLibraryPage(current.library, it, 0, selectedGenre, selectedSort, minRating, selectedSeenStatus) } },
+            onSeenStatus = { seenStatus -> session?.let { loadLibraryPage(current.library, it, 0, selectedGenre, selectedSort, selectedMinRating, seenStatus) } },
+            alphabet = libraryAlphabet,
+            onAlphabet = { entry -> session?.let { loadLibraryPage(current.library, it, entry.offset, selectedGenre, "", selectedMinRating, selectedSeenStatus) } },
+            onItem = {
+                libraryFocusKey = it.id
+                screen = Screen.Detail(it, null)
+            },
+            onShow = {
+                libraryFocusKey = showFocusKey(it)
+                showFocusSeason = null
+                screen = Screen.Show(it)
+            },
             onItemMenu = { item, requester -> openItemWatchMenu(item, requester) },
             onShowMenu = { show, requester -> openShowWatchMenu(show, requester) },
         )
@@ -602,28 +729,102 @@ fun PopcornApp() {
             onQueryChange = { searchQuery = it },
             onBack = { screen = Screen.Home },
             onItem = { screen = Screen.Detail(it, null, fromSearch = true) },
-            onShow = { screen = Screen.Show(it, fromSearch = true) },
+            onShow = {
+                showFocusSeason = null
+                screen = Screen.Show(it, fromSearch = true)
+            },
             onItemMenu = { item, requester -> openItemWatchMenu(item, requester) },
             onShowMenu = { show, requester -> openShowWatchMenu(show, requester) },
         )
+        Screen.Updates -> UpdateView(session = session, onBack = { screen = Screen.Home })
         is Screen.Show -> ShowView(
             session = session,
             show = current.show,
-            onSeason = { season -> screen = Screen.Season(current.show, season, fromHome = current.fromHome, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist) },
+            initialSeasonFocus = showFocusSeason,
+            initialEpisodeFocus = seasonFocusEpisode,
+            startWithEpisodes = false,
+            completedItems = completedItems,
+            watchlistItems = watchlistItems,
+            refreshToken = visibleContentRefresh,
+            onSeason = { season ->
+                showFocusSeason = season.seasonNumber
+                seasonFocusEpisode = null
+                screen = Screen.Season(current.show, season, fromHome = current.fromHome, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist, fromActor = current.fromActor)
+            },
+            onEpisodeFocus = {
+                seasonFocusEpisode = it.id
+            },
+            onEpisode = { item ->
+                lastDetail = null
+                seasonFocusEpisode = item.id
+                screen = Screen.Detail(item, current.show, fromHome = current.fromHome, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist, fromActor = current.fromActor)
+            },
+            onEpisodeMenu = { episode, requester -> openItemWatchMenu(episode, requester) },
         )
-        is Screen.Season -> SeasonView(
+        is Screen.Season -> ShowView(
             session = session,
             show = current.show,
-            season = current.season,
-            onEpisode = { screen = Screen.Detail(it, current.show, fromHome = current.fromHome, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist) },
+            initialSeasonFocus = current.season.seasonNumber,
+            initialEpisodeFocus = seasonFocusEpisode,
+            startWithEpisodes = true,
+            completedItems = completedItems,
+            watchlistItems = watchlistItems,
+            refreshToken = visibleContentRefresh,
+            onSeason = { season ->
+                showFocusSeason = season.seasonNumber
+                seasonFocusEpisode = null
+                screen = Screen.Season(current.show, season, fromHome = current.fromHome, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist, fromActor = current.fromActor)
+            },
+            onEpisodeFocus = {
+                seasonFocusEpisode = it.id
+            },
+            onEpisode = { item ->
+                lastDetail = null
+                seasonFocusEpisode = item.id
+                screen = Screen.Detail(item, current.show, fromHome = current.fromHome, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist, fromActor = current.fromActor)
+            },
+            onEpisodeMenu = { episode, requester -> openItemWatchMenu(episode, requester) },
         )
         is Screen.Detail -> DetailView(
             item = current.item,
             session = session,
-            onPlay = { audioIndex, subtitleIndex ->
+            watched = completedItems.contains(current.item.id),
+            watchlisted = watchlistItems.contains(current.item.id),
+            onPlay = { audioIndex, subtitleIndex, startPositionMs ->
                 lastDetail = current
-                screen = Screen.Player(current.item, audioIndex, subtitleIndex)
+                lastPlayerReturnScreen = current
+                screen = Screen.Player(current.item, audioIndex, subtitleIndex, startPositionMs)
             },
+            onWatchedChange = { watched ->
+                session?.let { setItemWatched(it, current.item, watched) }
+            },
+            onWatchlistChange = { listed ->
+                session?.let { setItemWatchlisted(it, current.item, listed) }
+            },
+            onBack = { returnFromDetail(current) },
+            onHome = { screen = Screen.Home },
+            onSearch = { screen = Screen.Search },
+            onWatchlist = { screen = Screen.Watchlist },
+            onActor = { actor ->
+                lastActorReturnScreen = current
+                screen = Screen.Actor(actor)
+            },
+        )
+        is Screen.Actor -> ActorView(
+            session = session,
+            actor = current.actor,
+            completedItems = completedItems,
+            completedShows = completedShows,
+            watchlistItems = watchlistItems,
+            watchlistShows = watchlistShows,
+            onBack = { screen = lastActorReturnScreen ?: Screen.Home },
+            onItem = { screen = Screen.Detail(it, null, fromActor = current.actor) },
+            onShow = {
+                showFocusSeason = null
+                screen = Screen.Show(it, fromActor = current.actor)
+            },
+            onItemMenu = { item, requester -> openItemWatchMenu(item, requester) },
+            onShowMenu = { show, requester -> openShowWatchMenu(show, requester) },
         )
         is Screen.Player -> PlayerScreen(
             item = current.item,
@@ -632,9 +833,16 @@ fun PopcornApp() {
             remoteCommand = pendingPlayerCommand,
             initialAudioIndex = current.audioIndex,
             initialSubtitleIndex = current.subtitleIndex,
+            initialStartPositionMs = current.startPositionMs,
+            initialBandwidthKbps = preferredBandwidthKbps,
+            onBandwidthSelected = { kbps ->
+                preferredBandwidthKbps = kbps
+                prefs.edit().putInt("preferredBandwidthKbps", kbps ?: -1).apply()
+            },
             onRemoteStop = {
                 pendingPlayerCommand = null
-                screen = if (lastDetail != null) lastDetail!! else Screen.Home
+                screen = lastPlayerReturnScreen ?: lastDetail ?: Screen.Home
+                lastPlayerReturnScreen = null
                 session?.let { active -> refreshProgress(active) }
             },
             onRemoteCommandConsumed = { id ->

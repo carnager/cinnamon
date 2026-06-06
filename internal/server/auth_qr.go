@@ -105,7 +105,8 @@ func (a *App) authQRComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var expiresAt string
-	err := a.store.DB().QueryRowContext(r.Context(), `SELECT expires_at FROM auth_qr_codes WHERE code = ?`, code).Scan(&expiresAt)
+	var completedAt sql.NullString
+	err := a.store.DB().QueryRowContext(r.Context(), `SELECT expires_at, completed_at FROM auth_qr_codes WHERE code = ?`, code).Scan(&expiresAt, &completedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "invalid qr code", http.StatusNotFound)
@@ -118,18 +119,27 @@ func (a *App) authQRComplete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "qr code expired", http.StatusGone)
 		return
 	}
+	if completedAt.Valid && completedAt.String != "" {
+		http.Error(w, "qr code already completed", http.StatusConflict)
+		return
+	}
 	token, err := a.auth.CreateSession(r.Context(), user.ID, 30*24*time.Hour)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	_, err = a.store.DB().ExecContext(r.Context(), `
+	res, err := a.store.DB().ExecContext(r.Context(), `
 UPDATE auth_qr_codes
 SET user_id = ?, token = ?, completed_at = CURRENT_TIMESTAMP
-WHERE code = ?`, user.ID, token, code)
+WHERE code = ? AND completed_at IS NULL`, user.ID, token, code)
 	if err != nil {
 		_ = a.auth.DeleteSession(r.Context(), token)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if rows, _ := res.RowsAffected(); rows == 0 {
+		_ = a.auth.DeleteSession(r.Context(), token)
+		http.Error(w, "qr code already completed", http.StatusConflict)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "approved"})

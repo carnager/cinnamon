@@ -44,19 +44,23 @@ fun PlayerScreen(
     remoteCommand: PlayerRemoteCommand?,
     initialAudioIndex: Int?,
     initialSubtitleIndex: Int?,
+    initialStartPositionMs: Long,
+    initialBandwidthKbps: Int?,
+    onBandwidthSelected: (Int?) -> Unit,
     onRemoteStop: () -> Unit,
     onRemoteCommandConsumed: (Long) -> Unit,
 ) {
     val context = LocalContext.current
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val scope = rememberCoroutineScope()
-    var selectedBandwidth by remember { mutableStateOf<Int?>(null) }
     var selectedAudioIndex by remember(item.id) { mutableStateOf(initialAudioIndex) }
     var selectedSubtitleIndex by remember(item.id) { mutableStateOf(initialSubtitleIndex) }
-    var hlsSessionId by remember { mutableStateOf<String?>(null) }
-    var playbackBaseMs by remember { mutableStateOf(0L) }
+    var selectedBandwidth by remember(item.id) { mutableStateOf(initialBandwidthKbps) }
+    var hlsSessionId by remember(item.id) {
+        mutableStateOf(initialBandwidthKbps?.let { newHlsSessionId(deviceId, item.id) })
+    }
+    var playbackBaseMs by remember(item.id) { mutableStateOf(if (initialBandwidthKbps != null) initialStartPositionMs.coerceAtLeast(0) else 0L) }
     val originalStreams = remember { mutableStateListOf<StreamInfo>() }
-    var resumeApplied by remember(item.id) { mutableStateOf(false) }
 
     LaunchedEffect(item.id, session) {
         val active = session ?: return@LaunchedEffect
@@ -81,9 +85,20 @@ fun PlayerScreen(
             .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
             .build()
             .apply {
-                val url = playbackUrl(session, item.id, null, null, 0.0)
+                val url = playbackUrl(
+                    session,
+                    item.id,
+                    selectedBandwidth,
+                    hlsSessionId,
+                    initialStartPositionMs.coerceAtLeast(0) / 1000.0,
+                    selectedAudioIndex,
+                    selectedSubtitleIndex,
+                )
                 setMediaItem(MediaItem.fromUri(Uri.parse(url)))
                 prepare()
+                if (selectedBandwidth == null && initialStartPositionMs > 0) {
+                    seekTo(initialStartPositionMs)
+                }
                 playWhenReady = true
             }
     }
@@ -168,8 +183,9 @@ fun PlayerScreen(
         val oldHlsSession = hlsSessionId
         val startMs = (targetSeconds * 1000.0).toLong().coerceAtLeast(0)
         val wasPlaying = exoPlayer.playWhenReady
-        val newHlsSession = kbps?.let { newHlsSessionId(item.id) }
+        val newHlsSession = kbps?.let { newHlsSessionId(deviceId, item.id) }
         selectedBandwidth = kbps
+        onBandwidthSelected(kbps)
         hlsSessionId = newHlsSession
         playbackBaseMs = if (kbps != null) startMs else 0L
         val url = playbackUrl(activeSession, item.id, kbps, newHlsSession, targetSeconds, selectedAudioIndex, selectedSubtitleIndex)
@@ -512,24 +528,6 @@ fun PlayerScreen(
     }
 
     LaunchedEffect(item.id, session, exoPlayer) {
-        val activeSession = session ?: return@LaunchedEffect
-        if (resumeApplied) return@LaunchedEffect
-        val progress = runCatching { Api(activeSession).progress(item.id) }.getOrNull()
-        val duration = progress?.durationMs?.takeIf { it > 0 } ?: item.durationMs
-        val position = progress?.positionMs ?: 0
-        val canResume = progress != null &&
-            !progress.completed &&
-            duration > 0 &&
-            position >= 30_000 &&
-            position < (duration - 90_000).coerceAtLeast(30_000)
-        resumeApplied = true
-        if (canResume) {
-            delay(250)
-            exoPlayer.seekTo(position)
-        }
-    }
-
-    LaunchedEffect(item.id, session, exoPlayer) {
         while (true) {
             delay(10_000)
             if (exoPlayer.playbackState == Player.STATE_READY || exoPlayer.playbackState == Player.STATE_BUFFERING) {
@@ -573,4 +571,3 @@ fun PlayerScreen(
         )
     }
 }
-

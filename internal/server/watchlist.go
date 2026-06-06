@@ -96,7 +96,7 @@ func (a *App) lookupShowFromQuery(w http.ResponseWriter, r *http.Request) (media
 		http.Error(w, "libraryId and showTitle are required", http.StatusBadRequest)
 		return media.ShowSummary{}, false
 	}
-	shows, err := a.store.ListShows(r.Context(), libraryID, showTitle, "", "", 20, 0)
+	shows, err := a.store.ListShows(r.Context(), libraryID, showTitle, "", "", 0, 20, 0)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return media.ShowSummary{}, false

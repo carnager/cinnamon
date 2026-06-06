@@ -17,6 +17,7 @@ import (
 	"popcorn/internal/auth"
 	"popcorn/internal/config"
 	"popcorn/internal/media"
+	"popcorn/internal/version"
 	"popcorn/web"
 )
 
@@ -36,11 +37,19 @@ type App struct {
 	cancel      context.CancelFunc
 	hlsMu       sync.Mutex
 	hlsSessions map[string]*hlsSession
+	loginMu     sync.Mutex
+	loginFails  map[string]loginAttempt
+}
+
+type loginAttempt struct {
+	Failures     int
+	FirstFailure time.Time
+	BlockedUntil time.Time
 }
 
 func New(opts Options) *App {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &App{cfg: opts.Config, log: opts.Log, store: opts.Store, auth: opts.Auth, ctx: ctx, cancel: cancel, hlsSessions: map[string]*hlsSession{}}
+	return &App{cfg: opts.Config, log: opts.Log, store: opts.Store, auth: opts.Auth, ctx: ctx, cancel: cancel, hlsSessions: map[string]*hlsSession{}, loginFails: map[string]loginAttempt{}}
 }
 
 func (a *App) Close() {
@@ -57,14 +66,25 @@ func (a *App) Close() {
 func (a *App) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", a.health)
+	mux.HandleFunc("GET /api/app/tv/update", a.tvAppUpdate)
+	mux.HandleFunc("GET /api/app/tv/apk", a.tvAppAPK)
+	mux.HandleFunc("GET /api/app/companion/update", a.companionAppUpdate)
+	mux.HandleFunc("GET /api/app/companion/apk", a.companionAppAPK)
+	mux.HandleFunc("GET /api/app/updates", a.appUpdates)
+	mux.HandleFunc("POST /api/app/tv/upload", a.uploadTVApp)
+	mux.HandleFunc("POST /api/app/companion/upload", a.uploadCompanionApp)
 	mux.HandleFunc("GET /api/libraries", a.libraries)
 	mux.HandleFunc("POST /api/scan", a.scan)
 	mux.HandleFunc("GET /api/scan", a.scanStatus)
 	mux.HandleFunc("GET /api/items", a.items)
 	mux.HandleFunc("GET /api/search", a.search)
 	mux.HandleFunc("GET /api/genres", a.genres)
+	mux.HandleFunc("GET /api/alphabet", a.alphabet)
+	mux.HandleFunc("GET /api/actors", a.actorDetail)
 	mux.HandleFunc("GET /api/tv/shows", a.tvShows)
+	mux.HandleFunc("GET /api/tv/shows/actors", a.tvShowActors)
 	mux.HandleFunc("GET /api/tv/seasons", a.tvSeasons)
+	mux.HandleFunc("GET /api/tv/seasons/actors", a.tvSeasonActors)
 	mux.HandleFunc("GET /api/tv/episodes", a.tvEpisodes)
 	mux.HandleFunc("GET /api/items/{id}", a.item)
 	mux.HandleFunc("GET /api/items/{id}/ratings", a.itemRatings)
@@ -76,10 +96,13 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /api/auth/qr/complete", a.authQRComplete)
 	mux.HandleFunc("GET /api/users", a.users)
 	mux.HandleFunc("POST /api/users", a.createUser)
+	mux.HandleFunc("PUT /api/users/{id}", a.updateUser)
 	mux.HandleFunc("GET /api/progress", a.progressList)
 	mux.HandleFunc("GET /api/progress/tv", a.progressShows)
 	mux.HandleFunc("PUT /api/progress/tv", a.progressShowSave)
 	mux.HandleFunc("DELETE /api/progress/tv", a.progressShowDelete)
+	mux.HandleFunc("PUT /api/progress/tv/season", a.progressSeasonSave)
+	mux.HandleFunc("DELETE /api/progress/tv/season", a.progressSeasonDelete)
 	mux.HandleFunc("GET /api/items/{id}/progress", a.progressGet)
 	mux.HandleFunc("PUT /api/items/{id}/progress", a.progressSave)
 	mux.HandleFunc("DELETE /api/items/{id}/progress", a.progressDelete)
@@ -94,6 +117,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /api/trakt/import-watched", a.traktImportWatched)
 	mux.HandleFunc("POST /api/trakt/import-watchlist", a.traktImportWatchlist)
 	mux.HandleFunc("POST /api/trakt/import-export", a.traktImportExport)
+	mux.HandleFunc("POST /api/trakt/import-export-upload", a.traktImportExportUpload)
 	mux.HandleFunc("DELETE /api/trakt", a.traktDisconnect)
 	mux.HandleFunc("POST /api/devices/register", a.remoteRegisterDevice)
 	mux.HandleFunc("GET /api/devices", a.remoteListDevices)
@@ -110,12 +134,54 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/items/{id}/hls/{session}/{segment}", a.hlsSegment)
 	mux.HandleFunc("DELETE /api/hls/{session}", a.hlsStop)
 	mux.HandleFunc("GET /api/items/{id}/image/{kind}", a.image)
-	mux.Handle("/", noCache(spaFiles()))
-	return logging(a.log, mux)
+	mux.Handle("GET /popcorn", noCache(popcornWebFiles("/popcorn")))
+	mux.Handle("GET /popcorn/", noCache(popcornWebFiles("/popcorn")))
+	mux.Handle("/", noCache(popcornWebFiles("")))
+	return logging(a.log, a.authGate(mux))
+}
+
+func (a *App) authGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		needsAuth := strings.HasPrefix(r.URL.Path, "/api/")
+		if !needsAuth || publicAPIRoute(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if _, ok := a.requireUser(w, r); !ok {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func publicAPIRoute(r *http.Request) bool {
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/api/health":
+		return true
+	case r.Method == http.MethodPost && r.URL.Path == "/api/auth/login":
+		return true
+	case r.Method == http.MethodPost && r.URL.Path == "/api/auth/qr/start":
+		return true
+	case r.Method == http.MethodGet && r.URL.Path == "/api/auth/qr/poll":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *App) health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": "0.1.0"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":                         true,
+		"version":                    version.Version,
+		"commit":                     version.Commit,
+		"buildTime":                  version.BuildTime,
+		"tvUpdateConfigured":         a.cfg.AppUpdate.TVAPKPath != "",
+		"tvUpdateVersionCode":        a.cfg.AppUpdate.TVVersionCode,
+		"tvUpdateVersionName":        a.cfg.AppUpdate.TVVersionName,
+		"companionUpdateConfigured":  a.cfg.AppUpdate.CompanionAPKPath != "",
+		"companionUpdateVersionCode": a.cfg.AppUpdate.CompanionVersionCode,
+		"companionUpdateVersionName": a.cfg.AppUpdate.CompanionVersionName,
+	})
 }
 
 func (a *App) libraries(w http.ResponseWriter, r *http.Request) {
@@ -143,9 +209,14 @@ func (a *App) scanStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) items(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	items, err := a.store.ListItems(r.Context(), r.URL.Query().Get("libraryId"), r.URL.Query().Get("q"), r.URL.Query().Get("genre"), r.URL.Query().Get("sort"), limit, offset)
+	minRating, _ := strconv.ParseFloat(r.URL.Query().Get("minRating"), 64)
+	items, err := a.store.ListItemsForUser(r.Context(), r.URL.Query().Get("libraryId"), r.URL.Query().Get("q"), r.URL.Query().Get("genre"), r.URL.Query().Get("sort"), r.URL.Query().Get("seen"), user.ID, minRating, limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -162,6 +233,19 @@ func (a *App) genres(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, genres)
 }
 
+func (a *App) alphabet(w http.ResponseWriter, r *http.Request) {
+	entries, err := a.store.AlphabetIndex(r.Context(), media.AlphabetOptions{
+		LibraryID: r.URL.Query().Get("libraryId"),
+		Kind:      r.URL.Query().Get("kind"),
+		Genre:     r.URL.Query().Get("genre"),
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, entries)
+}
+
 func (a *App) search(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
@@ -169,6 +253,9 @@ func (a *App) search(w http.ResponseWriter, r *http.Request) {
 		Query:     r.URL.Query().Get("q"),
 		LibraryID: r.URL.Query().Get("libraryId"),
 		Kind:      r.URL.Query().Get("kind"),
+		Genre:     r.URL.Query().Get("genre"),
+		Sort:      r.URL.Query().Get("sort"),
+		MinRating: queryFloat(r, "minRating"),
 		Limit:     limit,
 		Offset:    offset,
 	})
@@ -185,14 +272,59 @@ func (a *App) search(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) tvShows(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	shows, err := a.store.ListShows(r.Context(), r.URL.Query().Get("libraryId"), r.URL.Query().Get("q"), r.URL.Query().Get("genre"), r.URL.Query().Get("sort"), limit, offset)
+	shows, err := a.store.ListShowsForUser(r.Context(), r.URL.Query().Get("libraryId"), r.URL.Query().Get("q"), r.URL.Query().Get("genre"), r.URL.Query().Get("sort"), r.URL.Query().Get("seen"), user.ID, queryFloat(r, "minRating"), limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, shows)
+}
+
+func (a *App) actorDetail(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	actor, err := a.store.ActorByName(r.Context(), name)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	info := a.actorInfo(r.Context(), actor)
+	profileURL := ""
+	if strings.TrimSpace(actor.Thumb) != "" {
+		profileURL = strings.TrimSpace(actor.Thumb)
+	} else {
+		profileURL = tmdbProfileURL(info.ProfilePath)
+	}
+	movies, err := a.store.ListItemsByActor(r.Context(), actor.Name, "", "movie", "recent", 60, 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	shows, err := a.store.ListShowsByActor(r.Context(), actor.Name, "", "recent", 60, 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"actor":      actor,
+		"info":       info,
+		"profileUrl": profileURL,
+		"movies":     movies,
+		"shows":      shows,
+	})
 }
 
 func (a *App) tvSeasons(w http.ResponseWriter, r *http.Request) {
@@ -208,6 +340,45 @@ func (a *App) tvSeasons(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, seasons)
+}
+
+func (a *App) tvShowActors(w http.ResponseWriter, r *http.Request) {
+	libraryID := r.URL.Query().Get("libraryId")
+	showTitle := r.URL.Query().Get("showTitle")
+	if libraryID == "" || showTitle == "" {
+		http.Error(w, "libraryId and showTitle are required", http.StatusBadRequest)
+		return
+	}
+	actors, err := a.store.ListShowActors(r.Context(), libraryID, showTitle)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, actors)
+}
+
+func (a *App) tvSeasonActors(w http.ResponseWriter, r *http.Request) {
+	libraryID := r.URL.Query().Get("libraryId")
+	showTitle := r.URL.Query().Get("showTitle")
+	season, err := strconv.Atoi(r.URL.Query().Get("season"))
+	if libraryID == "" || showTitle == "" || err != nil {
+		http.Error(w, "libraryId, showTitle, and season are required", http.StatusBadRequest)
+		return
+	}
+	actors, err := a.store.ListSeasonActors(r.Context(), libraryID, showTitle, season)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, actors)
+}
+
+func queryFloat(r *http.Request, key string) float64 {
+	value, _ := strconv.ParseFloat(r.URL.Query().Get(key), 64)
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 func (a *App) tvEpisodes(w http.ResponseWriter, r *http.Request) {
@@ -347,13 +518,21 @@ func noCache(next http.Handler) http.Handler {
 	})
 }
 
-func spaFiles() http.Handler {
+func popcornWebFiles(mount string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			http.NotFound(w, r)
 			return
 		}
-		path := strings.TrimPrefix(r.URL.Path, "/")
+		if r.URL.Path == "/web" || strings.HasPrefix(r.URL.Path, "/web/") {
+			http.NotFound(w, r)
+			return
+		}
+		path := r.URL.Path
+		if mount != "" {
+			path = strings.TrimPrefix(path, mount)
+		}
+		path = strings.TrimPrefix(path, "/")
 		if path == "" {
 			path = "index.html"
 		}

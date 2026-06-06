@@ -40,38 +40,38 @@ import coil.request.ImageRequest
 @Composable
 fun FocusButton(label: String, primary: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
+    val bg = when {
+        primary && focused -> Accent
+        primary -> AccentDim
+        focused -> Surface3
+        else -> Surface2
+    }
     val border = when {
-        focused && primary -> Color.White
         focused -> FocusGlow
+        primary -> Accent.copy(alpha = .4f)
         else -> Color.Transparent
     }
     Box(
         modifier
             .clip(RoundedCornerShape(6.dp))
-            .background(
-                if (primary) {
-                    if (focused) Accent else AccentDim
-                } else {
-                    if (focused) Surface3 else Surface2
-                }
-            )
+            .background(bg)
             .border(2.dp, border, RoundedCornerShape(6.dp))
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .tvActivate(onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = if (primary) Color.Black else TextColor, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        Text(label, color = if (primary) Color.Black else TextColor, fontWeight = FontWeight.Bold, fontSize = 14.sp)
     }
 }
 
 @Composable
 fun Poster(session: Session?, itemId: Long, modifier: Modifier, version: Long = 0) {
     val url = imageUrl(session, itemId, "poster", version)
-    Box(modifier.aspectRatio(2f / 3f).clip(RoundedCornerShape(6.dp)).background(Surface2), contentAlignment = Alignment.Center) {
+    Box(modifier.aspectRatio(2f / 3f).clip(CardShape).background(Surface2), contentAlignment = Alignment.Center) {
         if (url.isNotBlank()) {
-            SizedAsyncImage(model = url, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, widthPx = 260, heightPx = 390)
+            SizedAsyncImage(model = url, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, widthPx = 260, heightPx = 390, authToken = session?.token.orEmpty())
         } else {
             Text("?", color = Muted, fontSize = 20.sp)
         }
@@ -86,15 +86,19 @@ fun SizedAsyncImage(
     contentScale: ContentScale,
     widthPx: Int,
     heightPx: Int,
+    authToken: String = "",
 ) {
     val context = LocalContext.current
-    val request = remember(model, widthPx, heightPx) {
-        ImageRequest.Builder(context)
+    val request = remember(model, widthPx, heightPx, authToken) {
+        val builder = ImageRequest.Builder(context)
             .data(model)
             .size(widthPx, heightPx)
             .crossfade(false)
             .allowHardware(true)
-            .build()
+        if (authToken.isNotBlank()) {
+            builder.addHeader("Authorization", "Bearer $authToken")
+        }
+        builder.build()
     }
     AsyncImage(
         model = request,
@@ -114,10 +118,9 @@ fun Pill(text: String, selected: Boolean, badge: String? = null, onClick: () -> 
         else -> Color.Transparent
     }
     val border = when {
-        selected && focused -> Color.White
         focused -> FocusGlow
-        selected -> Accent.copy(alpha = .55f)
-        else -> Line
+        selected -> Accent.copy(alpha = .5f)
+        else -> Line.copy(alpha = .6f)
     }
     Row(
         modifier = Modifier
@@ -127,11 +130,11 @@ fun Pill(text: String, selected: Boolean, badge: String? = null, onClick: () -> 
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .tvActivate(onClick)
-            .padding(horizontal = 12.dp, vertical = 5.dp),
+            .padding(horizontal = 14.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(text, color = if (selected) Color.Black else TextColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        Text(text, color = if (selected) Color.Black else TextColor, fontWeight = FontWeight.Bold, fontSize = 13.sp)
         if (badge != null) {
             Text(badge, color = if (selected) Color.Black.copy(alpha = .6f) else Muted, fontSize = 10.sp)
         }
@@ -142,12 +145,12 @@ fun Pill(text: String, selected: Boolean, badge: String? = null, onClick: () -> 
 fun RatingBadge(rating: Double, small: Boolean = false) {
     Text(
         "\u2605 ${"%.1f".format(rating)}",
-        color = Gold,
+        color = Accent,
         fontWeight = FontWeight.Bold,
         fontSize = if (small) 9.sp else 11.sp,
         modifier = Modifier
-            .background(Gold.copy(alpha = .12f), RoundedCornerShape(3.dp))
-            .padding(horizontal = if (small) 4.dp else 5.dp, vertical = 1.dp),
+            .background(Accent.copy(alpha = .12f), RoundedCornerShape(4.dp))
+            .padding(horizontal = if (small) 4.dp else 6.dp, vertical = 2.dp),
     )
 }
 
@@ -155,14 +158,14 @@ fun RatingBadge(rating: Double, small: Boolean = false) {
 fun SourceRatingBadge(label: String, value: String) {
     Row(
         modifier = Modifier
-            .background(Surface2, RoundedCornerShape(3.dp))
-            .border(1.dp, Line, RoundedCornerShape(3.dp))
-            .padding(horizontal = 5.dp, vertical = 1.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+            .background(Surface2, RoundedCornerShape(4.dp))
+            .border(1.dp, Line, RoundedCornerShape(4.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, color = Muted, fontWeight = FontWeight.Bold, fontSize = 9.sp)
-        Text(value, color = TextColor, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+        Text(label, color = Accent, fontWeight = FontWeight.Black, fontSize = 10.sp)
+        Text(value, color = TextColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
     }
 }
 
@@ -171,8 +174,8 @@ fun PosterRating(rating: Double) {
     Box(Modifier.fillMaxSize().padding(4.dp), contentAlignment = Alignment.TopEnd) {
         Text(
             "\u2605 ${"%.1f".format(rating)}",
-            color = Gold, fontWeight = FontWeight.Bold, fontSize = 9.sp,
-            modifier = Modifier.background(Color.Black.copy(alpha = .7f), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 2.dp),
+            color = Accent, fontWeight = FontWeight.Bold, fontSize = 9.sp,
+            modifier = Modifier.background(Color.Black.copy(alpha = .75f), RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 2.dp),
         )
     }
 }
@@ -182,7 +185,7 @@ fun TvTextField(value: String, label: String, password: Boolean = false, modifie
     OutlinedTextField(
         value = value,
         onValueChange = onChange,
-        label = { Text(label, color = Muted, fontSize = 11.sp) },
+        label = { Text(label, color = Muted, fontSize = 12.sp) },
         singleLine = true,
         visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
         colors = OutlinedTextFieldDefaults.colors(
@@ -198,7 +201,7 @@ fun TvTextField(value: String, label: String, password: Boolean = false, modifie
         ),
         shape = RoundedCornerShape(6.dp),
         modifier = modifier.then(if (modifier == Modifier) Modifier.fillMaxWidth() else Modifier),
-        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp),
+        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp),
     )
 }
 
@@ -207,8 +210,8 @@ fun LoadingView(error: String) {
     Box(Modifier.fillMaxSize().background(Bg), contentAlignment = Alignment.Center) {
         if (error.isBlank()) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
-                Text("Loading\u2026", color = Muted, fontSize = 13.sp)
+                CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+                Text("Loading\u2026", color = Muted, fontSize = 14.sp)
             }
         } else {
             Text(error, color = ErrorRed, fontSize = 14.sp)

@@ -1,6 +1,8 @@
 package dev.popcorn.tv
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -20,9 +22,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,6 +44,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -49,30 +55,61 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.max
 
 @Composable
-fun <T> PosterGrid(entries: List<T>, key: (T) -> Any, content: @Composable (T, Boolean, Int, FocusRequester) -> Unit) {
+fun <T> PosterGrid(
+    entries: List<T>,
+    key: (T) -> Any,
+    initialFocusKey: Any? = null,
+    alphabetTitle: ((T) -> String)? = null,
+    alphabetEntries: List<AlphabetEntry> = emptyList(),
+    onAlphabet: ((AlphabetEntry) -> Unit)? = null,
+    content: @Composable (T, Boolean, Int, FocusRequester) -> Unit,
+) {
     val firstKey = entries.firstOrNull()?.let { key(it) }
-    var initialFocusPending by remember(firstKey) { mutableStateOf(true) }
+    val targetKey = initialFocusKey?.takeIf { requested -> entries.any { key(it) == requested } } ?: firstKey
+    var initialFocusPending by remember(firstKey, targetKey) { mutableStateOf(true) }
+    val gridState = rememberLazyGridState()
+    val alphabetIndex = remember(entries, alphabetTitle, alphabetEntries, onAlphabet) {
+        if (alphabetEntries.isNotEmpty()) {
+            alphabetEntries.associateBy { it.letter }
+        } else if (alphabetTitle == null || onAlphabet != null) {
+            emptyMap()
+        } else {
+            val out = linkedMapOf<String, AlphabetEntry>()
+            entries.forEachIndexed { index, item ->
+                val letter = alphabetLetter(alphabetTitle.invoke(item))
+                val existing = out[letter]
+                if (existing == null) {
+                    out[letter] = AlphabetEntry(letter, index, 1)
+                } else {
+                    out[letter] = existing.copy(count = existing.count + 1)
+                }
+            }
+            out
+        }
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val horizontalPadding = 32f * 2f
-        val minCellWidth = 120f
-        val spacing = 10f
+        val minCellWidth = 118f
+        val spacing = 12f
         val columns = max(1, ((maxWidth.value - horizontalPadding + spacing) / (minCellWidth + spacing)).toInt())
         LazyVerticalGrid(
-            columns = GridCells.Adaptive(120.dp),
+            columns = GridCells.Adaptive(118.dp),
+            state = gridState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 32.dp, end = 32.dp, top = 16.dp, bottom = 28.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(start = 32.dp, end = if (alphabetIndex.isEmpty()) 32.dp else 58.dp, top = 16.dp, bottom = 28.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             gridItemsIndexed(entries, key = { _, item -> key(item) }) { index, item ->
                 val focusRequester = remember { FocusRequester() }
-                val focusNow = initialFocusPending && index == 0
+                val focusNow = initialFocusPending && targetKey != null && key(item) == targetKey
                 if (focusNow) {
                     LaunchedEffect(key(item)) {
                         delay(450)
@@ -81,6 +118,66 @@ fun <T> PosterGrid(entries: List<T>, key: (T) -> Any, content: @Composable (T, B
                 }
                 content(item, focusNow, index % columns, focusRequester)
             }
+        }
+        if (alphabetIndex.isNotEmpty()) {
+            AlphabetRail(
+                index = alphabetIndex,
+                gridState = gridState,
+                onAlphabet = onAlphabet,
+                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 10.dp),
+            )
+        }
+    }
+}
+
+private fun alphabetLetter(title: String): String {
+    val ch = title.trim().firstOrNull() ?: return "#"
+    return if (ch.isLetter()) ch.uppercaseChar().toString() else "#"
+}
+
+@Composable
+private fun AlphabetRail(index: Map<String, AlphabetEntry>, gridState: LazyGridState, onAlphabet: ((AlphabetEntry) -> Unit)?, modifier: Modifier = Modifier) {
+    val scope = rememberCoroutineScope()
+    val letters = listOf("#") + ('A'..'Z').map { it.toString() }
+    Column(
+        modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(SurfaceColor.copy(alpha = .85f))
+            .border(1.dp, Line, RoundedCornerShape(10.dp))
+            .padding(vertical = 5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        letters.forEach { letter ->
+            var focused by remember { mutableStateOf(false) }
+            val target = index[letter]
+            Text(
+                letter,
+                color = when {
+                    target == null -> Muted.copy(alpha = .3f)
+                    focused -> Color.Black
+                    else -> TextColor
+                },
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Black,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier
+                    .width(26.dp)
+                    .height(17.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(if (focused && target != null) Accent else Color.Transparent)
+                    .onFocusChanged { focused = it.isFocused }
+                    .focusable(enabled = target != null)
+                    .tvActivate {
+                        if (target != null) {
+                            if (onAlphabet != null) {
+                                onAlphabet(target)
+                            } else {
+                                scope.launch { gridState.scrollToItem(target.offset) }
+                            }
+                        }
+                    }
+                    .padding(top = 1.dp),
+            )
         }
     }
 }
@@ -105,8 +202,8 @@ fun ShowCard(
             if (watched) SeenBadge()
             if (watchlisted) WatchlistBadge()
         }
-        Spacer(Modifier.height(4.dp))
-        Text(show.title, color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(5.dp))
+        Text(show.title, color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text("${show.seasonCount}S \u00b7 ${show.episodeCount}E", color = Muted, fontSize = 10.sp)
     }
 }
@@ -131,10 +228,10 @@ fun ItemCard(
             if (watched) SeenBadge()
             if (watchlisted) WatchlistBadge()
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(5.dp))
         Text(
             if (item.kind == "episode") item.episodeTitle.ifBlank { item.title } else item.title,
-            color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
         val meta = listOfNotNull(
             item.year.takeIf { it > 0 }?.toString(),
@@ -151,8 +248,8 @@ fun BoxScope.SeenBadge() {
             .align(Alignment.TopStart)
             .padding(5.dp)
             .clip(RoundedCornerShape(4.dp))
-            .background(Accent.copy(alpha = .92f))
-            .padding(horizontal = 5.dp, vertical = 2.dp),
+            .background(Accent.copy(alpha = .95f))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
     ) {
         Text("Seen", color = Color.Black, fontSize = 9.sp, fontWeight = FontWeight.Black)
     }
@@ -165,8 +262,8 @@ fun BoxScope.WatchlistBadge() {
             .align(Alignment.TopEnd)
             .padding(5.dp)
             .clip(RoundedCornerShape(4.dp))
-            .background(Gold.copy(alpha = .94f))
-            .padding(horizontal = 5.dp, vertical = 2.dp),
+            .background(Color.White.copy(alpha = .90f))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
     ) {
         Text("List", color = Color.Black, fontSize = 9.sp, fontWeight = FontWeight.Black)
     }
@@ -187,11 +284,12 @@ fun EpisodeRow(session: Session?, item: PopItem, watched: Boolean = false, watch
     }
     Row(
         Modifier
+            .widthIn(max = TvDetailMaxWidth)
             .fillMaxWidth()
             .padding(horizontal = 32.dp, vertical = 2.dp)
             .clip(CardShape)
             .background(if (focused) Surface2 else SurfaceColor)
-            .border(1.dp, if (focused) FocusGlow else Color.Transparent, CardShape)
+            .border(2.dp, if (focused) FocusGlow else Color.Transparent, CardShape)
             .focusRequester(focusRequester)
             .onFocusChanged {
                 focused = it.isFocused
@@ -247,7 +345,7 @@ fun EpisodeRow(session: Session?, item: PopItem, watched: Boolean = false, watch
                     imageUrl(session, item.id, "poster", item.posterMtimeUnix)
                 } else null
                 if (thumbUrl != null) {
-                    SizedAsyncImage(model = thumbUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, widthPx = 260, heightPx = 150)
+                    SizedAsyncImage(model = thumbUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, widthPx = 260, heightPx = 150, authToken = session.token)
                 }
             }
             Text(
@@ -296,7 +394,7 @@ fun WatchActionOverlay(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = .58f))
+            .background(Color.Black.copy(alpha = .65f))
             .onKeyEvent {
                 if (it.type == KeyEventType.KeyUp && it.key == Key.Back) {
                     onDismiss()
@@ -309,14 +407,14 @@ fun WatchActionOverlay(
     ) {
         Column(
             Modifier
-                .width(320.dp)
-                .clip(CardShape)
+                .width(340.dp)
+                .clip(RoundedCornerShape(10.dp))
                 .background(SurfaceColor)
-                .border(1.dp, Line, CardShape)
-                .padding(16.dp),
+                .border(1.dp, Line, RoundedCornerShape(10.dp))
+                .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Text(title, color = TextColor, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(title, color = TextColor, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Text(
                 listOf(
                     if (watched) "Watched" else "Unwatched",
@@ -325,6 +423,7 @@ fun WatchActionOverlay(
                 color = Muted,
                 fontSize = 12.sp,
             )
+            Spacer(Modifier.height(4.dp))
             FocusButton("Mark watched", primary = !watched, modifier = Modifier.focusRequester(firstFocus)) { onMarkWatched() }
             FocusButton("Mark unwatched", primary = watched) { onMarkUnwatched() }
             FocusButton("Add to watchlist", primary = !watchlisted) { onAddWatchlist() }
@@ -334,8 +433,10 @@ fun WatchActionOverlay(
     }
 }
 
+// Card container with scale-on-focus animation and white border highlight.
 @Composable
 fun CardShell(
+    modifier: Modifier = Modifier,
     autoFocus: Boolean = false,
     focusRequester: FocusRequester? = null,
     onFocus: (() -> Unit)? = null,
@@ -349,6 +450,13 @@ fun CardShell(
     var longPressJob by remember { mutableStateOf<Job?>(null) }
     val requester = focusRequester ?: remember { FocusRequester() }
     val scope = rememberCoroutineScope()
+
+    val scale by animateFloatAsState(
+        targetValue = if (focused) 1.06f else 1f,
+        animationSpec = tween(durationMillis = 150),
+        label = "cardScale",
+    )
+
     LaunchedEffect(autoFocus) {
         if (autoFocus) {
             delay(200)
@@ -356,10 +464,8 @@ fun CardShell(
         }
     }
     Column(
-        Modifier
-            .clip(CardShape)
-            .border(2.dp, if (focused) FocusGlow else Color.Transparent, CardShape)
-            .background(if (focused) Surface2 else Color.Transparent)
+        modifier
+            .zIndex(if (focused) 1f else 0f)
             .focusRequester(requester)
             .onFocusChanged {
                 focused = it.isFocused
@@ -401,7 +507,14 @@ fun CardShell(
                 }
             }
             .clickable(onClick = onClick)
-            .padding(if (focused) 5.dp else 4.dp),
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(CardShape)
+            .border(2.dp, if (focused) FocusGlow else Color.Transparent, CardShape)
+            .background(if (focused) Surface2 else Color.Transparent)
+            .padding(4.dp),
         content = content,
     )
 }

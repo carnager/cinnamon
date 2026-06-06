@@ -1,13 +1,18 @@
 package server
 
 import (
+	"archive/zip"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"os"
+	"path"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -137,11 +142,6 @@ func (a *App) traktImportWatched(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	allHistoryDebug, err := a.traktAllHistoryDebug(r.Context(), account.AccessToken)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
 	traktStats, err := a.traktUserStats(r.Context(), account.AccessToken)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -158,12 +158,14 @@ func (a *App) traktImportWatched(w http.ResponseWriter, r *http.Request) {
 			SyncWatchedMovies: movieSource.SyncWatched,
 			UserWatchedMovies: movieSource.UserWatched,
 			HistoryMovies:     movieSource.History,
+			AllHistoryMovies:  movieSource.AllHistoryMovies,
 			SyncWatchedShows:  showSource.SyncWatched,
 			UserWatchedShows:  showSource.UserWatched,
-			AllHistory:        allHistoryDebug.Items,
+			AllHistory:        movieSource.AllHistory,
 			TraktStats:        &traktStats,
 			TraktSources: map[string]traktPageDebug{
-				"allHistory":        allHistoryDebug,
+				"allHistory":        movieSource.AllHistoryDebug,
+				"allHistoryMovies":  {Items: movieSource.AllHistoryMovies},
 				"syncWatchedMovies": movieSource.SyncWatchedDebug,
 				"userWatchedMovies": movieSource.UserWatchedDebug,
 				"historyMovies":     movieSource.HistoryDebug,
@@ -240,10 +242,80 @@ func (a *App) traktImportExport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	items, err := a.store.AllItems(r.Context())
+	summary, err := a.importTraktExportSource(r.Context(), user.ID, export)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
+func (a *App) traktImportExportUpload(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 256*1024*1024)
+	if err := r.ParseMultipartForm(256 * 1024 * 1024); err != nil {
+		http.Error(w, "invalid upload: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	tempDir, err := os.MkdirTemp("", "popcorn-trakt-export-*")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer os.RemoveAll(tempDir)
+
+	files := r.MultipartForm.File["files"]
+	if len(files) == 0 {
+		files = r.MultipartForm.File["export"]
+	}
+	if len(files) == 0 {
+		http.Error(w, "upload a Trakt export zip or JSON files", http.StatusBadRequest)
+		return
+	}
+	if len(files) == 1 && strings.EqualFold(filepath.Ext(files[0].Filename), ".zip") {
+		zipPath := filepath.Join(tempDir, "export.zip")
+		if err := saveUploadedFile(files[0], zipPath); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := extractZip(zipPath, tempDir); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	} else {
+		for _, file := range files {
+			rel, err := safeUploadPath(file.Filename)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if err := saveUploadedFile(file, filepath.Join(tempDir, rel)); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
+	export, err := readTraktExport(tempDir)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	summary, err := a.importTraktExportSource(r.Context(), user.ID, export)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, summary)
+}
+
+func (a *App) importTraktExportSource(ctx context.Context, userID int64, export traktExportSource) (traktImportSummary, error) {
+	items, err := a.store.AllItems(ctx)
+	if err != nil {
+		return traktImportSummary{}, err
 	}
 	index := newTraktImportIndex(items)
 	summary := traktImportSummary{
@@ -266,6 +338,7 @@ func (a *App) traktImportExport(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	seen := map[int64]struct{}{}
+	markedItems := []media.Item{}
 	for _, movie := range export.Movies {
 		item, method := index.matchMovie(movie.Movie.Title, movie.Movie.Year, movie.Movie.IDs)
 		if item == nil {
@@ -276,11 +349,11 @@ func (a *App) traktImportExport(w http.ResponseWriter, r *http.Request) {
 		if _, ok := seen[item.ID]; ok {
 			continue
 		}
-		if err := markItemWatched(r.Context(), a.store, user.ID, *item); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		if err := markItemWatched(ctx, a.store, userID, *item); err != nil {
+			return traktImportSummary{}, err
 		}
 		seen[item.ID] = struct{}{}
+		markedItems = append(markedItems, *item)
 		summary.MoviesMatched++
 		summary.ItemsMarked++
 		summary.Debug.MatchedMovies = append(summary.Debug.MatchedMovies, fmt.Sprintf("%s (%d) -> %s [%s]", movie.Movie.Title, movie.Movie.Year, item.Title, method))
@@ -296,16 +369,94 @@ func (a *App) traktImportExport(w http.ResponseWriter, r *http.Request) {
 		if _, ok := seen[item.ID]; ok {
 			continue
 		}
-		if err := markItemWatched(r.Context(), a.store, user.ID, *item); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		if err := markItemWatched(ctx, a.store, userID, *item); err != nil {
+			return traktImportSummary{}, err
 		}
 		seen[item.ID] = struct{}{}
+		markedItems = append(markedItems, *item)
 		summary.EpisodesMatched++
 		summary.ItemsMarked++
 		summary.Debug.MatchedEpisodes = appendSample(summary.Debug.MatchedEpisodes, fmt.Sprintf("%s -> %s [%s]", label, item.Title, method))
 	}
-	writeJSON(w, http.StatusOK, summary)
+	if len(markedItems) > 0 {
+		go a.traktSyncHistoryItems(userID, markedItems, false)
+	}
+	return summary, nil
+}
+
+func saveUploadedFile(file *multipart.FileHeader, dest string) error {
+	src, err := file.Open()
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, src)
+	return err
+}
+
+func extractZip(zipPath, dest string) error {
+	zr, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+	var total int64
+	for _, entry := range zr.File {
+		rel, err := safeUploadPath(entry.Name)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dest, rel)
+		if entry.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		total += int64(entry.UncompressedSize64)
+		if total > 512*1024*1024 {
+			return fmt.Errorf("uploaded Trakt export is too large after extraction")
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		src, err := entry.Open()
+		if err != nil {
+			return err
+		}
+		out, err := os.Create(target)
+		if err != nil {
+			src.Close()
+			return err
+		}
+		_, copyErr := io.Copy(out, src)
+		closeErr := out.Close()
+		src.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	return nil
+}
+
+func safeUploadPath(name string) (string, error) {
+	name = strings.ReplaceAll(strings.TrimSpace(name), "\\", "/")
+	clean := strings.TrimPrefix(path.Clean("/"+name), "/")
+	if clean == "" || clean == "." || strings.HasPrefix(clean, "../") || path.IsAbs(clean) {
+		return "", fmt.Errorf("invalid upload path %q", name)
+	}
+	return filepath.FromSlash(clean), nil
 }
 
 func (a *App) traktImportWatchlist(w http.ResponseWriter, r *http.Request) {
@@ -327,7 +478,7 @@ func (a *App) traktImportWatchlist(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	shows, err := a.store.ListShows(r.Context(), "", "", "", "", 1000, 0)
+	shows, err := a.store.ListShows(r.Context(), "", "", "", "", 0, 1000, 0)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

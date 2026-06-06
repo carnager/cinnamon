@@ -3,6 +3,7 @@
 .claude/
 Screenshots/
 dist/
+updates/
 .gradle/
 build/
 android-tv/.gradle/

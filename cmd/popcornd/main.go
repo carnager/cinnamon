@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"log/slog"
@@ -39,12 +41,23 @@ func main() {
 	store := media.NewStore(db)
 	authStore := auth.NewStore(db)
 	adminUser := envDefault("POPCORN_ADMIN_USER", "admin")
-	adminPassword := envDefault("POPCORN_ADMIN_PASSWORD", "popcorn")
+	adminPassword, passwordFromEnv := os.LookupEnv("POPCORN_ADMIN_PASSWORD")
+	if !passwordFromEnv {
+		adminPassword, err = randomBootstrapPassword()
+		if err != nil {
+			log.Error("generate bootstrap admin password", "error", err)
+			os.Exit(1)
+		}
+	}
 	if created, user, err := authStore.EnsureBootstrap(context.Background(), adminUser, adminPassword); err != nil {
 		log.Error("bootstrap admin user", "error", err)
 		os.Exit(1)
 	} else if created {
-		log.Warn("created bootstrap admin user", "username", user.Username, "passwordEnv", "POPCORN_ADMIN_PASSWORD")
+		if passwordFromEnv {
+			log.Warn("created bootstrap admin user", "username", user.Username, "passwordEnv", "POPCORN_ADMIN_PASSWORD")
+		} else {
+			log.Warn("created bootstrap admin user with generated password", "username", user.Username, "password", adminPassword, "passwordEnv", "POPCORN_ADMIN_PASSWORD")
+		}
 	}
 	app := server.New(server.Options{
 		Config: cfg,
@@ -94,6 +107,14 @@ func envDefault(key, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+func randomBootstrapPassword() (string, error) {
+	b := make([]byte, 18)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 func logLevel(level string) slog.Level {

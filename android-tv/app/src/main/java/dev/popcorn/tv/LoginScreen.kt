@@ -1,6 +1,7 @@
 package dev.popcorn.tv
 
 import android.graphics.Bitmap
+import android.util.Log
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -223,11 +224,13 @@ private fun qrBitmap(payload: String, size: Int): Bitmap {
 }
 
 private fun ServerSocket.acceptShieldSetup(expectedCode: String): Session {
+    Log.i("PopcornQR", "Waiting for phone setup on ${localSocketAddress}")
     val socket = accept()
     socket.use {
         it.soTimeout = 30000
         val reader = it.getInputStream().bufferedReader()
         val requestLine = reader.readLine().orEmpty()
+        Log.i("PopcornQR", "Phone setup request: $requestLine from ${it.remoteSocketAddress}")
         var contentLength = 0
         while (true) {
             val line = reader.readLine() ?: ""
@@ -254,11 +257,27 @@ private fun ServerSocket.acceptShieldSetup(expectedCode: String): Session {
         }
         if (!requestLine.startsWith("POST /pair ")) {
             respond("404 Not Found", """{"error":"not found"}""")
+            Log.w("PopcornQR", "Invalid setup path: $requestLine")
             error("invalid setup request")
         }
-        val json = JSONObject(String(bodyChars, 0, read))
+        if (contentLength <= 0) {
+            respond("411 Length Required", """{"error":"content length is required"}""")
+            Log.w("PopcornQR", "Phone setup request had no body length")
+            error("phone setup request had no body length")
+        }
+        if (read != contentLength) {
+            respond("400 Bad Request", """{"error":"incomplete request body"}""")
+            Log.w("PopcornQR", "Incomplete setup body: read=$read contentLength=$contentLength")
+            error("incomplete setup request body")
+        }
+        val json = runCatching { JSONObject(String(bodyChars, 0, read)) }.getOrElse { err ->
+            respond("400 Bad Request", """{"error":"invalid json"}""")
+            Log.w("PopcornQR", "Invalid setup json", err)
+            error("invalid setup json")
+        }
         if (json.optString("code") != expectedCode) {
             respond("403 Forbidden", """{"error":"invalid code"}""")
+            Log.w("PopcornQR", "Invalid setup code")
             error("invalid setup code")
         }
         val server = json.optString("server").trimEnd('/')
@@ -266,9 +285,11 @@ private fun ServerSocket.acceptShieldSetup(expectedCode: String): Session {
         val username = json.optString("username")
         if (server.isBlank() || token.isBlank()) {
             respond("400 Bad Request", """{"error":"server and token are required"}""")
+            Log.w("PopcornQR", "Phone setup missing server/token")
             error("phone did not send server and token")
         }
         respond("200 OK", """{"ok":true}""")
+        Log.i("PopcornQR", "Phone setup accepted for $server user=$username")
         return Session(server, token, username)
     }
 }

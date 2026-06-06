@@ -108,7 +108,7 @@ fun MiniPlayer(session: Session, state: PlayerState, target: PlaybackTarget, onP
         ) {
             Box(Modifier.size(50.dp).clip(RoundedCornerShape(7.dp)).background(Surface2), contentAlignment = Alignment.Center) {
                 if (state.itemId > 0) {
-                    AsyncImage(imageUrl(session, state.itemId, 0), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                    AuthAsyncImage(session, imageUrl(session, state.itemId, 0), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 } else {
                     Text("♪", color = Muted, fontSize = 20.sp)
                 }
@@ -165,7 +165,7 @@ fun RemotePage(
         item {
             Box(Modifier.fillMaxWidth(.78f).aspectRatio(1f).clip(RoundedCornerShape(26.dp)).background(Surface2), contentAlignment = Alignment.Center) {
                 if (state.itemId > 0) {
-                    AsyncImage(imageUrl(session, state.itemId, 0), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                    AuthAsyncImage(session, imageUrl(session, state.itemId, 0), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
                 } else {
                     Text("♪", color = Muted, fontSize = 56.sp)
                 }

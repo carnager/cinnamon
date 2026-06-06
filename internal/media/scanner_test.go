@@ -71,6 +71,27 @@ func TestReadNFOIDsFromTinyMediaManagerXML(t *testing.T) {
 	}
 }
 
+func TestBestRatingPrefersIMDbThenTVDb(t *testing.T) {
+	ratings := []nfoRating{
+		{Name: "tmdb", Default: "true", Max: 10, Value: 6.2},
+		{Name: "tvdb", Max: 10, Value: 7.1},
+		{Name: "imdb", Max: 10, Value: 8.4},
+	}
+	if got := bestRating(5.5, ratings); got != 8.4 {
+		t.Fatalf("bestRating with imdb = %.1f, want 8.4", got)
+	}
+}
+
+func TestBestRatingFallsBackToTVDbWhenIMDbMissing(t *testing.T) {
+	ratings := []nfoRating{
+		{Name: "tmdb", Default: "true", Max: 10, Value: 6.2},
+		{Name: "TheTVDB", Max: 10, Value: 7.1},
+	}
+	if got := bestRating(5.5, ratings); got != 7.1 {
+		t.Fatalf("bestRating without imdb = %.1f, want TVDb 7.1", got)
+	}
+}
+
 func TestBuildItemRefreshesNFOAndArtworkForUnchangedMovie(t *testing.T) {
 	root := t.TempDir()
 	movieDir := filepath.Join(root, "Movies", "Hoppers")
@@ -144,14 +165,22 @@ func TestBuildItemUsesTVShowMetadataAndArtwork(t *testing.T) {
 	mustWrite(t, showNFO, `<tvshow>
   <title>Battlestar Galactica</title>
   <originaltitle>BSG</originaltitle>
+  <plot>The last battlestar leads the fleet.</plot>
   <rating>8.6</rating>
+  <actor><name>Edward James Olmos</name><role>William Adama</role><order>1</order></actor>
 </tvshow>`)
 	mustWrite(t, episodeNFO, `<episodedetails>
   <title>33</title>
   <season>1</season>
   <episode>1</episode>
   <plot>The fleet keeps jumping.</plot>
+  <actor><name>Mary McDonnell</name><role>Laura Roslin</role></actor>
 </episodedetails>`)
+	mustWrite(t, filepath.Join(seasonDir, "season.nfo"), `<season>
+  <title>Season One</title>
+  <plot>The opening season.</plot>
+  <actor><name>Katee Sackhoff</name><role>Kara Thrace</role></actor>
+</season>`)
 	mustWrite(t, showPoster, "poster")
 	mustWrite(t, showBackdrop, "backdrop")
 	mustWrite(t, seasonPoster, "season poster")
@@ -178,11 +207,24 @@ func TestBuildItemUsesTVShowMetadataAndArtwork(t *testing.T) {
 	if item.SeasonNumber != 1 || item.EpisodeNumber != 1 {
 		t.Fatalf("episode numbers = S%dE%d, want S1E1", item.SeasonNumber, item.EpisodeNumber)
 	}
-	if item.OriginalTitle != "BSG" || item.Rating != 8.6 {
-		t.Fatalf("show metadata fallback = original %q rating %.1f, want BSG / 8.6", item.OriginalTitle, item.Rating)
+	if item.OriginalTitle != "BSG" || item.Rating != 0 {
+		t.Fatalf("show metadata fallback = original %q rating %.1f, want original title BSG but no inherited episode rating", item.OriginalTitle, item.Rating)
 	}
-	if item.NFOMTimeUnix != maxInt64(fileMTimeUnix(episodeNFO), fileMTimeUnix(showNFO)) {
-		t.Fatalf("NFOMTimeUnix = %d, want max episode/show nfo mtime", item.NFOMTimeUnix)
+	if item.Overview != "The fleet keeps jumping." {
+		t.Fatalf("Overview = %q, want episode sidecar plot", item.Overview)
+	}
+	seasonNFO := filepath.Join(seasonDir, "season.nfo")
+	if item.NFOMTimeUnix != maxInt64(maxInt64(fileMTimeUnix(episodeNFO), fileMTimeUnix(showNFO)), fileMTimeUnix(seasonNFO)) {
+		t.Fatalf("NFOMTimeUnix = %d, want max episode/show/season nfo mtime", item.NFOMTimeUnix)
+	}
+	if len(item.Actors) != 1 || item.Actors[0].Name != "Mary McDonnell" || item.Actors[0].Role != "Laura Roslin" {
+		t.Fatalf("Actors = %#v, want episode actor", item.Actors)
+	}
+	if item.ShowMetadata == nil || len(item.ShowMetadata.Actors) != 1 || item.ShowMetadata.Actors[0].Name != "Edward James Olmos" {
+		t.Fatalf("ShowMetadata actors = %#v, want show actor", item.ShowMetadata)
+	}
+	if item.SeasonMetadata == nil || item.SeasonMetadata.Title != "Season One" || len(item.SeasonMetadata.Actors) != 1 || item.SeasonMetadata.Actors[0].Name != "Katee Sackhoff" {
+		t.Fatalf("SeasonMetadata = %#v, want season nfo metadata and actor", item.SeasonMetadata)
 	}
 	if item.PosterPath != showPoster {
 		t.Fatalf("PosterPath = %q, want show poster %q", item.PosterPath, showPoster)
@@ -192,6 +234,35 @@ func TestBuildItemUsesTVShowMetadataAndArtwork(t *testing.T) {
 	}
 	if got := SeasonArtworkPath(video, 1); got != seasonPoster {
 		t.Fatalf("SeasonArtworkPath = %q, want %q", got, seasonPoster)
+	}
+}
+
+func TestBuildItemUsesPlainEpisodeSidecarImage(t *testing.T) {
+	root := t.TempDir()
+	showDir := filepath.Join(root, "Widow's Bay")
+	seasonDir := filepath.Join(showDir, "Season 01")
+	mustMkdirAll(t, seasonDir)
+	video := filepath.Join(seasonDir, "Widow's Bay - S01E05 - Was Sie auf Ihrer Reise erwartet.mkv")
+	episodeImage := filepath.Join(seasonDir, "Widow's Bay - S01E05 - Was Sie auf Ihrer Reise erwartet.jpg")
+	showPoster := filepath.Join(showDir, "poster.jpg")
+	mustWrite(t, video, "fake video")
+	mustWrite(t, filepath.Join(seasonDir, "Widow's Bay - S01E05 - Was Sie auf Ihrer Reise erwartet.nfo"), `<episodedetails>
+  <title>Was Sie auf Ihrer Reise erwartet</title>
+  <season>1</season>
+  <episode>5</episode>
+</episodedetails>`)
+	mustWrite(t, showPoster, "show poster")
+	mustWrite(t, episodeImage, "episode image")
+
+	info := mustStat(t, video)
+	scanner := NewScanner(config.Config{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	item := scanner.buildItem(context.Background(), config.Library{ID: "tv", Type: "tv", Path: root}, video, info, Item{})
+
+	if item.PosterPath != showPoster {
+		t.Fatalf("PosterPath = %q, want show poster %q", item.PosterPath, showPoster)
+	}
+	if item.BackdropPath != episodeImage {
+		t.Fatalf("BackdropPath = %q, want plain episode image %q", item.BackdropPath, episodeImage)
 	}
 }
 

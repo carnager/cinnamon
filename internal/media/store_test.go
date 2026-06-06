@@ -49,12 +49,353 @@ func TestStoreSearchesOriginalTitles(t *testing.T) {
 		t.Fatalf("search by episode original title returned %#v, want Money Heist episode", items)
 	}
 
-	shows, err := store.ListShows(ctx, "tv", "Casa", "", "", 10, 0)
+	shows, err := store.ListShows(ctx, "tv", "Casa", "", "", 0, 10, 0)
 	if err != nil {
 		t.Fatalf("list shows by original title: %v", err)
 	}
 	if len(shows) != 1 || shows[0].Title != "Money Heist" {
 		t.Fatalf("list shows by original title returned %#v, want Money Heist", shows)
+	}
+}
+
+func TestStoreFiltersItemsByGenreRatingAndMTime(t *testing.T) {
+	store, ctx := newTestStore(t)
+	oldLow := upsertTestItem(t, ctx, store, Item{
+		LibraryID: "movies",
+		Kind:      "movie",
+		Title:     "Old Action",
+		SortTitle: "old action",
+		Path:      "/media/movies/old-action.mkv",
+		Genres:    "Action / Thriller",
+		Rating:    6.2,
+		MTimeUnix: 10,
+	})
+	newHigh := upsertTestItem(t, ctx, store, Item{
+		LibraryID: "movies",
+		Kind:      "movie",
+		Title:     "New Action",
+		SortTitle: "new action",
+		Path:      "/media/movies/new-action.mkv",
+		Genres:    "Action",
+		Rating:    8.4,
+		MTimeUnix: 20,
+	})
+	upsertTestItem(t, ctx, store, Item{
+		LibraryID: "movies",
+		Kind:      "movie",
+		Title:     "Drama",
+		SortTitle: "drama",
+		Path:      "/media/movies/drama.mkv",
+		Genres:    "Drama",
+		Rating:    9.1,
+		MTimeUnix: 30,
+	})
+
+	items, err := store.ListItems(ctx, "movies", "", "Action", "mtime", 7, 10, 0)
+	if err != nil {
+		t.Fatalf("list filtered items: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != newHigh.ID {
+		t.Fatalf("filtered items = %#v, want only new high-rated action movie", items)
+	}
+
+	items, err = store.ListItems(ctx, "movies", "", "Action", "mtime", 0, 10, 0)
+	if err != nil {
+		t.Fatalf("list mtime sorted items: %v", err)
+	}
+	if len(items) != 2 || items[0].ID != newHigh.ID || items[1].ID != oldLow.ID {
+		t.Fatalf("mtime sorted action items = %#v, want new then old", items)
+	}
+}
+
+func TestStoreFiltersShowsByGenreRatingAndMTime(t *testing.T) {
+	store, ctx := newTestStore(t)
+	newHigh := episodeItem("New Action Show", 1, 1)
+	newHigh.Genres = "Action"
+	newHigh.Rating = 8.7
+	newHigh.MTimeUnix = 30
+	upsertTestItem(t, ctx, store, newHigh)
+	oldLow := episodeItem("Old Action Show", 1, 1)
+	oldLow.Genres = "Action"
+	oldLow.Rating = 6.1
+	oldLow.MTimeUnix = 10
+	upsertTestItem(t, ctx, store, oldLow)
+	drama := episodeItem("Drama Show", 1, 1)
+	drama.Genres = "Drama"
+	drama.Rating = 9.0
+	drama.MTimeUnix = 40
+	upsertTestItem(t, ctx, store, drama)
+
+	shows, err := store.ListShows(ctx, "tv", "", "Action", "mtime", 7, 10, 0)
+	if err != nil {
+		t.Fatalf("list filtered shows: %v", err)
+	}
+	if len(shows) != 1 || shows[0].Title != "New Action Show" {
+		t.Fatalf("filtered shows = %#v, want only new high-rated action show", shows)
+	}
+
+	shows, err = store.ListShows(ctx, "tv", "", "Action", "mtime", 0, 10, 0)
+	if err != nil {
+		t.Fatalf("list mtime sorted shows: %v", err)
+	}
+	if len(shows) != 2 || shows[0].Title != "New Action Show" || shows[1].Title != "Old Action Show" {
+		t.Fatalf("mtime sorted action shows = %#v, want new then old", shows)
+	}
+}
+
+func TestAlphabetIndexKeepsBracketedTitlesUnderHash(t *testing.T) {
+	store, ctx := newTestStore(t)
+	upsertTestItem(t, ctx, store, Item{
+		LibraryID: "movies",
+		Kind:      "movie",
+		Title:     "[REC]",
+		SortTitle: "[rec]",
+		Path:      "/media/movies/rec.mkv",
+	})
+	upsertTestItem(t, ctx, store, Item{
+		LibraryID: "movies",
+		Kind:      "movie",
+		Title:     "Rambo",
+		SortTitle: "rambo",
+		Path:      "/media/movies/rambo.mkv",
+	})
+
+	entries, err := store.AlphabetIndex(ctx, AlphabetOptions{LibraryID: "movies", Kind: "movie"})
+	if err != nil {
+		t.Fatalf("alphabet index: %v", err)
+	}
+	if len(entries) < 2 {
+		t.Fatalf("alphabet entries = %#v, want # and R", entries)
+	}
+	if entries[0].Letter != "#" || entries[0].Offset != 0 || entries[0].Count != 1 {
+		t.Fatalf("first alphabet entry = %#v, want [REC] under # at offset 0", entries[0])
+	}
+	if entries[1].Letter != "R" || entries[1].Offset != 1 || entries[1].Count != 1 {
+		t.Fatalf("second alphabet entry = %#v, want Rambo under R at offset 1", entries[1])
+	}
+}
+
+func TestSearchItemsFiltersNameStartsWith(t *testing.T) {
+	store, ctx := newTestStore(t)
+	upsertTestItem(t, ctx, store, Item{
+		LibraryID: "movies",
+		Kind:      "movie",
+		Title:     "[REC]",
+		SortTitle: "[rec]",
+		Path:      "/media/movies/rec.mkv",
+	})
+	panicRoom := upsertTestItem(t, ctx, store, Item{
+		LibraryID: "movies",
+		Kind:      "movie",
+		Title:     "Panic Room",
+		SortTitle: "panic room",
+		Path:      "/media/movies/panic-room.mkv",
+	})
+	prestige := upsertTestItem(t, ctx, store, Item{
+		LibraryID: "movies",
+		Kind:      "movie",
+		Title:     "The Prestige",
+		SortTitle: "prestige",
+		Path:      "/media/movies/prestige.mkv",
+	})
+	upsertTestItem(t, ctx, store, Item{
+		LibraryID: "movies",
+		Kind:      "movie",
+		Title:     "Arrival",
+		SortTitle: "arrival",
+		Path:      "/media/movies/arrival.mkv",
+	})
+
+	items, err := store.SearchItems(ctx, SearchOptions{LibraryID: "movies", Kind: "movie", NameStartsWith: "P", Limit: 10})
+	if err != nil {
+		t.Fatalf("search P: %v", err)
+	}
+	if len(items) != 2 || items[0].ID != panicRoom.ID || items[1].ID != prestige.ID {
+		t.Fatalf("P search returned %#v, want Panic Room and The Prestige", items)
+	}
+
+	items, err = store.SearchItems(ctx, SearchOptions{LibraryID: "movies", Kind: "movie", NameStartsWith: "#", Limit: 10})
+	if err != nil {
+		t.Fatalf("search #: %v", err)
+	}
+	if len(items) != 1 || items[0].Title != "[REC]" {
+		t.Fatalf("# search returned %#v, want [REC]", items)
+	}
+}
+
+func TestSearchItemsTitleOnlySkipsOverviewMatches(t *testing.T) {
+	store, ctx := newTestStore(t)
+	match := upsertTestItem(t, ctx, store, Item{
+		LibraryID: "movies",
+		Kind:      "movie",
+		Title:     "Widows",
+		SortTitle: "widows",
+		Path:      "/media/movies/widows.mkv",
+	})
+	upsertTestItem(t, ctx, store, Item{
+		LibraryID: "movies",
+		Kind:      "movie",
+		Title:     "Not a Match",
+		SortTitle: "not a match",
+		Path:      "/media/movies/not-a-match.mkv",
+		Overview:  "A widow investigates a mystery.",
+	})
+
+	items, err := store.SearchItems(ctx, SearchOptions{LibraryID: "movies", Kind: "movie", Query: "widow", TitleOnly: true, Limit: 10})
+	if err != nil {
+		t.Fatalf("title-only search: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != match.ID {
+		t.Fatalf("title-only search returned %#v, want only title match", items)
+	}
+}
+
+func TestSearchShowsFiltersNameStartsWith(t *testing.T) {
+	store, ctx := newTestStore(t)
+	upsertTestItem(t, ctx, store, episodeItem("1899", 1, 1))
+	upsertTestItem(t, ctx, store, episodeItem("Perry Mason", 1, 1))
+	pacific := episodeItem("The Pacific", 1, 1)
+	pacific.ShowMetadata = &ShowMetadata{LibraryID: "tv", Title: "The Pacific", SortTitle: "pacific"}
+	upsertTestItem(t, ctx, store, pacific)
+	upsertTestItem(t, ctx, store, episodeItem("Yellowjackets", 1, 1))
+
+	shows, err := store.SearchShows(ctx, ShowOptions{LibraryID: "tv", NameStartsWith: "P", Limit: 10})
+	if err != nil {
+		t.Fatalf("search shows P: %v", err)
+	}
+	if len(shows) != 2 || shows[0].Title != "The Pacific" || shows[1].Title != "Perry Mason" {
+		t.Fatalf("P shows returned %#v, want Perry Mason and The Pacific", shows)
+	}
+
+	shows, err = store.SearchShows(ctx, ShowOptions{LibraryID: "tv", NameStartsWith: "#", Limit: 10})
+	if err != nil {
+		t.Fatalf("search shows #: %v", err)
+	}
+	if len(shows) != 1 || shows[0].Title != "1899" {
+		t.Fatalf("# shows returned %#v, want 1899", shows)
+	}
+}
+
+func TestListShowsUsesTVShowNFOForShowMetadata(t *testing.T) {
+	store, ctx := newTestStore(t)
+	root := t.TempDir()
+	showDir := filepath.Join(root, "Lost")
+	seasonDir := filepath.Join(showDir, "Season 01")
+	mustMkdirAll(t, seasonDir)
+	mustWrite(t, filepath.Join(showDir, "tvshow.nfo"), `<tvshow>
+  <title>Lost</title>
+  <originaltitle>Perdidos</originaltitle>
+  <year>2004</year>
+  <plot>Plane crash survivors uncover an island mystery.</plot>
+  <genre>Drama</genre>
+  <genre>Mystery</genre>
+  <rating>8.7</rating>
+  <premiered>2004-09-22</premiered>
+</tvshow>`)
+	upsertTestItem(t, ctx, store, Item{
+		LibraryID:     "tv",
+		Kind:          "episode",
+		Title:         "Lost - S01E01 - Pilot",
+		SortTitle:     "lost 01 01 pilot",
+		Path:          filepath.Join(seasonDir, "Lost - S01E01 - Pilot.mkv"),
+		ShowTitle:     "Lost",
+		SeasonNumber:  1,
+		EpisodeNumber: 1,
+		EpisodeTitle:  "Pilot",
+		Overview:      "Episode-only plot should not become the show plot.",
+		Genres:        "Episode Genre",
+		Rating:        1.2,
+		Premiered:     "2004-09-23",
+		ShowMetadata: &ShowMetadata{
+			LibraryID:     "tv",
+			Title:         "Lost",
+			SortTitle:     "lost",
+			OriginalTitle: "Perdidos",
+			Year:          2004,
+			Overview:      "Plane crash survivors uncover an island mystery.",
+			Genres:        "Drama, Mystery",
+			Rating:        8.7,
+			Premiered:     "2004-09-22",
+		},
+	})
+
+	shows, err := store.ListShows(ctx, "tv", "", "", "", 0, 10, 0)
+	if err != nil {
+		t.Fatalf("list shows: %v", err)
+	}
+	if len(shows) != 1 {
+		t.Fatalf("shows = %#v, want one show", shows)
+	}
+	show := shows[0]
+	if show.Overview != "Plane crash survivors uncover an island mystery." {
+		t.Fatalf("Overview = %q, want tvshow.nfo plot", show.Overview)
+	}
+	if show.OriginalTitle != "Perdidos" || show.Year != 2004 || show.Genres != "Drama, Mystery" || show.Rating != 8.7 || show.Premiered != "2004-09-22" {
+		t.Fatalf("show metadata = %#v, want values from tvshow.nfo", show)
+	}
+}
+
+func TestStorePersistsActorsAndSeasonMetadata(t *testing.T) {
+	store, ctx := newTestStore(t)
+	item := upsertTestItem(t, ctx, store, Item{
+		LibraryID:     "tv",
+		Kind:          "episode",
+		Title:         "Lost - S01E01 - Pilot",
+		SortTitle:     "lost 01 01 pilot",
+		Path:          "/media/tv/Lost/Season 01/Lost - S01E01 - Pilot.mkv",
+		ShowTitle:     "Lost",
+		SeasonNumber:  1,
+		EpisodeNumber: 1,
+		EpisodeTitle:  "Pilot",
+		Actors: []Actor{
+			{Name: "Matthew Fox", Role: "Jack Shephard", Order: 1},
+		},
+		ShowMetadata: &ShowMetadata{
+			LibraryID: "tv",
+			Title:     "Lost",
+			SortTitle: "lost",
+			Actors:    []Actor{{Name: "Evangeline Lilly", Role: "Kate Austen", Order: 1}},
+		},
+		SeasonMetadata: &SeasonMetadata{
+			LibraryID:       "tv",
+			ShowTitle:       "Lost",
+			SeasonNumber:    1,
+			Title:           "Season 1",
+			Overview:        "The crash survivors settle in.",
+			Rating:          8.4,
+			PosterPath:      "/media/tv/Lost/Season 01/poster.jpg",
+			PosterMTimeUnix: 42,
+			Actors:          []Actor{{Name: "Terry O'Quinn", Role: "John Locke", Order: 1}},
+		},
+	})
+
+	stored, err := store.GetItem(ctx, item.ID)
+	if err != nil {
+		t.Fatalf("get item: %v", err)
+	}
+	if len(stored.Actors) != 1 || stored.Actors[0].Name != "Matthew Fox" || stored.Actors[0].Role != "Jack Shephard" {
+		t.Fatalf("item actors = %#v, want stored episode actor", stored.Actors)
+	}
+	showActors, err := store.ListShowActors(ctx, "tv", "Lost")
+	if err != nil {
+		t.Fatalf("show actors: %v", err)
+	}
+	if len(showActors) != 1 || showActors[0].Name != "Evangeline Lilly" {
+		t.Fatalf("show actors = %#v, want stored show actor", showActors)
+	}
+	seasonActors, err := store.ListSeasonActors(ctx, "tv", "Lost", 1)
+	if err != nil {
+		t.Fatalf("season actors: %v", err)
+	}
+	if len(seasonActors) != 1 || seasonActors[0].Name != "Terry O'Quinn" {
+		t.Fatalf("season actors = %#v, want stored season actor", seasonActors)
+	}
+	seasons, err := store.ListSeasons(ctx, "tv", "Lost")
+	if err != nil {
+		t.Fatalf("list seasons: %v", err)
+	}
+	if len(seasons) != 1 || seasons[0].Title != "Season 1" || seasons[0].Overview != "The crash survivors settle in." || seasons[0].Rating != 8.4 || seasons[0].PosterPath != "/media/tv/Lost/Season 01/poster.jpg" || seasons[0].PosterMTimeUnix != 42 {
+		t.Fatalf("season metadata = %#v, want DB-backed season metadata", seasons)
 	}
 }
 
@@ -97,6 +438,18 @@ func TestStoreProgressClampsAndAggregatesShows(t *testing.T) {
 func TestStoreWatchlistReturnsMoviesAndShows(t *testing.T) {
 	store, ctx := newTestStore(t)
 	userID := insertTestUser(t, store, "watchlist")
+	root := t.TempDir()
+	showDir := filepath.Join(root, "The Expanse")
+	seasonOneDir := filepath.Join(showDir, "Season 01")
+	seasonTwoDir := filepath.Join(showDir, "Season 02")
+	mustMkdirAll(t, seasonOneDir)
+	mustMkdirAll(t, seasonTwoDir)
+	mustWrite(t, filepath.Join(showDir, "tvshow.nfo"), `<tvshow>
+  <title>The Expanse</title>
+  <plot>Humanity spreads across the solar system.</plot>
+  <genre>Science Fiction</genre>
+  <rating>8.5</rating>
+</tvshow>`)
 	movie := upsertTestItem(t, ctx, store, Item{
 		LibraryID: "movies",
 		Kind:      "movie",
@@ -105,8 +458,22 @@ func TestStoreWatchlistReturnsMoviesAndShows(t *testing.T) {
 		Path:      "/media/movies/hoppers.mkv",
 		Year:      2026,
 	})
-	upsertTestItem(t, ctx, store, episodeItem("The Expanse", 1, 1))
-	upsertTestItem(t, ctx, store, episodeItem("The Expanse", 2, 1))
+	first := episodeItem("The Expanse", 1, 1)
+	first.Path = filepath.Join(seasonOneDir, "The Expanse - S01E01.mkv")
+	first.Overview = "Episode one plot"
+	first.Rating = 1.1
+	first.ShowMetadata = &ShowMetadata{
+		LibraryID: "tv",
+		Title:     "The Expanse",
+		SortTitle: "the expanse",
+		Overview:  "Humanity spreads across the solar system.",
+		Genres:    "Science Fiction",
+		Rating:    8.5,
+	}
+	upsertTestItem(t, ctx, store, first)
+	second := episodeItem("The Expanse", 2, 1)
+	second.Path = filepath.Join(seasonTwoDir, "The Expanse - S02E01.mkv")
+	upsertTestItem(t, ctx, store, second)
 
 	if err := store.SaveItemWatchlist(ctx, userID, movie); err != nil {
 		t.Fatalf("save item watchlist: %v", err)
@@ -124,6 +491,9 @@ func TestStoreWatchlistReturnsMoviesAndShows(t *testing.T) {
 	}
 	if len(watchlist.Shows) != 1 || watchlist.Shows[0].Title != "The Expanse" || watchlist.Shows[0].EpisodeCount != 2 || watchlist.Shows[0].SeasonCount != 2 {
 		t.Fatalf("watchlist shows = %#v, want The Expanse with two seasons", watchlist.Shows)
+	}
+	if watchlist.Shows[0].Overview != "Humanity spreads across the solar system." || watchlist.Shows[0].Genres != "Science Fiction" || watchlist.Shows[0].Rating != 8.5 {
+		t.Fatalf("watchlist show metadata = %#v, want tvshow.nfo values", watchlist.Shows[0])
 	}
 
 	if err := store.DeleteItemWatchlist(ctx, userID, movie.ID); err != nil {

@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
 	"popcorn/internal/media"
 )
+
 type traktToken struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
@@ -37,6 +39,7 @@ type traktImportDebug struct {
 	SyncWatchedMovies int                       `json:"syncWatchedMovies"`
 	UserWatchedMovies int                       `json:"userWatchedMovies"`
 	HistoryMovies     int                       `json:"historyMovies"`
+	AllHistoryMovies  int                       `json:"allHistoryMovies"`
 	SyncWatchedShows  int                       `json:"syncWatchedShows"`
 	UserWatchedShows  int                       `json:"userWatchedShows"`
 	AllHistory        int                       `json:"allHistory"`
@@ -376,17 +379,19 @@ func readTraktExport(dir string) (traktExportSource, error) {
 	}
 	source := traktExportSource{}
 	readAny := false
-	movies := []traktWatchedMovie{}
-	if ok, err := readJSONIfExists(filepath.Join(dir, "watched-movies.json"), &movies); err != nil {
+	movies, ok, err := readJSONSliceFiles[traktWatchedMovie](dir, "watched-movies")
+	if err != nil {
 		return traktExportSource{}, err
-	} else if ok {
+	}
+	if ok {
 		readAny = true
 		source.MovieRows += len(movies)
 	}
-	var history []traktHistoryItem
-	if ok, err := readJSONIfExists(filepath.Join(dir, "watched-history.json"), &history); err != nil {
+	history, ok, err := readJSONSliceFiles[traktHistoryItem](dir, "watched-history")
+	if err != nil {
 		return traktExportSource{}, err
-	} else if ok {
+	}
+	if ok {
 		readAny = true
 		source.AllHistory = len(history)
 	}
@@ -408,10 +413,11 @@ func readTraktExport(dir string) (traktExportSource, error) {
 			}
 		}
 	}
-	var shows []traktWatchedShow
-	if ok, err := readJSONIfExists(filepath.Join(dir, "watched-shows.json"), &shows); err != nil {
+	shows, ok, err := readJSONSliceFiles[traktWatchedShow](dir, "watched-shows")
+	if err != nil {
 		return traktExportSource{}, err
-	} else if ok {
+	}
+	if ok {
 		readAny = true
 	}
 	for _, show := range shows {
@@ -463,6 +469,53 @@ func readJSONIfExists(path string, dest any) (bool, error) {
 	return true, nil
 }
 
+func readJSONSliceFiles[T any](root, basename string) ([]T, bool, error) {
+	paths := []string{}
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !isTraktExportJSONName(d.Name(), basename) {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	sort.Strings(paths)
+	out := []T{}
+	for _, path := range paths {
+		var items []T
+		if ok, err := readJSONIfExists(path, &items); err != nil {
+			return nil, false, err
+		} else if ok {
+			out = append(out, items...)
+		}
+	}
+	return out, len(paths) > 0, nil
+}
+
+func isTraktExportJSONName(name, basename string) bool {
+	if name == basename+".json" {
+		return true
+	}
+	if !strings.HasPrefix(name, basename+"-") || !strings.HasSuffix(name, ".json") {
+		return false
+	}
+	chunk := strings.TrimSuffix(strings.TrimPrefix(name, basename+"-"), ".json")
+	if chunk == "" {
+		return false
+	}
+	for _, r := range chunk {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func expandLocalPath(path string) (string, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -490,6 +543,16 @@ func traktMovieFromHistory(entry traktHistoryItem) traktWatchedMovie {
 	movie.Movie.Year = entry.Movie.Year
 	movie.Movie.IDs = entry.Movie.IDs
 	return movie
+}
+
+func traktMoviesFromHistory(entries []traktHistoryItem) []traktWatchedMovie {
+	movies := make([]traktWatchedMovie, 0)
+	for _, entry := range entries {
+		if entry.Type == "movie" {
+			movies = append(movies, traktMovieFromHistory(entry))
+		}
+	}
+	return mergeTraktMovies(movies)
 }
 
 func traktHistoryEpisodeKey(entry traktHistoryItem) string {

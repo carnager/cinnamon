@@ -48,6 +48,7 @@ func (a *App) remoteRegisterDevice(w http.ResponseWriter, r *http.Request) {
 	if kind == "" {
 		kind = "tv"
 	}
+	previousUserID, hadPreviousOwner := a.remoteDeviceOwner(r.Context(), id)
 	_, err := a.store.DB().ExecContext(r.Context(), `
 INSERT INTO remote_devices(id, user_id, name, kind, last_seen_at)
 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -59,6 +60,9 @@ ON CONFLICT(id) DO UPDATE SET
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if hadPreviousOwner && previousUserID != user.ID {
+		a.clearRemoteDeviceRuntimeState(r.Context(), id)
 	}
 	writeJSON(w, http.StatusOK, remoteDevice{ID: id, Name: name, Kind: kind})
 }
@@ -148,10 +152,14 @@ WHERE p.code = ? AND p.expires_at > ?`, code, time.Now().UTC().Format(time.RFC33
 	}
 	device.Name = cleanRemoteName(device.Name, "Popcorn TV")
 	device.Kind = cleanRemoteKind(device.Kind)
+	previousUserID, hadPreviousOwner := a.remoteDeviceOwner(r.Context(), device.ID)
 	_, err = a.store.DB().ExecContext(r.Context(), `UPDATE remote_devices SET user_id = ?, last_seen_at = CURRENT_TIMESTAMP WHERE id = ?`, user.ID, device.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if hadPreviousOwner && previousUserID != user.ID {
+		a.clearRemoteDeviceRuntimeState(r.Context(), device.ID)
 	}
 	_, _ = a.store.DB().ExecContext(r.Context(), `DELETE FROM remote_pairing_codes WHERE code = ?`, code)
 	writeJSON(w, http.StatusOK, device)
@@ -311,6 +319,24 @@ func (a *App) userOwnsRemoteDevice(ctx context.Context, userID int64, deviceID s
 	var n int
 	err := a.store.DB().QueryRowContext(ctx, `SELECT COUNT(*) FROM remote_devices WHERE id = ? AND user_id = ?`, deviceID, userID).Scan(&n)
 	return err == nil && n > 0
+}
+
+func (a *App) remoteDeviceOwner(ctx context.Context, deviceID string) (int64, bool) {
+	if deviceID == "" {
+		return 0, false
+	}
+	var userID int64
+	err := a.store.DB().QueryRowContext(ctx, `SELECT user_id FROM remote_devices WHERE id = ?`, deviceID).Scan(&userID)
+	return userID, err == nil
+}
+
+func (a *App) clearRemoteDeviceRuntimeState(ctx context.Context, deviceID string) {
+	if deviceID == "" {
+		return
+	}
+	_, _ = a.store.DB().ExecContext(ctx, `DELETE FROM remote_commands WHERE device_id = ?`, deviceID)
+	_, _ = a.store.DB().ExecContext(ctx, `DELETE FROM remote_device_state WHERE device_id = ?`, deviceID)
+	_, _ = a.store.DB().ExecContext(ctx, `DELETE FROM remote_pairing_codes WHERE device_id = ?`, deviceID)
 }
 
 func cleanRemoteID(v string) string {

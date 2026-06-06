@@ -28,6 +28,7 @@ func TestLoadMergesFileDefaultsAndEnvironment(t *testing.T) {
 	t.Setenv("POPCORN_DATABASE", dbPath)
 	t.Setenv("POPCORN_TMDB_READ_ACCESS_TOKEN", "read-token")
 	t.Setenv("POPCORN_AUTO_SCAN_INTERVAL", "30m")
+	t.Setenv("POPCORN_AUTO_SCAN_WATCH_DEPTH", "1")
 
 	configPath := writeTOMLConfig(t, `
 listen = ":9999"
@@ -72,6 +73,9 @@ type = ""
 	if cfg.AutoScanInterval != 30*time.Minute {
 		t.Fatalf("auto scan interval = %s, want env override 30m", cfg.AutoScanInterval)
 	}
+	if cfg.AutoScanWatchDepth != 1 {
+		t.Fatalf("auto scan watch depth = %d, want env override 1", cfg.AutoScanWatchDepth)
+	}
 	if len(cfg.Libraries) != 1 {
 		t.Fatalf("libraries = %#v, want one library", cfg.Libraries)
 	}
@@ -96,6 +100,71 @@ func TestLoadSupportsJSONConfigFallback(t *testing.T) {
 	}
 	if cfg.Listen != ":9999" || cfg.LogLevel != "warn" {
 		t.Fatalf("json config = %#v, want listen :9999 and warn log level", cfg)
+	}
+}
+
+func TestLoadSupportsTVUpdaterConfigAndEnvironment(t *testing.T) {
+	t.Setenv("POPCORN_TV_VERSION_NAME", "0.3.0")
+	t.Setenv("POPCORN_TV_RELEASE_NOTES", "env notes")
+	t.Setenv("POPCORN_COMPANION_VERSION_NAME", "0.3.0-phone")
+
+	configPath := writeTOMLConfig(t, `
+[appUpdate]
+tvApkPath = " ./dist/popcorn-tv.apk "
+tvVersionCode = 26060305
+tvVersionName = "0.2.0"
+companionApkPath = " ./dist/popcorn-companion.apk "
+companionVersionCode = 26060306
+companionVersionName = "0.2.0-phone"
+
+[[libraries]]
+id = "movies"
+name = "Movies"
+path = "/media/movies"
+type = "movies"
+`)
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load updater config: %v", err)
+	}
+	if cfg.AppUpdate.TVAPKPath != "dist/popcorn-tv.apk" {
+		t.Fatalf("tv apk path = %q, want cleaned relative path", cfg.AppUpdate.TVAPKPath)
+	}
+	if cfg.AppUpdate.TVVersionCode != 26060305 {
+		t.Fatalf("tv version code = %d, want 26060305", cfg.AppUpdate.TVVersionCode)
+	}
+	if cfg.AppUpdate.TVVersionName != "0.3.0" {
+		t.Fatalf("tv version name = %q, want env override", cfg.AppUpdate.TVVersionName)
+	}
+	if cfg.AppUpdate.TVReleaseNotes != "env notes" {
+		t.Fatalf("tv release notes = %q, want env override", cfg.AppUpdate.TVReleaseNotes)
+	}
+	if cfg.AppUpdate.CompanionAPKPath != "dist/popcorn-companion.apk" {
+		t.Fatalf("companion apk path = %q, want cleaned relative path", cfg.AppUpdate.CompanionAPKPath)
+	}
+	if cfg.AppUpdate.CompanionVersionCode != 26060306 {
+		t.Fatalf("companion version code = %d, want 26060306", cfg.AppUpdate.CompanionVersionCode)
+	}
+	if cfg.AppUpdate.CompanionVersionName != "0.3.0-phone" {
+		t.Fatalf("companion version name = %q, want env override", cfg.AppUpdate.CompanionVersionName)
+	}
+}
+
+func TestLoadRejectsIncompleteTVUpdaterConfig(t *testing.T) {
+	configPath := writeTOMLConfig(t, `
+[appUpdate]
+tvApkPath = "/tmp/popcorn.apk"
+
+[[libraries]]
+id = "movies"
+name = "Movies"
+path = "/media/movies"
+type = "movies"
+`)
+
+	if _, err := Load(configPath); err == nil {
+		t.Fatalf("Load accepted updater config without version fields")
 	}
 }
 

@@ -9,8 +9,6 @@ const userPanel = document.querySelector("#userPanel");
 const view = document.querySelector("#view");
 const libraryNav = document.querySelector("#libraryNav");
 const search = document.querySelector("#search");
-const scan = document.querySelector("#scan");
-const statusEl = document.querySelector("#status");
 const player = document.querySelector("#player");
 const theater = document.querySelector("#theater");
 const nowPlaying = document.querySelector("#nowPlaying");
@@ -26,10 +24,11 @@ const fullscreenBtn = document.querySelector("#fullscreenBtn");
 const closePlayerBtn = document.querySelector("#closePlayer");
 
 let libraries = [];
+let activeView = "home";
 let activeLibraryId = "";
 let libraryItems = [];
 let currentPage = 1;
-const perPage = 60;
+const perPage = 50;
 let searchTimer = 0;
 let currentItem = null;
 let streamStart = 0;
@@ -42,12 +41,27 @@ let currentHLSSession = null;
 let authToken = localStorage.getItem("popcornToken") || "";
 let savedVolume = Number(localStorage.getItem("popcornVolume") || "1");
 let currentUser = null;
-let statusTimer = 0;
 let timelineTimer = 0;
 let watchedItemIds = new Set();
+let mediaProgressRows = [];
 let watchedShowKeys = new Set();
 let watchlistItemIds = new Set();
 let watchlistShowKeys = new Set();
+let currentGenre = "";
+let currentSort = "";
+let currentSeason = null;
+let libraryGenres = [];
+let pageHasNext = false;
+let homeData = {
+  movies: [],
+  shows: [],
+  continueMovies: [],
+  continueEpisodes: [],
+  recentMovies: [],
+  recentShows: [],
+  watchlistMovies: [],
+  watchlistShows: [],
+};
 
 async function api(path, options) {
   const init = { ...(options || {}) };
@@ -56,8 +70,10 @@ async function api(path, options) {
   init.headers = headers;
   const res = await fetch(path, init);
   if (!res.ok) throw new Error(await res.text());
-  if (res.status === 202 || res.status === 204) return null;
-  return res.json();
+  if (res.status === 204) return null;
+  const text = await res.text();
+  if (!text.trim()) return null;
+  return JSON.parse(text);
 }
 
 function setAuthenticated(user, token) {
@@ -78,7 +94,6 @@ function setUnauthenticated(message = "") {
   loginError.textContent = message;
   loginPass.value = "";
   loginUser.focus();
-  clearInterval(statusTimer);
   clearInterval(timelineTimer);
   stopPlayer();
 }
@@ -86,19 +101,61 @@ function setUnauthenticated(message = "") {
 function renderUserPanel() {
   userPanel.innerHTML = "";
   if (!currentUser) return;
-  const name = el("div", "user-name", currentUser.displayName || currentUser.username);
-  const actions = el("div", "user-actions");
-  if (currentUser.isAdmin) {
-    const users = el("button", "side-btn", "Users");
-    users.type = "button";
-    users.addEventListener("click", () => renderUsers().catch(console.error));
-    actions.append(users);
-  }
+  const menu = document.createElement("details");
+  menu.className = "user-menu";
+  const summary = document.createElement("summary");
+  summary.className = "user-menu-trigger";
+  summary.append(
+    el("span", "user-menu-avatar", initials(currentUser.displayName || currentUser.username || "U")),
+    el("span", "user-menu-name", currentUser.displayName || currentUser.username),
+    el("span", "user-menu-caret", "▾"),
+  );
+  const actions = el("div", "user-menu-popover");
+  const scan = el("button", "side-btn", "Scan Libraries");
+  scan.type = "button";
+  scan.addEventListener("click", () => {
+    scanLibraries(scan).catch(console.error);
+  });
+  actions.append(scan);
+  const settings = el("button", "side-btn", "Settings");
+  settings.type = "button";
+  settings.addEventListener("click", () => {
+    menu.open = false;
+    renderSettings().catch(console.error);
+  });
+  actions.append(settings);
   const logout = el("button", "side-btn", "Logout");
   logout.type = "button";
-  logout.addEventListener("click", logoutUser);
+  logout.addEventListener("click", () => {
+    menu.open = false;
+    logoutUser();
+  });
   actions.append(logout);
-  userPanel.append(name, actions);
+  menu.append(summary, actions);
+  userPanel.append(menu);
+}
+
+async function scanLibraries(button) {
+  const oldLabel = button?.textContent || "";
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Scanning...";
+  }
+  try {
+    await api("/api/scan", { method: "POST" });
+    setTimeout(() => loadCurrentView().catch(console.error), 1500);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = oldLabel;
+    }
+  }
+}
+
+function closeUserMenu() {
+  userPanel.querySelectorAll("details[open]").forEach((menu) => {
+    menu.open = false;
+  });
 }
 
 async function logoutUser() {
@@ -116,6 +173,11 @@ function fmtDuration(ms) {
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
   return h ? `${h}h ${m}m` : `${m}m`;
+}
+
+function fmtEndsAround(ms) {
+  if (!ms) return "";
+  return `Ends around ${new Date(Date.now() + Number(ms)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 }
 
 function fmtClock(seconds) {
@@ -162,7 +224,8 @@ async function refreshMediaState() {
     api("/api/watchlist?limit=1000").catch(() => ({ items: [], shows: [] })),
   ]);
 
-  watchedItemIds = new Set((progress || [])
+  mediaProgressRows = progress || [];
+  watchedItemIds = new Set(mediaProgressRows
     .filter((row) => row?.completed)
     .map((row) => Number(row.itemId))
     .filter(Boolean));
@@ -187,25 +250,117 @@ async function loadAllProgress() {
   return out;
 }
 
+async function setItemSeen(item, seen) {
+  if (!item?.id) return;
+  if (seen) {
+    const duration = item.durationMs || 1;
+    await api(`/api/items/${encodeURIComponent(String(item.id))}/progress`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ positionMs: duration, durationMs: duration, completed: true, state: "manual" }),
+    });
+    watchedItemIds.add(Number(item.id));
+  } else {
+    await api(`/api/items/${encodeURIComponent(String(item.id))}/progress`, { method: "DELETE" });
+    watchedItemIds.delete(Number(item.id));
+  }
+}
+
+async function setShowSeen(show, seen) {
+  const libraryId = show?.libraryId || activeLibraryId;
+  const title = show?.title || "";
+  if (!libraryId || !title) return;
+  const query = `libraryId=${encodeURIComponent(libraryId)}&showTitle=${encodeURIComponent(title)}`;
+  await api(`/api/progress/tv?${query}`, { method: seen ? "PUT" : "DELETE" });
+  if (seen) watchedShowKeys.add(showKey(libraryId, title));
+  else watchedShowKeys.delete(showKey(libraryId, title));
+  await refreshMediaState();
+}
+
+async function setSeasonSeen(show, season, seen, episodes = []) {
+  const libraryId = show?.libraryId || activeLibraryId;
+  const title = show?.title || "";
+  if (!libraryId || !title) return;
+  const query = `libraryId=${encodeURIComponent(libraryId)}&showTitle=${encodeURIComponent(title)}&season=${encodeURIComponent(String(season || 0))}`;
+  await api(`/api/progress/tv/season?${query}`, { method: seen ? "PUT" : "DELETE" });
+  for (const episode of episodes || []) {
+    if (!episode?.id) continue;
+    if (seen) watchedItemIds.add(Number(episode.id));
+    else watchedItemIds.delete(Number(episode.id));
+  }
+  await refreshMediaState();
+}
+
+async function setItemWatchlisted(item, watchlisted) {
+  if (!item?.id) return;
+  await api(`/api/items/${encodeURIComponent(String(item.id))}/watchlist`, { method: watchlisted ? "PUT" : "DELETE" });
+  if (watchlisted) watchlistItemIds.add(Number(item.id));
+  else watchlistItemIds.delete(Number(item.id));
+  await fetchWatchlist();
+}
+
+async function setShowWatchlisted(show, watchlisted) {
+  const libraryId = show?.libraryId || activeLibraryId;
+  const title = show?.title || "";
+  if (!libraryId || !title) return;
+  const query = `libraryId=${encodeURIComponent(libraryId)}&showTitle=${encodeURIComponent(title)}`;
+  await api(`/api/watchlist/tv?${query}`, { method: watchlisted ? "PUT" : "DELETE" });
+  if (watchlisted) watchlistShowKeys.add(showKey(libraryId, title));
+  else watchlistShowKeys.delete(showKey(libraryId, title));
+  await fetchWatchlist();
+}
+
 theater.addEventListener("mousemove", resetIdleTimer);
 theater.addEventListener("mousedown", resetIdleTimer);
 
 function renderNav() {
+  appShell.classList.toggle("settings-mode", activeView === "settings");
   libraryNav.innerHTML = "";
+  const home = document.createElement("button");
+  home.type = "button";
+  home.className = activeView === "home" ? "nav-item active" : "nav-item";
+  home.textContent = "Home";
+  home.addEventListener("click", () => {
+    search.value = "";
+    currentPage = 1;
+    activeView = "home";
+    renderNav();
+    loadHome().catch(console.error);
+  });
+  libraryNav.append(home);
+
   for (const library of libraries) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = library.id === activeLibraryId ? "nav-item active" : "nav-item";
+    button.className = activeView === "library" && library.id === activeLibraryId ? "nav-item active" : "nav-item";
     button.textContent = library.name;
     button.addEventListener("click", () => {
+      search.value = "";
+      activeView = "library";
       activeLibraryId = library.id;
       currentPage = 1;
       currentShow = null;
+      currentSeason = null;
+      currentGenre = "";
+      currentSort = "";
       renderNav();
-      loadActiveLibrary().catch(console.error);
+      loadLibraryPage().catch(console.error);
     });
     libraryNav.append(button);
   }
+
+  const watchlist = document.createElement("button");
+  watchlist.type = "button";
+  watchlist.className = activeView === "watchlist" ? "nav-item active" : "nav-item";
+  watchlist.textContent = "Watchlist";
+  watchlist.addEventListener("click", () => {
+    search.value = "";
+    activeView = "watchlist";
+    currentPage = 1;
+    renderNav();
+    renderWatchlist().catch(console.error);
+  });
+  libraryNav.append(watchlist);
 }
 
 function makeBreadcrumb(crumbs) {
@@ -224,16 +379,79 @@ function makeBreadcrumb(crumbs) {
   return nav;
 }
 
+async function fetchItemsPage(libraryId, { limit = perPage, offset = 0, sort = "", genre = "" } = {}) {
+  const params = new URLSearchParams({ libraryId, limit: String(limit), offset: String(offset) });
+  if (sort) params.set("sort", sort);
+  if (genre) params.set("genre", genre);
+  return api(`/api/items?${params}`);
+}
+
+async function fetchItem(itemId) {
+  return api(`/api/items/${encodeURIComponent(String(itemId))}`);
+}
+
+async function fetchShowsPage(libraryId, { limit = perPage, offset = 0, sort = "", genre = "" } = {}) {
+  const params = new URLSearchParams({ libraryId, limit: String(limit), offset: String(offset) });
+  if (sort) params.set("sort", sort);
+  if (genre) params.set("genre", genre);
+  return api(`/api/tv/shows?${params}`);
+}
+
+async function fetchLibraryGenres(libraryId) {
+  return api(`/api/genres?libraryId=${encodeURIComponent(libraryId)}`).catch(() => []);
+}
+
+async function fetchWatchlist() {
+  const list = await api("/api/watchlist?limit=1000").catch(() => ({ items: [], shows: [] }));
+  homeData.watchlistMovies = (list.items || []).filter((item) => item.kind === "movie");
+  homeData.watchlistShows = list.shows || [];
+  watchlistItemIds = new Set((list.items || []).map((item) => Number(item.id)).filter(Boolean));
+  watchlistShowKeys = new Set((list.shows || []).map((show) => showKey(show.libraryId, show.title)));
+  return list;
+}
+
+function setLoading(label = "Loading...") {
+  view.innerHTML = "";
+  view.append(el("div", "empty", label));
+}
+
+async function loadCurrentView(skipHistory = false) {
+  if (search.value.trim()) {
+    await renderSearch(skipHistory);
+  } else if (activeView === "home") {
+    await loadHome(skipHistory);
+  } else if (activeView === "watchlist") {
+    await renderWatchlist(skipHistory);
+  } else if (activeView === "settings") {
+    await renderSettings(skipHistory);
+  } else {
+    await loadLibraryPage(skipHistory);
+  }
+}
+
 /* ── Library View ── */
 function render(skipHistory) {
   if (search.value.trim()) {
-    renderSearch(skipHistory);
+    renderSearch(skipHistory).catch(console.error);
+    return;
+  }
+  if (activeView === "home") {
+    renderHome(skipHistory);
+    return;
+  }
+  if (activeView === "watchlist") {
+    renderWatchlist(skipHistory).catch(console.error);
+    return;
+  }
+  if (activeView === "settings") {
+    renderSettings(skipHistory).catch(console.error);
     return;
   }
   const frag = document.createDocumentFragment();
   const library = activeLibrary();
   currentShow = null;
-  if (!skipHistory) pushState({ view: "library", libraryId: library?.id, page: currentPage, q: search.value.trim() });
+  currentSeason = null;
+  if (!skipHistory) pushState({ view: "library", libraryId: library?.id, page: currentPage, genre: currentGenre, sort: currentSort });
 
   if (!library) {
     frag.append(el("div", "empty", "No libraries configured"));
@@ -244,10 +462,13 @@ function render(skipHistory) {
 
   const header = el("div", "view-header");
   header.append(
-    el("h1", null, library.name),
-    el("span", null, library.type === "tv" ? tvCountText(libraryItems) : `${libraryItems.length} movies`),
+    el("h1", null, currentGenre ? `${library.name} / ${currentGenre}` : library.name),
+    el("span", null, library.type === "tv" ? `${libraryItems.length} shows on this page` : `${libraryItems.length} movies on this page`),
   );
   frag.append(header);
+
+  const genres = libraryGenresBar(library);
+  if (genres) frag.append(genres);
 
   if (!libraryItems.length) {
     frag.append(el("div", "empty", "No media found"));
@@ -256,39 +477,96 @@ function render(skipHistory) {
   }
 
   if (library.type === "tv") {
-    renderTV(frag, libraryItems);
+    renderTVShows(frag, libraryItems);
   } else {
-    renderMovies(frag, libraryItems);
+    frag.append(renderGrid(libraryItems));
+  }
+  frag.append(pagination(currentPage, pageHasNext ? currentPage + 1 : currentPage, (p) => {
+    currentPage = p;
+    loadLibraryPage().catch(console.error);
+  }));
+  setView(frag);
+}
+
+function renderHome(skipHistory) {
+  activeView = "home";
+  renderNav();
+  currentShow = null;
+  currentSeason = null;
+  if (!skipHistory) pushState({ view: "home" });
+  stopPlayer();
+
+  const frag = document.createDocumentFragment();
+  frag.append(el("div", "view-header home-header", el("h1", null, "Popcorn"), el("span", null, "Ready to watch")));
+  frag.append(curatedHome(homeData));
+  setView(frag);
+}
+
+async function renderWatchlist(skipHistory) {
+  activeView = "watchlist";
+  renderNav();
+  currentShow = null;
+  currentSeason = null;
+  if (!skipHistory) pushState({ view: "watchlist" });
+  stopPlayer();
+  await refreshMediaState();
+  await fetchWatchlist();
+
+  const frag = document.createDocumentFragment();
+  frag.append(el("div", "view-header", el("h1", null, "Watchlist"), el("span", null, `${homeData.watchlistMovies.length} movies · ${homeData.watchlistShows.length} shows`)));
+  if (!homeData.watchlistMovies.length && !homeData.watchlistShows.length) {
+    frag.append(el("div", "empty", "No watchlist items"));
+    setView(frag);
+    return;
+  }
+  if (homeData.watchlistMovies.length) {
+    frag.append(sectionTitle("Movies", `${homeData.watchlistMovies.length} saved`), renderGrid(homeData.watchlistMovies));
+  }
+  if (homeData.watchlistShows.length) {
+    frag.append(sectionTitle("TV Shows", `${homeData.watchlistShows.length} saved`));
+    renderTVShows(frag, homeData.watchlistShows);
   }
   setView(frag);
 }
 
-function renderSearch(skipHistory) {
+async function renderSearch(skipHistory) {
   const query = search.value.trim();
   const frag = document.createDocumentFragment();
   currentShow = null;
-  if (!skipHistory) pushState({ view: "search", q: query, page: currentPage });
+  currentSeason = null;
+  activeView = "search";
+  renderNav();
+  if (!skipHistory) pushState({ view: "search", q: query });
   stopPlayer();
 
+  if (query.length < 2) {
+    frag.append(el("div", "view-header", el("h1", null, "Search"), el("span", null, "Type at least two characters")));
+    frag.append(el("div", "empty", "Search movies and shows"));
+    setView(frag);
+    return;
+  }
+
+  const [movieResults, showResults] = await Promise.all([
+    api(`/api/search?limit=120&kind=movie&q=${encodeURIComponent(query)}`).then((r) => r.items || []).catch(() => []),
+    api(`/api/tv/shows?limit=120&q=${encodeURIComponent(query)}`).catch(() => []),
+  ]);
+
   const header = el("div", "view-header");
-  header.append(el("h1", null, "Search"), el("span", null, `${libraryItems.length} results for "${query}"`));
+  header.append(el("h1", null, "Search"), el("span", null, `${movieResults.length + showResults.length} results for "${query}"`));
   frag.append(header);
 
-  if (!libraryItems.length) {
+  if (!movieResults.length && !showResults.length) {
     frag.append(el("div", "empty", "No matches found"));
     setView(frag);
     return;
   }
 
-  const movies = libraryItems.filter((item) => item.kind !== "episode");
-  const episodes = libraryItems.filter((item) => item.kind === "episode");
-  if (movies.length) {
-    frag.append(sectionTitle("Movies", `${movies.length} matches`));
-    renderMovies(frag, movies);
+  if (movieResults.length) {
+    frag.append(sectionTitle("Movies", `${movieResults.length} matches`), renderGrid(movieResults));
   }
-  if (episodes.length) {
-    frag.append(sectionTitle("TV Shows", tvCountText(episodes)));
-    renderTV(frag, episodes);
+  if (showResults.length) {
+    frag.append(sectionTitle("TV Shows", `${showResults.length} matches`));
+    renderTVShows(frag, showResults);
   }
   setView(frag);
 }
@@ -299,24 +577,116 @@ function sectionTitle(title, meta) {
   return header;
 }
 
-function renderMovies(root, movies) {
-  const totalPages = Math.ceil(movies.length / perPage);
-  if (currentPage > totalPages) currentPage = totalPages || 1;
-  const start = (currentPage - 1) * perPage;
-  root.append(renderGrid(movies.slice(start, start + perPage)));
-  if (totalPages > 1) root.append(pagination(currentPage, totalPages, (p) => { currentPage = p; render(); }));
+function renderTVShows(root, shows) {
+  const grid = el("div", "grid show-grid");
+  for (const show of shows) grid.append(showCard(show));
+  root.append(grid);
 }
 
-function renderTV(root, episodes) {
-  const shows = groupShows(episodes);
-  const totalPages = Math.ceil(shows.length / perPage);
-  if (currentPage > totalPages) currentPage = totalPages || 1;
-  const start = (currentPage - 1) * perPage;
-  const page = shows.slice(start, start + perPage);
-  const grid = el("div", "grid show-grid");
-  for (const show of page) grid.append(showCard(show));
-  root.append(grid);
-  if (totalPages > 1) root.append(pagination(currentPage, totalPages, (p) => { currentPage = p; render(); }));
+function curatedHome(data) {
+  const wrap = el("div", "home-shelves");
+  const moviePicks = pickFeatured(data.movies);
+  const showPicks = pickFeatured(data.shows);
+  const movieGenres = genreShelves(data.movies, 2);
+  const showGenres = genreShelves(data.shows, 1);
+
+  appendShelf(wrap, "Continue Movies", data.continueMovies, (items) => renderShelfGrid(items));
+  appendShelf(wrap, "Continue TV", data.continueEpisodes, (items) => renderShelfGrid(items));
+  appendShelf(wrap, "Watchlist Movies", data.watchlistMovies, (items) => renderShelfGrid(items));
+  appendShelf(wrap, "Watchlist TV", data.watchlistShows, (items) => renderShelfGrid(items.map((show) => showCard(show))));
+  appendShelf(wrap, "Recently Added Movies", data.recentMovies, (items) => renderShelfGrid(items));
+  appendShelf(wrap, "Recently Added TV", data.recentShows, (items) => renderShelfGrid(items.map((show) => showCard(show))));
+  appendShelf(wrap, "Movie Picks", moviePicks, (items) => renderShelfGrid(items));
+  appendShelf(wrap, "TV Picks", showPicks, (items) => renderShelfGrid(items.map((show) => showCard(show))));
+
+  for (const row of movieGenres) {
+    appendShelf(wrap, row.genre, row.items, (items) => renderShelfGrid(items));
+  }
+  for (const row of showGenres) {
+    appendShelf(wrap, `${row.genre} TV`, row.items, (items) => renderShelfGrid(items.map((show) => showCard(show))));
+  }
+  return wrap;
+}
+
+function appendShelf(wrap, title, items, renderItems) {
+  if (!items?.length) return;
+  wrap.append(shelf(title, items, renderItems));
+}
+
+function shelf(title, items, renderItems) {
+  const section = el("section", "shelf");
+  const header = el("div", "shelf-header");
+  header.append(el("h2", null, title), el("span", null, `${items.length}`));
+  section.append(header);
+  section.append(renderItems(items.slice(0, 18)));
+  return section;
+}
+
+function renderShelfGrid(itemsOrNodes) {
+  const row = el("div", "shelf-row");
+  for (const entry of itemsOrNodes) row.append(entry instanceof Node ? entry : itemCard(entry));
+  return row;
+}
+
+function splitGenres(value) {
+  return String(value || "").split(/[,/]/).map((genre) => genre.trim()).filter(Boolean);
+}
+
+function pickFeatured(items) {
+  const rated = [...items]
+    .filter((item) => Number(item.rating || 0) >= 7)
+    .sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0))
+    .slice(0, 18);
+  return rated.length ? rated : items.slice(0, 18);
+}
+
+function genreShelves(items, maxRows) {
+  const byGenre = new Map();
+  for (const item of items) {
+    for (const genre of splitGenres(item.genres).slice(0, 3)) {
+      const key = genre.toLowerCase();
+      if (!byGenre.has(key)) byGenre.set(key, { genre, items: [] });
+      byGenre.get(key).items.push(item);
+    }
+  }
+  return [...byGenre.values()]
+    .filter((row) => row.items.length >= 4)
+    .sort((a, b) => b.items.length - a.items.length || a.genre.localeCompare(b.genre))
+    .slice(0, maxRows);
+}
+
+function libraryGenresBar(library) {
+  const bar = el("div", "genre-filter-bar");
+  for (const [sort, label] of [["", "Title"], ["mtime", "File date"], ["rating", "Rating"], ["recent", "Added"]]) {
+    const btn = el("button", sort === currentSort ? "genre-filter active" : "genre-filter", label);
+    btn.type = "button";
+    btn.addEventListener("click", () => {
+      currentSort = sort;
+      currentPage = 1;
+      loadLibraryPage().catch(console.error);
+    });
+    bar.append(btn);
+  }
+  if (libraryGenres.length) bar.append(el("span", "breadcrumb-sep", "/"));
+  const all = el("button", currentGenre ? "genre-filter" : "genre-filter active", "All");
+  all.type = "button";
+  all.addEventListener("click", () => {
+    currentGenre = "";
+    currentPage = 1;
+    loadLibraryPage().catch(console.error);
+  });
+  bar.append(all);
+  for (const genre of libraryGenres) {
+    const btn = el("button", genre === currentGenre ? "genre-filter active" : "genre-filter", genre);
+    btn.type = "button";
+    btn.addEventListener("click", () => {
+      currentGenre = genre;
+      currentPage = 1;
+      loadLibraryPage().catch(console.error);
+    });
+    bar.append(btn);
+  }
+  return bar;
 }
 
 function pagination(current, total, onChange) {
@@ -334,89 +704,71 @@ function pagination(current, total, onChange) {
 
   nav.append(prev);
 
-  const pages = pageNumbers(current, total);
-  for (const p of pages) {
-    if (p === "...") {
-      nav.append(el("span", "page-ellipsis", "\u2026"));
-    } else {
-      const btn = el("button", p === current ? "page-btn active" : "page-btn", String(p));
-      btn.type = "button";
-      btn.addEventListener("click", () => onChange(p));
-      nav.append(btn);
-    }
-  }
+  nav.append(el("span", "page-current", `Page ${current}`));
 
   nav.append(next);
   return nav;
 }
 
-function pageNumbers(current, total) {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-  const pages = [];
-  pages.push(1);
-  if (current > 3) pages.push("...");
-  const rangeStart = Math.max(2, current - 1);
-  const rangeEnd = Math.min(total - 1, current + 1);
-  for (let i = rangeStart; i <= rangeEnd; i++) pages.push(i);
-  if (current < total - 2) pages.push("...");
-  pages.push(total);
-  return pages;
-}
-
-function groupShows(episodes) {
-  const grouped = new Map();
-  for (const episode of episodes) {
-    const title = episode.showTitle || "Unknown Show";
-    const key = showKey(episode.libraryId, title);
-    if (!grouped.has(key)) grouped.set(key, []);
-    grouped.get(key).push(episode);
-  }
-  return [...grouped.entries()]
-    .map(([, eps]) => {
-      eps.sort((a, b) => (a.seasonNumber - b.seasonNumber) || (a.episodeNumber - b.episodeNumber) || a.title.localeCompare(b.title));
-      const first = eps[0] || {};
-      return {
-        libraryId: first.libraryId || "",
-        title: first.showTitle || "Unknown Show",
-        episodes: eps,
-        posterItem: eps.find((e) => e.posterPath) || first,
-      };
+/* ── Data loading ── */
+async function loadHome(skipHistory) {
+  activeView = "home";
+  currentShow = null;
+  currentSeason = null;
+  currentGenre = "";
+  currentSort = "";
+  search.value = "";
+  renderNav();
+  setLoading();
+  const movieLibrary = libraries.find((library) => library.type === "movies");
+  const tvLibrary = libraries.find((library) => library.type === "tv");
+  await refreshMediaState();
+  const resumable = mediaProgressRows
+    .filter((row) => {
+      const position = Number(row?.positionMs || 0);
+      const duration = Number(row?.durationMs || 0);
+      return !row?.completed && duration > 0 && position >= 30000 && position < Math.max(duration - 90000, 30000);
     })
-    .sort((a, b) => a.title.localeCompare(b.title));
+    .slice(0, 40);
+  const continueItems = await Promise.all(
+    resumable.map((row) => fetchItem(row.itemId).catch(() => null)),
+  );
+  const [recentMovies, movies, recentShows, shows] = await Promise.all([
+    movieLibrary ? fetchItemsPage(movieLibrary.id, { limit: 24, sort: "mtime" }) : [],
+    movieLibrary ? fetchItemsPage(movieLibrary.id, { limit: 220 }) : [],
+    tvLibrary ? fetchShowsPage(tvLibrary.id, { limit: 24, sort: "mtime" }) : [],
+    tvLibrary ? fetchShowsPage(tvLibrary.id, { limit: 220 }) : [],
+    fetchWatchlist(),
+  ]);
+  homeData.continueMovies = continueItems.filter((item) => item?.kind === "movie").slice(0, 24);
+  homeData.continueEpisodes = continueItems.filter((item) => item?.kind === "episode").slice(0, 24);
+  homeData.recentMovies = recentMovies || [];
+  homeData.movies = movies || [];
+  homeData.recentShows = recentShows || [];
+  homeData.shows = shows || [];
+  renderHome(skipHistory);
 }
 
-function tvCountText(episodes) {
-  return `${new Set(episodes.map((e) => e.showTitle || e.title)).size} shows \u00b7 ${episodes.length} episodes`;
-}
-
-/* ── Card Components ── */
-async function loadLibrary(library) {
-  const q = encodeURIComponent(search.value.trim());
-  const all = [];
-  const limit = 2000;
-  if (q) {
-    for (let offset = 0; ; offset += limit) {
-      const result = await api(`/api/search?limit=${limit}&offset=${offset}&q=${q}`);
-      const page = result.items || [];
-      all.push(...page);
-      if (page.length < limit) break;
-    }
-    return all;
-  }
-  for (let offset = 0; ; offset += limit) {
-    const page = await api(`/api/items?libraryId=${encodeURIComponent(library.id)}&limit=${limit}&offset=${offset}&q=${q}`);
-    all.push(...page);
-    if (page.length < limit) break;
-  }
-  return all;
-}
-
-async function loadActiveLibrary(skipHistory) {
+async function loadLibraryPage(skipHistory) {
   const library = activeLibrary();
-  if (!library && !search.value.trim()) return;
-  view.innerHTML = "";
-  view.append(el("div", "empty", "Loading\u2026"));
-  libraryItems = await loadLibrary(library);
+  if (!library) return;
+  activeView = "library";
+  currentShow = null;
+  currentSeason = null;
+  search.value = "";
+  renderNav();
+  setLoading();
+  const offset = (currentPage - 1) * perPage;
+  await refreshMediaState();
+  const [genres, page] = await Promise.all([
+    fetchLibraryGenres(library.id),
+    library.type === "tv"
+      ? fetchShowsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort })
+      : fetchItemsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort }),
+  ]);
+  libraryGenres = genres || [];
+  libraryItems = page || [];
+  pageHasNext = libraryItems.length >= perPage;
   render(skipHistory);
 }
 
@@ -425,6 +777,7 @@ async function load() {
   const route = routeFromLocation();
   if (route.q) search.value = route.q;
   if (route.page) currentPage = route.page;
+  if (route.genre) currentGenre = route.genre;
   if (route.libraryId && libraries.some((library) => library.id === route.libraryId)) {
     activeLibraryId = route.libraryId;
   } else if (!activeLibraryId && libraries.length) {
@@ -432,7 +785,6 @@ async function load() {
   }
   renderNav();
   await refreshMediaState();
-  await loadActiveLibrary(true);
   await navigate(route, true);
 }
 
@@ -452,29 +804,12 @@ async function bootstrapAuth() {
 
 async function startApp() {
   await load();
-  await refreshStatus();
-  clearInterval(statusTimer);
   clearInterval(timelineTimer);
-  statusTimer = setInterval(refreshStatus, 3000);
   timelineTimer = setInterval(() => updateTimeline(), 1000);
 }
 
 function cleanError(err) {
   return String(err?.message || err || "Request failed").trim();
-}
-
-async function refreshStatus() {
-  try {
-    const rows = await api("/api/scan");
-    statusEl.textContent = rows.length ? rows.map((r) => {
-      const counts = `${r.itemsImported || 0}/${r.mediaFound || 0} imported`;
-      const seen = `${r.filesSeen || 0} files`;
-      const errors = r.errors ? `, ${r.errors} errors` : "";
-      return `${r.libraryId}: ${r.status} (${counts}, ${seen}${errors})`;
-    }).join("\n") : "Idle";
-  } catch (err) {
-    statusEl.textContent = "Status unavailable";
-  }
 }
 
 /* ── History / back button ── */
@@ -488,30 +823,57 @@ async function navigate(state, replaceURL = false) {
   state = state || routeFromLocation();
   if (state.q !== undefined) search.value = state.q || "";
   currentPage = state.page || 1;
-  if (state.libraryId && state.libraryId !== activeLibraryId && libraries.some((library) => library.id === state.libraryId)) {
+  currentGenre = state.genre || "";
+  currentSort = state.sort || "";
+  if (state.libraryId && libraries.some((library) => library.id === state.libraryId)) {
     activeLibraryId = state.libraryId;
-    renderNav();
-    await loadActiveLibrary(true);
   }
-  if (!state.libraryId) state.libraryId = activeLibraryId;
-  if (replaceURL) pushState(state.view ? state : { view: "library", libraryId: activeLibraryId, page: currentPage, q: search.value.trim() }, true);
+  if (replaceURL) pushState(state.view ? state : { view: "home" }, true);
+
   if (state.view === "search" || search.value.trim()) {
     currentShow = null;
-    renderSearch(true);
-  } else if (!state || state.view === "library") {
-    currentShow = null;
-    render(true);
+    await renderSearch(true);
+  } else if (!state || state.view === "home") {
+    await loadHome(true);
+  } else if (state.view === "watchlist") {
+    await renderWatchlist(true);
+  } else if (state.view === "settings") {
+    await renderSettings(true);
+  } else if (state.view === "users") {
+    await renderUsers(true);
+  } else if (state.view === "library") {
+    await loadLibraryPage(true);
   } else if (state.view === "show" && state.showTitle) {
-    const shows = groupShows(libraryItems);
-    const show = shows.find((s) => s.title === state.showTitle);
-    if (show) openShow(show, true);
-    else render(true);
+    activeView = "library";
+    renderNav();
+    const show = await fetchShowSummary(state.libraryId || activeLibraryId, state.showTitle);
+    if (show) await openShow(show, true);
+    else await loadLibraryPage(true);
+  } else if (state.view === "season" && state.showTitle) {
+    activeView = "library";
+    renderNav();
+    const show = await fetchShowSummary(state.libraryId || activeLibraryId, state.showTitle);
+    if (show) await openSeason(show, Number(state.season || 0), true);
+    else await loadLibraryPage(true);
   } else if (state.view === "detail" && state.itemId) {
-    const item = libraryItems.find((i) => i.id === state.itemId);
-    if (item) openDetail(item, true).catch(console.error);
-    else render(true);
+    activeView = "library";
+    renderNav();
+    const item = await api(`/api/items/${encodeURIComponent(String(state.itemId))}`).catch(() => null);
+    if (!item) {
+      await loadLibraryPage(true);
+      return;
+    }
+    if (item.kind === "episode") {
+      currentSeason = Number(state.season ?? item.seasonNumber ?? 0);
+      const showTitle = state.showTitle || item.showTitle || "";
+      currentShow = showTitle ? await fetchShowSummary(state.libraryId || item.libraryId || activeLibraryId, showTitle) : null;
+    } else {
+      currentShow = null;
+      currentSeason = null;
+    }
+    await openDetail(item, true);
   } else {
-    render(true);
+    await loadHome(true);
   }
 }
 
@@ -519,34 +881,74 @@ function routeFromLocation() {
   const parts = location.pathname.split("/").filter(Boolean).map(decodeURIComponent);
   const params = new URLSearchParams(location.search);
   const state = {
-    view: parts[0] === "search" ? "search" : "library",
+    view: "home",
     libraryId: parts[0] === "library" ? parts[1] : "",
     page: Math.max(1, Number(params.get("page") || "1")),
+    genre: params.get("genre") || "",
+    sort: params.get("sort") || "",
     q: params.get("q") || "",
   };
+  if (parts[0] === "search") {
+    state.view = "search";
+  } else if (parts[0] === "watchlist") {
+    state.view = "watchlist";
+  } else if (parts[0] === "settings") {
+    state.view = "settings";
+    if (parts[1] === "users") state.view = "users";
+  } else if (parts[0] === "library") {
+    state.view = "library";
+  }
   if (parts[2] === "show" && parts[3]) {
     state.view = "show";
     state.showTitle = parts.slice(3).join("/");
+  } else if (parts[2] === "season" && parts[3]) {
+    state.view = "season";
+    state.season = Number(parts[3]);
+    state.showTitle = parts.slice(4).join("/");
   } else if (parts[2] === "item" && parts[3]) {
     state.view = "detail";
     state.itemId = Number(parts[3]);
+  }
+  if (state.view === "detail") {
+    if (params.has("show")) state.showTitle = params.get("show") || "";
+    if (params.has("season")) state.season = Number(params.get("season") || "0");
   }
   return state;
 }
 
 function urlForState(state) {
   const libraryId = encodeURIComponent(state.libraryId || activeLibraryId || "");
-  let path = state.view === "search" ? "/search" : libraryId ? `/library/${libraryId}` : "/";
+  let path = "/";
+  if (state.view === "search") path = "/search";
+  else if (state.view === "watchlist") path = "/watchlist";
+  else if (state.view === "settings") path = "/settings";
+  else if (state.view === "users") path = "/settings/users";
+  else if (libraryId) path = `/library/${libraryId}`;
   if (state.view === "show" && state.showTitle) {
     path += `/show/${encodeURIComponent(state.showTitle)}`;
+  } else if (state.view === "season" && state.showTitle) {
+    path += `/season/${encodeURIComponent(String(state.season || 0))}/${encodeURIComponent(state.showTitle)}`;
   } else if (state.view === "detail" && state.itemId) {
     path += `/item/${encodeURIComponent(String(state.itemId))}`;
   }
   const params = new URLSearchParams();
   if (state.view === "library" && state.page && state.page > 1) params.set("page", String(state.page));
+  if (state.view === "library" && state.genre) params.set("genre", state.genre);
+  if (state.view === "library" && state.sort) params.set("sort", state.sort);
+  if (state.view === "detail" && state.showTitle) params.set("show", state.showTitle);
+  if (state.view === "detail" && state.season !== undefined && state.season !== null) params.set("season", String(state.season));
   if (state.q) params.set("q", state.q);
   const query = params.toString();
   return query ? `${path}?${query}` : path;
+}
+
+async function fetchShowSummary(libraryId, title) {
+  const shows = await fetchShowsPage(libraryId, { limit: 5, offset: 0 });
+  let show = shows.find((entry) => entry.title === title);
+  if (show) return show;
+  const searched = await api(`/api/tv/shows?libraryId=${encodeURIComponent(libraryId)}&limit=20&q=${encodeURIComponent(title)}`).catch(() => []);
+  show = searched.find((entry) => entry.title === title) || searched[0];
+  return show || null;
 }
 
 window.addEventListener("popstate", (e) => {
@@ -582,19 +984,8 @@ search.addEventListener("input", () => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     currentPage = 1;
-    loadActiveLibrary().catch(console.error);
+    renderSearch().catch(console.error);
   }, 180);
-});
-
-scan.addEventListener("click", async () => {
-  scan.disabled = true;
-  try {
-    await fetch("/api/scan", { method: "POST" });
-    await refreshStatus();
-    setTimeout(() => loadActiveLibrary().catch(console.error), 1500);
-  } finally {
-    scan.disabled = false;
-  }
 });
 
 timeline.addEventListener("input", () => {
@@ -636,6 +1027,11 @@ document.addEventListener("fullscreenchange", () => {
 });
 
 document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && userPanel.querySelector("details[open]")) {
+    e.preventDefault();
+    closeUserMenu();
+    return;
+  }
   // Esc closes theater (if not in native fullscreen — browser handles that)
   if (e.key === "Escape" && !theater.classList.contains("hidden") && !document.fullscreenElement) {
     e.preventDefault();
@@ -651,6 +1047,10 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     fullscreenBtn.click();
   }
+});
+
+document.addEventListener("click", (e) => {
+  if (!userPanel.contains(e.target)) closeUserMenu();
 });
 
 updateBandwidthVisibility();

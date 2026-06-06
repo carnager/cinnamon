@@ -21,6 +21,8 @@ import (
 type hlsSession struct {
 	dir     string
 	cmd     *exec.Cmd
+	owner   string
+	userID  int64
 	started time.Time
 	done    chan struct{}
 }
@@ -67,6 +69,10 @@ func (a *App) transcode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) hlsPlaylist(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
 	item, ok := a.lookupItem(w, r)
 	if !ok {
 		return
@@ -82,10 +88,14 @@ func (a *App) hlsPlaylist(w http.ResponseWriter, r *http.Request) {
 	requestedSubtitle := parseOptionalInt(r.URL.Query().Get("subtitle"))
 	subtitle := a.textSubtitleStream(r.Context(), item, requestedSubtitle, "hls")
 	a.log.Info("hls playlist requested", "item", item.ID, "session", sessionID, "bandwidth", bandwidth, "start", start, "audio", optionalIntValue(audio), "subtitle", optionalIntValue(subtitle), "requestedSubtitle", optionalIntValue(requestedSubtitle))
-	sess, err := a.ensureHLSSession(r.Context(), sessionID, item, bandwidth, start, audio, subtitle)
+	sess, err := a.ensureHLSSession(r.Context(), sessionID, user.ID, item, bandwidth, start, audio, subtitle)
 	if err != nil {
 		a.log.Warn("hls session failed", "item", item.ID, "session", sessionID, "error", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if sess.userID != user.ID {
+		http.NotFound(w, r)
 		return
 	}
 	playlist := filepath.Join(sess.dir, "index.m3u8")
@@ -106,6 +116,10 @@ func (a *App) hlsPlaylist(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) hlsSegment(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
 	sessionID := cleanSessionID(r.PathValue("session"))
 	segment := filepath.Base(r.PathValue("segment"))
 	if sessionID == "" || segment == "." || segment == "" {
@@ -116,6 +130,10 @@ func (a *App) hlsSegment(w http.ResponseWriter, r *http.Request) {
 	sess := a.hlsSessions[sessionID]
 	a.hlsMu.Unlock()
 	if sess == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if sess.userID != user.ID {
 		http.NotFound(w, r)
 		return
 	}
@@ -138,6 +156,10 @@ func (a *App) hlsSegment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) hlsStop(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
 	sessionID := cleanSessionID(r.PathValue("session"))
 	if sessionID == "" {
 		http.Error(w, "invalid session", http.StatusBadRequest)
@@ -145,6 +167,11 @@ func (a *App) hlsStop(w http.ResponseWriter, r *http.Request) {
 	}
 	a.hlsMu.Lock()
 	sess := a.hlsSessions[sessionID]
+	if sess != nil && sess.userID != user.ID {
+		a.hlsMu.Unlock()
+		http.NotFound(w, r)
+		return
+	}
 	delete(a.hlsSessions, sessionID)
 	a.hlsMu.Unlock()
 	if sess != nil {
@@ -154,14 +181,20 @@ func (a *App) hlsStop(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *App) ensureHLSSession(ctx context.Context, sessionID string, item media.Item, bandwidth int, start float64, audio, subtitle *int) (*hlsSession, error) {
+func (a *App) ensureHLSSession(ctx context.Context, sessionID string, userID int64, item media.Item, bandwidth int, start float64, audio, subtitle *int) (*hlsSession, error) {
 	a.hlsMu.Lock()
 	if sess := a.hlsSessions[sessionID]; sess != nil {
 		a.hlsMu.Unlock()
 		return sess, nil
 	}
-	oldSessions := a.hlsSessions
-	a.hlsSessions = map[string]*hlsSession{}
+	owner := hlsSessionOwner(sessionID)
+	oldSessions := map[string]*hlsSession{}
+	for id, sess := range a.hlsSessions {
+		if (sess.userID == userID && sess.owner == owner) || time.Since(sess.started) > 6*time.Hour {
+			oldSessions[id] = sess
+			delete(a.hlsSessions, id)
+		}
+	}
 	dir, err := os.MkdirTemp("", "popcorn-hls-"+sessionID+"-")
 	if err != nil {
 		a.hlsMu.Unlock()
@@ -175,13 +208,13 @@ func (a *App) ensureHLSSession(ctx context.Context, sessionID string, item media
 		_ = os.RemoveAll(dir)
 		return nil, err
 	}
-	sess := &hlsSession{dir: dir, cmd: cmd, started: time.Now(), done: make(chan struct{})}
+	sess := &hlsSession{dir: dir, cmd: cmd, owner: owner, userID: userID, started: time.Now(), done: make(chan struct{})}
 	a.hlsSessions[sessionID] = sess
 	a.hlsMu.Unlock()
 	for id, old := range oldSessions {
 		a.stopHLSSession(id, old)
 	}
-	a.log.Info("hls session started", "item", item.ID, "session", sessionID, "start", start, "bandwidth", bandwidth, "args", strings.Join(args, " "))
+	a.log.Info("hls session started", "item", item.ID, "session", sessionID, "owner", owner, "user", userID, "start", start, "bandwidth", bandwidth, "args", strings.Join(args, " "))
 	go func() {
 		defer close(sess.done)
 		b, _ := io.ReadAll(io.LimitReader(stderr, 128*1024))
@@ -197,6 +230,17 @@ func (a *App) ensureHLSSession(ctx context.Context, sessionID string, item media
 		_ = ctx
 	}()
 	return sess, nil
+}
+
+func hlsSessionOwner(sessionID string) string {
+	parts := strings.Split(sessionID, "_")
+	if len(parts) >= 3 && (parts[0] == "android" || parts[0] == "phone") && (parts[1] == "dev" || parts[1] == "user") {
+		return strings.Join(parts[:3], "_")
+	}
+	if len(parts) > 0 && parts[0] != "" {
+		return parts[0]
+	}
+	return sessionID
 }
 
 func (a *App) stopHLSSession(id string, sess *hlsSession) {
@@ -298,11 +342,7 @@ func isTextSubtitleCodec(codec string) bool {
 }
 
 func transcodeArgs(cfg config.Config, input string, bandwidth int, start float64, audio, subtitle *int) []string {
-	videoRate := bandwidth * 85 / 100
-	audioRate := bandwidth - videoRate
-	if audioRate < 96 {
-		audioRate = 96
-	}
+	videoRate, audioRate := transcodeRates(bandwidth)
 	args := []string{"-hide_banner", "-loglevel", "warning"}
 	inputSeek, outputSeek := transcodeSeekArgs(start)
 	args = append(args, inputSeek...)
@@ -338,11 +378,7 @@ func transcodeArgs(cfg config.Config, input string, bandwidth int, start float64
 }
 
 func hlsArgs(cfg config.Config, input, segmentPattern, playlist string, bandwidth int, start float64, audio, subtitle *int) []string {
-	videoRate := bandwidth * 85 / 100
-	audioRate := bandwidth - videoRate
-	if audioRate < 96 {
-		audioRate = 96
-	}
+	videoRate, audioRate := transcodeRates(bandwidth)
 	args := []string{"-hide_banner", "-loglevel", "warning"}
 	inputSeek, outputSeek := transcodeSeekArgs(start)
 	args = append(args, inputSeek...)
@@ -382,6 +418,25 @@ func hlsArgs(cfg config.Config, input, segmentPattern, playlist string, bandwidt
 		playlist,
 	)
 	return args
+}
+
+func transcodeRates(bandwidth int) (videoRate int, audioRate int) {
+	audioRate = 192
+	switch {
+	case bandwidth < 700:
+		audioRate = 96
+	case bandwidth < 1400:
+		audioRate = 128
+	}
+	videoRate = bandwidth - audioRate
+	if videoRate < 300 {
+		videoRate = bandwidth * 85 / 100
+		audioRate = bandwidth - videoRate
+	}
+	if audioRate < 64 {
+		audioRate = 64
+	}
+	return videoRate, audioRate
 }
 
 func transcodeSeekArgs(start float64) ([]string, []string) {

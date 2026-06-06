@@ -332,8 +332,9 @@ fun bandwidthLabel(kbps: Int?): String {
     return BandwidthOptions.firstOrNull { it.kbps == kbps }?.label ?: "Direct"
 }
 
-fun newHlsSessionId(itemId: Long): String {
-    return "android_${itemId}_${System.currentTimeMillis()}"
+fun newHlsSessionId(deviceId: String, itemId: Long): String {
+    val owner = deviceId.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,40}")) } ?: "local"
+    return "android_${owner}_${itemId}_${System.currentTimeMillis()}"
 }
 
 suspend fun stopHlsSession(session: Session, hlsSessionId: String) = withContext(Dispatchers.IO) {

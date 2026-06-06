@@ -2,6 +2,7 @@ package dev.popcorn.tv
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -56,6 +58,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
 
 @Composable
@@ -68,24 +72,28 @@ fun HomeView(
     completedShows: Set<String>,
     watchlistItems: Set<Long>,
     watchlistShows: Set<String>,
+    continueMovies: List<PopItem>,
+    continueEpisodes: List<PopItem>,
     recentMovies: List<PopItem>,
     recentShows: List<ShowSummary>,
     watchlistMovies: List<PopItem>,
     watchlistTvShows: List<ShowSummary>,
     error: String,
     loading: Boolean,
+    showUpdate: Boolean,
     onHome: () -> Unit,
     onLibrary: (Library) -> Unit,
     onWatchlist: () -> Unit,
     onSearch: () -> Unit,
+    onUpdates: () -> Unit,
+    onScan: () -> Unit,
     onLogout: () -> Unit,
     onItem: (PopItem) -> Unit,
     onShow: (ShowSummary) -> Unit,
     onItemMenu: (PopItem, FocusRequester?) -> Unit,
     onShowMenu: (ShowSummary, FocusRequester?) -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().background(Bg)) {
-        TopBar(session, libraries, selected = "home", onHome = onHome, onLibrary = onLibrary, onWatchlist = onWatchlist, onSearch = onSearch, onLogout = onLogout)
+    AppChrome(session, libraries, selected = "home", showUpdate = showUpdate, onHome = onHome, onLibrary = onLibrary, onWatchlist = onWatchlist, onSearch = onSearch, onUpdates = onUpdates, onScan = onScan, onLogout = onLogout) {
         if (error.isNotBlank()) {
             Text(error, color = ErrorRed, modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp), fontSize = 13.sp)
         }
@@ -94,13 +102,118 @@ fun HomeView(
                 CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
             }
         } else {
-            CuratedLanding(session, items, shows, completedItems, completedShows, watchlistItems, watchlistShows, recentMovies, recentShows, watchlistMovies, watchlistTvShows, onItem, onShow, onItemMenu, onShowMenu)
+            CuratedLanding(session, items, shows, completedItems, completedShows, watchlistItems, watchlistShows, continueMovies, continueEpisodes, recentMovies, recentShows, watchlistMovies, watchlistTvShows, onItem, onShow, onItemMenu, onShowMenu)
         }
     }
 }
 
 @Composable
-fun TopBar(session: Session?, libraries: List<Library>, selected: String, onHome: () -> Unit, onLibrary: (Library) -> Unit, onWatchlist: () -> Unit, onSearch: () -> Unit, onLogout: () -> Unit) {
+fun AppChrome(
+    session: Session?,
+    libraries: List<Library>,
+    selected: String,
+    showUpdate: Boolean,
+    onHome: () -> Unit,
+    onLibrary: (Library) -> Unit,
+    onWatchlist: () -> Unit,
+    onSearch: () -> Unit,
+    onUpdates: () -> Unit,
+    onScan: () -> Unit,
+    onLogout: () -> Unit,
+    topBar: (@Composable () -> Unit)? = null,
+    content: @Composable () -> Unit,
+) {
+    Row(Modifier.fillMaxSize().background(Bg)) {
+        SideNavigation(libraries, selected, onHome, onLibrary, onWatchlist, onSearch)
+        Column(Modifier.fillMaxSize().background(Bg)) {
+            if (topBar != null) {
+                topBar()
+            } else {
+                PageTopActions(session, showUpdate, onUpdates, onScan, onLogout)
+            }
+            content()
+        }
+    }
+}
+
+@Composable
+fun SideNavigation(libraries: List<Library>, selected: String, onHome: () -> Unit, onLibrary: (Library) -> Unit, onWatchlist: () -> Unit, onSearch: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val width by animateDpAsState(if (expanded) 190.dp else 66.dp, label = "nav-width")
+    val movieLibrary = libraries.firstOrNull { it.type == "movies" || it.type == "movie" }
+    val tvLibrary = libraries.firstOrNull { it.type == "tv" }
+    Column(
+        Modifier
+            .width(width)
+            .fillMaxSize()
+            .background(SurfaceColor)
+            .border(1.dp, Line)
+            .onFocusChanged { expanded = it.hasFocus }
+            .padding(horizontal = 10.dp, vertical = 18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text("P", color = Accent, fontSize = 24.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(bottom = 18.dp))
+        SideNavigationItem(symbol = "H", label = "Home", expanded = expanded, selected = selected == "home", onClick = onHome)
+        if (movieLibrary != null) {
+            SideNavigationItem(symbol = "M", label = movieLibrary.name, expanded = expanded, selected = selected == movieLibrary.id, onClick = { onLibrary(movieLibrary) })
+        }
+        if (tvLibrary != null) {
+            SideNavigationItem(symbol = "TV", label = tvLibrary.name, expanded = expanded, selected = selected == tvLibrary.id, onClick = { onLibrary(tvLibrary) })
+        }
+        SideNavigationItem(symbol = "WL", label = "Watchlist", expanded = expanded, selected = selected == "watchlist", onClick = onWatchlist)
+        SideNavigationItem(symbol = "S", label = "Search", expanded = expanded, selected = selected == "search", onClick = onSearch)
+    }
+}
+
+@Composable
+fun SideNavigationItem(symbol: String, label: String, expanded: Boolean, selected: Boolean, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val background = when {
+        focused -> Accent
+        selected -> AccentDim
+        else -> Color.Transparent
+    }
+    val contentColor = if (focused || selected) Color.Black else TextColor
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(background)
+            .border(1.dp, if (focused) Color.White else Color.Transparent, RoundedCornerShape(10.dp))
+            .onFocusChanged { focused = it.isFocused }
+            .focusable()
+            .tvActivate(onClick)
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(symbol, color = contentColor, fontSize = 15.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(28.dp), textAlign = TextAlign.Center)
+        if (expanded) {
+            Text(label, color = contentColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+fun PageTopActions(session: Session?, showUpdate: Boolean, onUpdates: () -> Unit, onScan: () -> Unit, onLogout: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(SurfaceColor)
+            .padding(horizontal = 26.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Popcorn", color = TextColor, fontSize = 18.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.weight(1f))
+        UserMenuButton(session, showUpdate, onUpdates, onScan, onLogout)
+    }
+}
+
+@Composable
+fun TopBar(session: Session?, libraries: List<Library>, selected: String, showUpdate: Boolean, onHome: () -> Unit, onLibrary: (Library) -> Unit, onWatchlist: () -> Unit, onSearch: () -> Unit, onUpdates: () -> Unit, onLogout: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -116,6 +229,9 @@ fun TopBar(session: Session?, libraries: List<Library>, selected: String, onHome
             Pill(text = library.name, selected = selected == library.id, onClick = { onLibrary(library) })
         }
         Pill(text = "Watchlist", selected = selected == "watchlist", onClick = onWatchlist)
+        if (showUpdate) {
+            Pill(text = "Update", selected = selected == "updates", onClick = onUpdates)
+        }
         Spacer(Modifier.weight(1f))
         if (!session?.username.isNullOrBlank()) {
             Text(session?.username.orEmpty(), color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -136,10 +252,13 @@ fun WatchlistView(
     watchlistItems: Set<Long>,
     watchlistShows: Set<String>,
     error: String,
+    showUpdate: Boolean,
     onHome: () -> Unit,
     onLibrary: (Library) -> Unit,
     onWatchlist: () -> Unit,
     onSearch: () -> Unit,
+    onUpdates: () -> Unit,
+    onScan: () -> Unit,
     onLogout: () -> Unit,
     onItem: (PopItem) -> Unit,
     onShow: (ShowSummary) -> Unit,
@@ -147,16 +266,14 @@ fun WatchlistView(
     onShowMenu: (ShowSummary, FocusRequester?) -> Unit,
 ) {
     var initialFocusPending by remember(movies.firstOrNull()?.id, shows.firstOrNull()?.title) { mutableStateOf(true) }
-    Column(Modifier.fillMaxSize().background(Bg)) {
-        TopBar(session, libraries, selected = "watchlist", onHome = onHome, onLibrary = onLibrary, onWatchlist = onWatchlist, onSearch = onSearch, onLogout = onLogout)
+    AppChrome(session, libraries, selected = "watchlist", showUpdate = showUpdate, onHome = onHome, onLibrary = onLibrary, onWatchlist = onWatchlist, onSearch = onSearch, onUpdates = onUpdates, onScan = onScan, onLogout = onLogout) {
         if (error.isNotBlank()) {
             Text(error, color = ErrorRed, modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp), fontSize = 13.sp)
         }
         if (movies.isEmpty() && shows.isEmpty()) {
             EmptyState("No watchlist items")
-            return@Column
-        }
-        LazyVerticalGrid(
+        } else {
+            LazyVerticalGrid(
             columns = GridCells.Adaptive(120.dp),
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 32.dp, end = 32.dp, top = 16.dp, bottom = 28.dp),
@@ -203,6 +320,7 @@ fun WatchlistView(
                 }
             }
         }
+        }
     }
 }
 
@@ -236,52 +354,69 @@ fun LibraryPageView(
     pageIndex: Int,
     pageHasNext: Boolean,
     selectedGenre: String,
+    selectedSort: String,
+    selectedMinRating: Double,
+    selectedSeenStatus: String,
     genres: List<String>,
+    alphabet: List<AlphabetEntry>,
+    initialFocusKey: Any?,
+    showUpdate: Boolean,
     onHome: () -> Unit,
     onLibrary: (Library) -> Unit,
     onWatchlist: () -> Unit,
     onSearch: () -> Unit,
+    onUpdates: () -> Unit,
+    onScan: () -> Unit,
     onLogout: () -> Unit,
     onPreviousPage: () -> Unit,
     onNextPage: () -> Unit,
     onGenre: (String) -> Unit,
+    onSort: (String) -> Unit,
+    onMinRating: (Double) -> Unit,
+    onSeenStatus: (String) -> Unit,
+    onAlphabet: (AlphabetEntry) -> Unit,
     onItem: (PopItem) -> Unit,
     onShow: (ShowSummary) -> Unit,
     onItemMenu: (PopItem, FocusRequester?) -> Unit,
     onShowMenu: (ShowSummary, FocusRequester?) -> Unit,
 ) {
-    var genrePanelOpen by remember(activeLibrary.id) { mutableStateOf(false) }
-    val genreFocus = remember { FocusRequester() }
     var restoreGridFocus by remember(activeLibrary.id, pageIndex, selectedGenre) { mutableStateOf<FocusRequester?>(null) }
-    fun closeGenrePanel() {
-        genrePanelOpen = false
-        restoreGridFocus?.requestFocus()
-    }
-    BackHandler(enabled = genrePanelOpen) {
-        closeGenrePanel()
-    }
-    LaunchedEffect(genrePanelOpen) {
-        if (genrePanelOpen) {
-            delay(80)
-            genreFocus.requestFocus()
-        }
-    }
     Box(Modifier.fillMaxSize().background(Bg)) {
-        Column(Modifier.fillMaxSize()) {
-            TopBar(session, libraries, selected = activeLibrary.id, onHome = onHome, onLibrary = onLibrary, onWatchlist = onWatchlist, onSearch = onSearch, onLogout = onLogout)
+        AppChrome(
+            session,
+            libraries,
+            selected = activeLibrary.id,
+            showUpdate = showUpdate,
+            onHome = onHome,
+            onLibrary = onLibrary,
+            onWatchlist = onWatchlist,
+            onSearch = onSearch,
+            onUpdates = onUpdates,
+            onScan = onScan,
+            onLogout = onLogout,
+            topBar = {
+                LibraryFilterBar(
+                    session = session,
+                    showUpdate = showUpdate,
+                    activeLibrary = activeLibrary,
+                    count = if (activeLibrary.type == "tv") shows.size else items.size,
+                    selectedGenre = selectedGenre,
+                    selectedSort = selectedSort,
+                    selectedMinRating = selectedMinRating,
+                    selectedSeenStatus = selectedSeenStatus,
+                    genres = genres,
+                    onSort = onSort,
+                    onGenre = onGenre,
+                    onMinRating = onMinRating,
+                    onSeenStatus = onSeenStatus,
+                    onUpdates = onUpdates,
+                    onScan = onScan,
+                    onLogout = onLogout,
+                )
+            },
+        ) {
             if (error.isNotBlank()) {
                 Text(error, color = ErrorRed, modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp), fontSize = 13.sp)
-            }
-            Row(
-                Modifier.fillMaxWidth().padding(start = 32.dp, end = 32.dp, top = 18.dp, bottom = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                val genreSuffix = if (selectedGenre.isBlank()) "" else " / $selectedGenre"
-                Text("${activeLibrary.name}$genreSuffix", color = TextColor, fontSize = 22.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
-                Pill("Prev", selected = false, onClick = { if (pageIndex > 0) onPreviousPage() })
-                Text("Page ${pageIndex + 1}", color = Muted, fontSize = 12.sp)
-                Pill("Next", selected = false, onClick = { if (pageHasNext) onNextPage() })
             }
             Box(Modifier.fillMaxSize()) {
                 if (loading) {
@@ -289,7 +424,14 @@ fun LibraryPageView(
                         CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
                     }
                 } else if (activeLibrary.type == "tv") {
-                    PosterGrid(entries = shows, key = { it.title }) { show, autoFocus, column, focusRequester ->
+                    PosterGrid(
+                        entries = shows,
+                        key = { showFocusKey(it) },
+                        initialFocusKey = initialFocusKey,
+                        alphabetTitle = { it.title },
+                        alphabetEntries = alphabet.takeIf { selectedSort.isBlank() } ?: emptyList(),
+                        onAlphabet = onAlphabet,
+                    ) { show, autoFocus, column, focusRequester ->
                         ShowCard(
                             session = session,
                             show = show,
@@ -298,20 +440,19 @@ fun LibraryPageView(
                             autoFocus = autoFocus,
                             focusRequester = focusRequester,
                             onFocus = { restoreGridFocus = focusRequester },
-                            onLeftEdge = {
-                                if (column == 0) {
-                                    genrePanelOpen = true
-                                    true
-                                } else {
-                                    false
-                                }
-                            },
                             onClick = { onShow(show) },
                             onLongClick = { requester -> onShowMenu(show, requester) },
                         )
                     }
                 } else {
-                    PosterGrid(entries = items, key = { it.id }) { item, autoFocus, column, focusRequester ->
+                    PosterGrid(
+                        entries = items,
+                        key = { it.id },
+                        initialFocusKey = initialFocusKey,
+                        alphabetTitle = { it.title },
+                        alphabetEntries = alphabet.takeIf { selectedSort.isBlank() } ?: emptyList(),
+                        onAlphabet = onAlphabet,
+                    ) { item, autoFocus, column, focusRequester ->
                         ItemCard(
                             session = session,
                             item = item,
@@ -320,14 +461,6 @@ fun LibraryPageView(
                             autoFocus = autoFocus,
                             focusRequester = focusRequester,
                             onFocus = { restoreGridFocus = focusRequester },
-                            onLeftEdge = {
-                                if (column == 0) {
-                                    genrePanelOpen = true
-                                    true
-                                } else {
-                                    false
-                                }
-                            },
                             onClick = { onItem(item) },
                             onLongClick = { requester -> onItemMenu(item, requester) },
                         )
@@ -335,75 +468,187 @@ fun LibraryPageView(
                 }
             }
         }
-        AnimatedVisibility(
-            visible = genrePanelOpen,
-            enter = fadeIn(tween(140)) + slideInHorizontally(tween(180)) { -it },
-            exit = fadeOut(tween(120)) + slideOutHorizontally(tween(160)) { -it },
+    }
+}
+
+fun showFocusKey(show: ShowSummary): String = "${show.libraryId}\n${show.title.lowercase()}"
+
+@Composable
+fun LibraryFilterBar(
+    session: Session?,
+    showUpdate: Boolean,
+    activeLibrary: Library,
+    count: Int,
+    selectedGenre: String,
+    selectedSort: String,
+    selectedMinRating: Double,
+    selectedSeenStatus: String,
+    genres: List<String>,
+    onSort: (String) -> Unit,
+    onGenre: (String) -> Unit,
+    onMinRating: (Double) -> Unit,
+    onSeenStatus: (String) -> Unit,
+    onUpdates: () -> Unit,
+    onScan: () -> Unit,
+    onLogout: () -> Unit,
+) {
+    var openDropdown by remember(activeLibrary.id) { mutableStateOf<LibraryDropdown?>(null) }
+    BackHandler(enabled = openDropdown != null) { openDropdown = null }
+    val countLabel = if (activeLibrary.type == "tv") "$count shows" else "$count movies"
+    val selectedGenres = splitSelectedGenres(selectedGenre)
+    val genreLabel = when (selectedGenres.size) {
+        0 -> "Genre: All"
+        1 -> "Genre: ${selectedGenres.first()}"
+        else -> "Genre: ${selectedGenres.size} selected"
+    }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .background(SurfaceColor)
+            .padding(horizontal = 26.dp, vertical = 10.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            GenreSidePanel(
-                genres = genres,
-                selectedGenre = selectedGenre,
-                focusRequester = genreFocus,
-                onGenre = {
-                    closeGenrePanel()
-                    onGenre(it)
+            Text(activeLibrary.name, color = TextColor, fontSize = 22.sp, fontWeight = FontWeight.Black)
+            Text(countLabel, color = Muted, fontSize = 12.sp)
+            Spacer(Modifier.width(10.dp))
+            Pill(text = "Sort: ${sortLabel(selectedSort)}", selected = openDropdown == LibraryDropdown.Sort || selectedSort.isNotBlank(), onClick = { openDropdown = LibraryDropdown.Sort })
+            Pill(text = seenLabel(selectedSeenStatus), selected = openDropdown == LibraryDropdown.Seen || selectedSeenStatus.isNotBlank(), onClick = { openDropdown = LibraryDropdown.Seen })
+            Pill(text = ratingLabel(selectedMinRating), selected = openDropdown == LibraryDropdown.Rating || selectedMinRating > 0.0, onClick = { openDropdown = LibraryDropdown.Rating })
+            Pill(text = genreLabel, selected = openDropdown == LibraryDropdown.Genre || selectedGenres.isNotEmpty(), onClick = { openDropdown = LibraryDropdown.Genre })
+            Spacer(Modifier.weight(1f))
+            UserMenuButton(session, showUpdate, onUpdates, onScan, onLogout)
+        }
+        when (openDropdown) {
+            LibraryDropdown.Sort -> FilterPopup("Sort", sortDropdownOptions().map { option ->
+                FilterOption(option.label, selectedSort == option.sort) {
+                    onSort(option.sort)
+                    openDropdown = null
+                }
+            }, onClose = { openDropdown = null })
+            LibraryDropdown.Seen -> FilterPopup("Seen status", seenOptions().map { (status, label) ->
+                FilterOption(label, selectedSeenStatus == status) {
+                    onSeenStatus(status)
+                    openDropdown = null
+                }
+            }, onClose = { openDropdown = null })
+            LibraryDropdown.Rating -> FilterPopup("IMDb rating", ratingOptions().map { (rating, label) ->
+                FilterOption(label, selectedMinRating == rating) {
+                    onMinRating(rating)
+                    openDropdown = null
+                }
+            }, onClose = { openDropdown = null })
+            LibraryDropdown.Genre -> FilterPopup(
+                title = "Genres",
+                options = listOf(FilterOption("All", selectedGenres.isEmpty()) { onGenre("") }) + genres.map { genre ->
+                    FilterOption(genre, selectedGenres.any { it.equals(genre, ignoreCase = true) }) {
+                        onGenre(toggleGenre(selectedGenres, genre).joinToString(","))
+                    }
                 },
-                onClose = ::closeGenrePanel,
+                onClose = { openDropdown = null },
             )
+            null -> Unit
+        }
+    }
+}
+
+private enum class LibraryDropdown { Sort, Seen, Rating, Genre }
+
+private data class SortOption(val sort: String, val label: String)
+private data class FilterOption(val label: String, val selected: Boolean, val onClick: () -> Unit)
+
+private fun sortDropdownOptions(): List<SortOption> = listOf(
+    SortOption("", "Name A-Z"),
+    SortOption("title_desc", "Name Z-A"),
+    SortOption("mtime", "File date newest"),
+    SortOption("mtime_asc", "File date oldest"),
+    SortOption("year_desc", "Release year newest"),
+    SortOption("year", "Release year oldest"),
+    SortOption("rating", "IMDb rating highest"),
+    SortOption("rating_asc", "IMDb rating lowest"),
+)
+
+private fun sortLabel(sort: String): String = sortDropdownOptions().firstOrNull { it.sort == sort }?.label ?: "Name A-Z"
+private fun seenOptions(): List<Pair<String, String>> = listOf("" to "All", "seen" to "Seen", "unseen" to "Unseen")
+private fun ratingOptions(): List<Pair<Double, String>> = listOf(0.0 to "All", 6.0 to "6+", 7.0 to "7+", 8.0 to "8+")
+private fun seenLabel(status: String): String = "Seen: " + (seenOptions().firstOrNull { it.first == status }?.second ?: "All")
+private fun ratingLabel(rating: Double): String = "IMDb: " + (ratingOptions().firstOrNull { it.first == rating }?.second ?: "All")
+private fun splitSelectedGenres(value: String): List<String> = value.split(",", "|").map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
+private fun toggleGenre(selected: List<String>, genre: String): List<String> {
+    return if (selected.any { it.equals(genre, ignoreCase = true) }) {
+        selected.filterNot { it.equals(genre, ignoreCase = true) }
+    } else {
+        selected + genre
+    }
+}
+
+@Composable
+private fun UserMenuButton(session: Session?, showUpdate: Boolean, onUpdates: () -> Unit, onScan: () -> Unit, onLogout: () -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Pill(text = session?.username?.ifBlank { "User" } ?: "User", selected = open, onClick = { open = true })
+        if (open) {
+            val options = buildList {
+                add(FilterOption("Scan libraries", false) {
+                    onScan()
+                    open = false
+                })
+                if (showUpdate) {
+                    add(FilterOption("Update app", false) {
+                        onUpdates()
+                        open = false
+                    })
+                }
+                add(FilterOption("Logout", false) {
+                    onLogout()
+                    open = false
+                })
+            }
+            FilterPopup(title = session?.username.orEmpty().ifBlank { "User" }, options = options, checkboxes = false, onClose = { open = false })
         }
     }
 }
 
 @Composable
-fun GenreSidePanel(
-    genres: List<String>,
-    selectedGenre: String,
-    focusRequester: FocusRequester,
-    onGenre: (String) -> Unit,
-    onClose: () -> Unit,
-) {
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color.Black.copy(alpha = .45f))
-            .onKeyEvent {
-                if (it.type == KeyEventType.KeyUp && (it.key == Key.DirectionRight || it.key == Key.Back)) {
-                    onClose()
-                    true
-                } else {
-                    false
-                }
-            },
-        contentAlignment = Alignment.CenterStart,
-    ) {
+private fun FilterPopup(title: String, options: List<FilterOption>, checkboxes: Boolean = true, onClose: () -> Unit) {
+    val firstFocus = remember { FocusRequester() }
+    LaunchedEffect(options.size) {
+        delay(80)
+        firstFocus.requestFocus()
+    }
+    Popup(alignment = Alignment.TopEnd, onDismissRequest = onClose, properties = PopupProperties(focusable = true)) {
         Column(
             Modifier
-                .width(250.dp)
-                .fillMaxSize()
+                .padding(top = 58.dp, end = 24.dp)
+                .width(340.dp)
+                .clip(RoundedCornerShape(10.dp))
                 .background(SurfaceColor)
-                .border(1.dp, Line)
-                .padding(start = 18.dp, end = 12.dp, top = 18.dp, bottom = 18.dp),
-        ) {
-            Text("Genres", color = Accent, fontSize = 18.sp, fontWeight = FontWeight.Black)
-            Spacer(Modifier.height(12.dp))
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                item(key = "all") {
-                    GenreFilterRow(
-                        text = "All",
-                        selected = selectedGenre.isBlank(),
-                        modifier = Modifier.focusRequester(focusRequester),
-                        onClick = { onGenre("") },
-                    )
+                .border(1.dp, Line, RoundedCornerShape(10.dp))
+                .onKeyEvent {
+                    if (it.type == KeyEventType.KeyUp && (it.key == Key.Back || it.key == Key.DirectionLeft || it.key == Key.DirectionRight)) {
+                        onClose()
+                        true
+                    } else {
+                        false
+                    }
                 }
-                items(genres, key = { it }) { genre ->
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(title, color = Accent, fontSize = 15.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+            LazyColumn(
+                modifier = Modifier.height(if (options.size > 8) 330.dp else ((options.size * 42) + 8).dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                itemsIndexed(options, key = { index, option -> "$index-${option.label}" }) { index, option ->
                     GenreFilterRow(
-                        text = genre,
-                        selected = genre.equals(selectedGenre, ignoreCase = true),
-                        modifier = Modifier,
-                        onClick = { onGenre(genre) },
+                        text = if (checkboxes) "${if (option.selected) "[x]" else "[ ]"} ${option.label}" else option.label,
+                        selected = option.selected,
+                        modifier = if (index == 0) Modifier.focusRequester(firstFocus) else Modifier,
+                        onClick = option.onClick,
                     )
                 }
             }
@@ -451,15 +696,18 @@ fun GenreFilterRow(text: String, selected: Boolean, modifier: Modifier = Modifie
 
 @Composable
 fun BrowserHeader(title: String, subtitle: String) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(start = 32.dp, end = 32.dp, top = 18.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(title, color = TextColor, fontSize = 22.sp, fontWeight = FontWeight.Black)
-        Text(subtitle, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 3.dp))
+    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .widthIn(max = TvPageMaxWidth)
+                .padding(start = 32.dp, end = 32.dp, top = 18.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(title, color = TextColor, fontSize = 22.sp, fontWeight = FontWeight.Black)
+            Text(subtitle, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 3.dp))
+        }
     }
 }
 
@@ -472,6 +720,8 @@ fun CuratedLanding(
     completedShows: Set<String>,
     watchlistItems: Set<Long>,
     watchlistShows: Set<String>,
+    continueMovies: List<PopItem>,
+    continueEpisodes: List<PopItem>,
     recentMovies: List<PopItem>,
     recentShows: List<ShowSummary>,
     watchlistMovies: List<PopItem>,
@@ -493,6 +743,8 @@ fun CuratedLanding(
     val showShelves = remember(shows) { showGenreShelves(shows).take(4) }
     var initialFocusPending by remember { mutableStateOf(true) }
     val initialFocusTarget = when {
+        continueMovies.isNotEmpty() -> "continueMovies"
+        continueEpisodes.isNotEmpty() -> "continueEpisodes"
         watchlistMovies.isNotEmpty() -> "watchlistMovies"
         watchlistTvShows.isNotEmpty() -> "watchlistShows"
         recentMovies.isNotEmpty() -> "recentMovies"
@@ -516,9 +768,25 @@ fun CuratedLanding(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item { BrowserHeader("Home", "${movies.size} movies \u00b7 ${shows.size} shows loaded") }
+        if (continueMovies.isNotEmpty()) {
+            item {
+                PosterShelf("Continue Movies", "${continueMovies.size} in progress", continueMovies, key = { it.id }, autoFocusFirst = true) { item, autoFocus ->
+                    val focusNow = shouldInitialFocus("continueMovies", autoFocus)
+                    ItemCard(session, item, watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), autoFocus = focusNow, onFocus = { consumeInitialFocus("continueMovies", autoFocus) }, onClick = { onItem(item) }, onLongClick = { requester -> onItemMenu(item, requester) })
+                }
+            }
+        }
+        if (continueEpisodes.isNotEmpty()) {
+            item {
+                PosterShelf("Continue TV", "${continueEpisodes.size} episodes", continueEpisodes, key = { it.id }, autoFocusFirst = continueMovies.isEmpty()) { item, autoFocus ->
+                    val focusNow = shouldInitialFocus("continueEpisodes", autoFocus)
+                    ItemCard(session, item, watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), autoFocus = focusNow, onFocus = { consumeInitialFocus("continueEpisodes", autoFocus) }, onClick = { onItem(item) }, onLongClick = { requester -> onItemMenu(item, requester) })
+                }
+            }
+        }
         if (watchlistMovies.isNotEmpty()) {
             item {
-                PosterShelf("Watchlist Movies", "${watchlistMovies.size} saved", watchlistMovies, key = { it.id }, autoFocusFirst = true) { item, autoFocus ->
+                PosterShelf("Watchlist Movies", "${watchlistMovies.size} saved", watchlistMovies, key = { it.id }, autoFocusFirst = continueMovies.isEmpty() && continueEpisodes.isEmpty()) { item, autoFocus ->
                     val focusNow = shouldInitialFocus("watchlistMovies", autoFocus)
                     ItemCard(session, item, watched = completedItems.contains(item.id), watchlisted = true, autoFocus = focusNow, onFocus = { consumeInitialFocus("watchlistMovies", autoFocus) }, onClick = { onItem(item) }, onLongClick = { requester -> onItemMenu(item, requester) })
                 }
@@ -534,7 +802,7 @@ fun CuratedLanding(
         }
         if (recentMovies.isNotEmpty()) {
             item {
-                PosterShelf("Recently Added Movies", "${recentMovies.size} new", recentMovies, key = { it.id }, autoFocusFirst = watchlistMovies.isEmpty() && watchlistTvShows.isEmpty()) { item, autoFocus ->
+                PosterShelf("Recently Added Movies", "${recentMovies.size} new", recentMovies, key = { it.id }, autoFocusFirst = continueMovies.isEmpty() && continueEpisodes.isEmpty() && watchlistMovies.isEmpty() && watchlistTvShows.isEmpty()) { item, autoFocus ->
                     val focusNow = shouldInitialFocus("recentMovies", autoFocus)
                     ItemCard(session, item, watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), autoFocus = focusNow, onFocus = { consumeInitialFocus("recentMovies", autoFocus) }, onClick = { onItem(item) }, onLongClick = { requester -> onItemMenu(item, requester) })
                 }
@@ -724,6 +992,7 @@ fun <T> PosterShelf(
             Text(subtitle, color = Muted, fontSize = 11.sp, modifier = Modifier.padding(bottom = 2.dp))
         }
         LazyRow(
+            modifier = Modifier.fillMaxWidth(),
             contentPadding = PaddingValues(horizontal = 32.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {

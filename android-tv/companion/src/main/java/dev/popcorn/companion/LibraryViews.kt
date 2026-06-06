@@ -4,6 +4,7 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,10 +18,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
@@ -30,6 +33,8 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -37,16 +42,22 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 
 @Composable
 fun BottomNavigation(page: Page, onHome: () -> Unit, onMovies: () -> Unit, onShows: () -> Unit, onSearch: () -> Unit, onRemote: () -> Unit) {
@@ -89,31 +100,45 @@ fun BottomNavigation(page: Page, onHome: () -> Unit, onMovies: () -> Unit, onSho
 }
 
 @Composable
-fun HomePage(session: Session, movies: List<PopItem>, shows: List<ShowSummary>, onMovie: (PopItem) -> Unit, onShow: (ShowSummary) -> Unit) {
-    LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        item { Text("Recently Added Movies", color = TextColor, fontSize = 19.sp, fontWeight = FontWeight.Bold) }
-        item { PosterRow(session, movies, onMovie) }
-        item { Text("Recently Added TV", color = TextColor, fontSize = 19.sp, fontWeight = FontWeight.Bold) }
-        item { ShowRow(session, shows, onShow) }
+fun HomePage(
+    session: Session,
+    recentMovies: List<PopItem>,
+    recentShows: List<ShowSummary>,
+    topMovies: List<PopItem>,
+    topShows: List<ShowSummary>,
+    completedItems: Set<Long>,
+    completedShows: Set<String>,
+    watchlistItems: Set<Long>,
+    watchlistShows: Set<String>,
+    onMovie: (PopItem) -> Unit,
+    onShow: (ShowSummary) -> Unit,
+) {
+    LazyColumn(contentPadding = PaddingValues(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        item { MovieShelf("Recently Added Movies", session, recentMovies, completedItems, watchlistItems, onMovie) }
+        item { ShowShelf("Recently Added TV", session, recentShows, completedShows, watchlistShows, onShow) }
+        if (topMovies.isNotEmpty()) item { MovieShelf("Top Rated Movies", session, topMovies, completedItems, watchlistItems, onMovie) }
+        if (topShows.isNotEmpty()) item { ShowShelf("Top Rated TV", session, topShows, completedShows, watchlistShows, onShow) }
     }
 }
 
 @Composable
-fun MediaGrid(title: String, session: Session, items: List<PopItem>, pageIndex: Int, onPrev: () -> Unit, onNext: () -> Unit, onOpen: (PopItem) -> Unit) {
+fun MediaGrid(title: String, session: Session, items: List<PopItem>, completedItems: Set<Long>, watchlistItems: Set<Long>, pageIndex: Int, genres: List<String>, filters: LibraryFilters, onFilters: (LibraryFilters) -> Unit, onPrev: () -> Unit, onNext: () -> Unit, onOpen: (PopItem) -> Unit) {
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
         PagingHeader(title, pageIndex, onPrev, onNext)
+        FilterBar(genres, filters, onFilters)
         LazyVerticalGrid(columns = GridCells.Adaptive(120.dp), contentPadding = PaddingValues(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            items(items, key = { it.id }) { item -> MovieCard(session, item, onClick = { onOpen(item) }) }
+            items(items, key = { it.id }) { item -> MovieCard(session, item, watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), onClick = { onOpen(item) }) }
         }
     }
 }
 
 @Composable
-fun ShowGrid(title: String, session: Session, shows: List<ShowSummary>, pageIndex: Int, onPrev: () -> Unit, onNext: () -> Unit, onShow: (ShowSummary) -> Unit) {
+fun ShowGrid(title: String, session: Session, shows: List<ShowSummary>, completedShows: Set<String>, watchlistShows: Set<String>, pageIndex: Int, genres: List<String>, filters: LibraryFilters, onFilters: (LibraryFilters) -> Unit, onPrev: () -> Unit, onNext: () -> Unit, onShow: (ShowSummary) -> Unit) {
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
         PagingHeader(title, pageIndex, onPrev, onNext)
+        FilterBar(genres, filters, onFilters)
         LazyVerticalGrid(columns = GridCells.Adaptive(120.dp), contentPadding = PaddingValues(vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            items(shows, key = { it.libraryId + it.title }) { show -> ShowCard(session, show, onClick = { onShow(show) }) }
+            items(shows, key = { it.libraryId + it.title }) { show -> ShowCard(session, show, watched = completedShows.contains(showMarkerKey(show)), watchlisted = watchlistShows.contains(showMarkerKey(show)), onClick = { onShow(show) }) }
         }
     }
 }
@@ -124,7 +149,7 @@ fun SeasonList(session: Session, show: ShowSummary, seasons: List<SeasonSummary>
         item { HeaderBack(show.title, onBack) }
         items(seasons, key = { it.seasonNumber }) { season ->
             Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Surface1).clickable { onSeason(season) }.padding(10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                PosterImage(imageUrl(session, season.posterItemId, season.posterMtimeUnix), Modifier.width(72.dp))
+                PosterImage(session, imageUrl(session, season.posterItemId, season.posterMtimeUnix), Modifier.width(72.dp))
                 Column(Modifier.weight(1f)) {
                     Text(season.title.ifBlank { "Season ${season.seasonNumber}" }, color = TextColor, fontWeight = FontWeight.Bold)
                     Text("${season.episodeCount} episodes", color = Muted, fontSize = 12.sp)
@@ -136,31 +161,141 @@ fun SeasonList(session: Session, show: ShowSummary, seasons: List<SeasonSummary>
 }
 
 @Composable
-fun EpisodeList(show: ShowSummary, season: SeasonSummary, episodes: List<PopItem>, onBack: () -> Unit, onOpen: (PopItem) -> Unit) {
+fun EpisodeList(session: Session, show: ShowSummary, season: SeasonSummary, episodes: List<PopItem>, completedItems: Set<Long>, watchlistItems: Set<Long>, onBack: () -> Unit, onOpen: (PopItem) -> Unit) {
     LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { HeaderBack("${show.title} \u00b7 ${season.title.ifBlank { "Season ${season.seasonNumber}" }}", onBack) }
         items(episodes, key = { it.id }) { episode ->
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Surface1).clickable { onOpen(episode) }.padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("${episode.episodeNumber}", color = Accent, fontWeight = FontWeight.Bold, modifier = Modifier.width(28.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(episode.episodeTitle.ifBlank { episode.title }, color = TextColor, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(fmtDuration(episode.durationMs), color = Muted, fontSize = 12.sp)
-                }
-                Button(onClick = { onOpen(episode) }, colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black)) { Text("Open") }
+            EpisodeCard(session, episode, watched = completedItems.contains(episode.id), watchlisted = watchlistItems.contains(episode.id), onOpen = { onOpen(episode) })
+        }
+    }
+}
+
+@Composable
+fun EpisodeCard(session: Session, episode: PopItem, watched: Boolean, watchlisted: Boolean, onOpen: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Surface1)
+            .clickable(onClick = onOpen)
+            .padding(8.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        EpisodeThumb(session, episode, watched, watchlisted)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                episode.episodeTitle.ifBlank { episode.title },
+                color = TextColor,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            val meta = listOf(
+                "S%02dE%02d".format(episode.seasonNumber, episode.episodeNumber),
+                fmtDuration(episode.durationMs).ifBlank { null },
+                episode.rating.takeIf { it > 0 }?.let { "%.1f".format(it) },
+            ).filterNotNull().joinToString(" \u00b7 ")
+            Text(meta, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (episode.overview.isNotBlank()) {
+                Text(episode.overview, color = Muted, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
     }
 }
 
 @Composable
-fun SearchPage(session: Session, query: String, onQuery: (String) -> Unit, movies: List<PopItem>, shows: List<ShowSummary>, onMovie: (PopItem) -> Unit, onShow: (ShowSummary) -> Unit) {
+fun EpisodeThumb(session: Session, episode: PopItem, watched: Boolean, watchlisted: Boolean) {
+    Box(
+        Modifier
+            .width(118.dp)
+            .aspectRatio(16f / 9f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Surface2),
+        contentAlignment = Alignment.BottomStart,
+    ) {
+        val thumbUrl = if (episode.backdropMtimeUnix > 0) imageUrl(session, episode.id, episode.backdropMtimeUnix, "backdrop") else ""
+        if (thumbUrl.isNotBlank()) {
+            AuthAsyncImage(session, thumbUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        }
+        if (watched) MarkerBadge("Seen", Accent, Modifier.align(Alignment.TopStart))
+        if (watchlisted) MarkerBadge("List", Color(0xFFFFD166), Modifier.align(Alignment.TopEnd))
+        Text(
+            "%02d".format(episode.episodeNumber),
+            color = Color.White,
+            fontWeight = FontWeight.Black,
+            fontSize = 11.sp,
+            modifier = Modifier
+                .padding(5.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(Color.Black.copy(alpha = .68f))
+                .padding(horizontal = 5.dp, vertical = 2.dp),
+        )
+    }
+}
+
+@Composable
+fun SearchPage(session: Session, query: String, onQuery: (String) -> Unit, genres: List<String>, filters: LibraryFilters, onFilters: (LibraryFilters) -> Unit, movies: List<PopItem>, shows: List<ShowSummary>, onMovie: (PopItem) -> Unit, onShow: (ShowSummary) -> Unit) {
     LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { PopTextField(query, onQuery, "Search movies and shows") }
+        item { FilterBar(genres, filters, onFilters) }
         if (shows.isNotEmpty()) item { Text("Shows", color = TextColor, fontWeight = FontWeight.Bold) }
         items(shows, key = { it.libraryId + it.title }) { show -> SearchRow(title = show.title, meta = "${show.seasonCount} seasons \u00b7 ${show.episodeCount} episodes", onClick = { onShow(show) }) }
         if (movies.isNotEmpty()) item { Text("Movies", color = TextColor, fontWeight = FontWeight.Bold) }
         items(movies, key = { it.id }) { item -> SearchRow(title = item.title, meta = listOf(item.year.takeIf { it > 0 }?.toString(), fmtDuration(item.durationMs)).filterNotNull().joinToString(" \u00b7 "), onClick = { onMovie(item) }) }
     }
+}
+
+@Composable
+fun FilterBar(genres: List<String>, filters: LibraryFilters, onFilters: (LibraryFilters) -> Unit) {
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        FilterMenu(
+            label = "Sort",
+            value = sortLabel(filters.sort),
+            options = listOf("" to "Title", "mtime" to "File date", "rating" to "Rating", "recent" to "Added"),
+            onSelect = { onFilters(filters.copy(sort = it)) },
+        )
+        FilterMenu(
+            label = "Genre",
+            value = filters.genre.ifBlank { "All" },
+            options = listOf("" to "All") + genres.map { it to it },
+            onSelect = { onFilters(filters.copy(genre = it)) },
+        )
+        FilterMenu(
+            label = "Rating",
+            value = if (filters.minRating > 0) "${filters.minRating.toInt()}+" else "All",
+            options = listOf(0.0 to "All", 6.0 to "6+", 7.0 to "7+", 8.0 to "8+", 9.0 to "9+"),
+            onSelect = { onFilters(filters.copy(minRating = it)) },
+        )
+    }
+}
+
+@Composable
+fun <T> FilterMenu(label: String, value: String, options: List<Pair<T, String>>, onSelect: (T) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        OutlinedButton(onClick = { expanded = true }) {
+            Text("$label: $value", maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { (option, text) ->
+                DropdownMenuItem(
+                    text = { Text(text) },
+                    onClick = {
+                        expanded = false
+                        onSelect(option)
+                    },
+                )
+            }
+        }
+    }
+}
+
+fun sortLabel(sort: String): String = when (sort) {
+    "mtime" -> "File date"
+    "rating" -> "Rating"
+    "recent" -> "Added"
+    else -> "Title"
 }
 
 @Composable
@@ -182,23 +317,41 @@ fun HeaderBack(title: String, onBack: () -> Unit) {
 }
 
 @Composable
-fun PosterRow(session: Session, items: List<PopItem>, onClick: (PopItem) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-        items.take(3).forEach { MovieCard(session, it, Modifier.weight(1f), onClick = { onClick(it) }) }
+fun MovieShelf(title: String, session: Session, items: List<PopItem>, completedItems: Set<Long>, watchlistItems: Set<Long>, onClick: (PopItem) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(title, color = TextColor, fontSize = 19.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 12.dp))
+        if (items.isEmpty()) {
+            Text("Nothing here yet", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 12.dp))
+        } else {
+            LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(items, key = { it.id }) { item ->
+                    MovieCard(session, item, Modifier.width(128.dp), watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), onClick = { onClick(item) })
+                }
+            }
+        }
     }
 }
 
 @Composable
-fun ShowRow(session: Session, shows: List<ShowSummary>, onClick: (ShowSummary) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-        shows.take(3).forEach { ShowCard(session, it, Modifier.weight(1f), onClick = { onClick(it) }) }
+fun ShowShelf(title: String, session: Session, shows: List<ShowSummary>, completedShows: Set<String>, watchlistShows: Set<String>, onClick: (ShowSummary) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(title, color = TextColor, fontSize = 19.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 12.dp))
+        if (shows.isEmpty()) {
+            Text("Nothing here yet", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 12.dp))
+        } else {
+            LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(shows, key = { it.libraryId + it.title }) { show ->
+                    ShowCard(session, show, Modifier.width(128.dp), watched = completedShows.contains(showMarkerKey(show)), watchlisted = watchlistShows.contains(showMarkerKey(show)), onClick = { onClick(show) })
+                }
+            }
+        }
     }
 }
 
 @Composable
-fun MovieCard(session: Session, item: PopItem, modifier: Modifier = Modifier, onClick: () -> Unit) {
+fun MovieCard(session: Session, item: PopItem, modifier: Modifier = Modifier, watched: Boolean = false, watchlisted: Boolean = false, onClick: () -> Unit) {
     Column(modifier.clip(RoundedCornerShape(8.dp)).background(Surface1).clickable(onClick = onClick).padding(6.dp)) {
-        PosterImage(imageUrl(session, item.id, item.posterMtimeUnix), Modifier.fillMaxWidth())
+        PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix), Modifier.fillMaxWidth(), watched = watched, watchlisted = watchlisted)
         Spacer(Modifier.height(6.dp))
         Text(item.title, color = TextColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(listOf(item.year.takeIf { it > 0 }?.toString(), fmtDuration(item.durationMs)).filterNotNull().joinToString(" \u00b7 "), color = Muted, fontSize = 11.sp, maxLines = 1)
@@ -206,9 +359,9 @@ fun MovieCard(session: Session, item: PopItem, modifier: Modifier = Modifier, on
 }
 
 @Composable
-fun ShowCard(session: Session, show: ShowSummary, modifier: Modifier = Modifier, onClick: () -> Unit) {
+fun ShowCard(session: Session, show: ShowSummary, modifier: Modifier = Modifier, watched: Boolean = false, watchlisted: Boolean = false, onClick: () -> Unit) {
     Column(modifier.clip(RoundedCornerShape(8.dp)).background(Surface1).clickable(onClick = onClick).padding(6.dp)) {
-        PosterImage(imageUrl(session, show.posterItemId, show.posterMtimeUnix), Modifier.fillMaxWidth())
+        PosterImage(session, imageUrl(session, show.posterItemId, show.posterMtimeUnix), Modifier.fillMaxWidth(), watched = watched, watchlisted = watchlisted)
         Spacer(Modifier.height(6.dp))
         Text(show.title, color = TextColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text("${show.seasonCount} seasons", color = Muted, fontSize = 11.sp, maxLines = 1)
@@ -216,10 +369,44 @@ fun ShowCard(session: Session, show: ShowSummary, modifier: Modifier = Modifier,
 }
 
 @Composable
-fun PosterImage(url: String, modifier: Modifier) {
+fun PosterImage(session: Session, url: String, modifier: Modifier, watched: Boolean = false, watchlisted: Boolean = false) {
     Box(modifier.aspectRatio(2f / 3f).clip(RoundedCornerShape(6.dp)).background(Surface2), contentAlignment = Alignment.Center) {
-        if (url.isNotBlank()) AsyncImage(url, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) else Text("?", color = Muted)
+        if (url.isNotBlank()) AuthAsyncImage(session, url, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) else Text("?", color = Muted)
+        if (watched) MarkerBadge("Seen", Accent, Modifier.align(Alignment.TopStart))
+        if (watchlisted) MarkerBadge("List", Color(0xFFFFD166), Modifier.align(Alignment.TopEnd))
     }
+}
+
+@Composable
+fun MarkerBadge(label: String, color: Color, modifier: Modifier = Modifier) {
+    Text(
+        label,
+        color = Color.Black,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Black,
+        modifier = modifier
+            .padding(5.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(color.copy(alpha = .94f))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
+}
+
+fun showMarkerKey(show: ShowSummary): String = "${show.libraryId}\n${show.title.lowercase()}"
+
+@Composable
+fun AuthAsyncImage(session: Session, url: String, contentDescription: String?, modifier: Modifier, contentScale: ContentScale) {
+    val context = LocalContext.current
+    val request = remember(url, session.token) {
+        val builder = ImageRequest.Builder(context)
+            .data(url)
+            .crossfade(false)
+        if (session.token.isNotBlank()) {
+            builder.addHeader("Authorization", "Bearer ${session.token}")
+        }
+        builder.build()
+    }
+    AsyncImage(model = request, contentDescription = contentDescription, modifier = modifier, contentScale = contentScale)
 }
 
 @Composable

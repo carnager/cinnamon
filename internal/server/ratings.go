@@ -14,6 +14,11 @@ import (
 	"popcorn/internal/media"
 )
 
+var (
+	tmdbAPIBaseURL = "https://api.themoviedb.org"
+	omdbAPIBaseURL = "https://www.omdbapi.com/"
+)
+
 type externalRatings struct {
 	ItemID               int64   `json:"itemId"`
 	IMDbID               string  `json:"imdbId,omitempty"`
@@ -79,12 +84,16 @@ func (a *App) ratingsForItem(ctx context.Context, item media.Item) (externalRati
 			updated = true
 		}
 		if out.TMDbConfigured {
-			if cached.IMDbID == "" || cached.TMDbID == "" {
-				a.fillIDsFromTMDb(ctx, item, &cached)
+			before := cached
+			a.fillFromTMDb(ctx, item, &cached)
+			if cached != before {
 				updated = true
 			}
-			if cached.TMDbRating == 0 && cached.TMDbID != "" && item.Kind == "movie" {
-				a.fillRatingFromTMDb(ctx, &cached)
+		}
+		if out.OMDbConfigured && cached.IMDbID != "" && (cached.IMDbRating == 0 || cached.RottenTomatoesRating == 0 || cached.MetacriticRating == 0) {
+			before := cached
+			a.fillRatingsFromOMDb(ctx, cached.IMDbID, &cached)
+			if cached != before {
 				updated = true
 			}
 		}
@@ -98,10 +107,7 @@ func (a *App) ratingsForItem(ctx context.Context, item media.Item) (externalRati
 		return cached, nil
 	}
 	if out.TMDbConfigured {
-		a.fillIDsFromTMDb(ctx, item, &out)
-		if out.TMDbRating == 0 && out.TMDbID != "" && item.Kind == "movie" {
-			a.fillRatingFromTMDb(ctx, &out)
-		}
+		a.fillFromTMDb(ctx, item, &out)
 	}
 	if out.OMDbConfigured && out.IMDbID != "" {
 		a.fillRatingsFromOMDb(ctx, out.IMDbID, &out)
@@ -168,6 +174,22 @@ func ratingsCacheExpired(fetchedAt string) bool {
 	return time.Since(t) > 7*24*time.Hour
 }
 
+func (a *App) fillFromTMDb(ctx context.Context, item media.Item, ratings *externalRatings) {
+	a.fillIDsFromTMDb(ctx, item, ratings)
+	if ratings.TMDbRating != 0 {
+		return
+	}
+	if item.Kind == "movie" && ratings.TMDbID == "" {
+		return
+	}
+	switch item.Kind {
+	case "movie":
+		a.fillMovieRatingFromTMDb(ctx, ratings)
+	case "episode":
+		a.fillEpisodeRatingFromTMDb(ctx, item, ratings)
+	}
+}
+
 func (a *App) fillIDsFromTMDb(ctx context.Context, item media.Item, ratings *externalRatings) {
 	if ratings.TMDbID != "" && ratings.IMDbID == "" && item.Kind == "movie" {
 		var raw struct {
@@ -184,7 +206,8 @@ func (a *App) fillIDsFromTMDb(ctx context.Context, item media.Item, ratings *ext
 			MovieResults []struct {
 				ID int `json:"id"`
 			} `json:"movie_results"`
-			TVResults []struct {
+			TVEpisodeResults []tmdbEpisodeResult `json:"tv_episode_results"`
+			TVResults        []struct {
 				ID int `json:"id"`
 			} `json:"tv_results"`
 		}
@@ -193,17 +216,156 @@ func (a *App) fillIDsFromTMDb(ctx context.Context, item media.Item, ratings *ext
 			if item.Kind == "movie" && len(raw.MovieResults) > 0 {
 				ratings.TMDbID = strconv.Itoa(raw.MovieResults[0].ID)
 				ratings.Source = appendSource(ratings.Source, "tmdb")
-			} else if item.Kind == "episode" && len(raw.TVResults) > 0 {
-				ratings.TMDbID = strconv.Itoa(raw.TVResults[0].ID)
-				ratings.Source = appendSource(ratings.Source, "tmdb")
+			} else if item.Kind == "episode" {
+				if episode, ok := matchingTMDbEpisode(raw.TVEpisodeResults, item); ok {
+					ratings.TMDbID = strconv.Itoa(episode.ID)
+					ratings.Source = appendSource(ratings.Source, "tmdb")
+				}
 			}
 		}
+	}
+	if item.Kind != "episode" || ratings.IMDbID != "" {
+		return
+	}
+	if episode, ok := a.tmdbEpisodeLocation(ctx, item, ratings); ok {
+		var raw struct {
+			IMDbID string `json:"imdb_id"`
+		}
+		path := fmt.Sprintf("/3/tv/%d/season/%d/episode/%d/external_ids", episode.ShowID, episode.SeasonNumber, episode.EpisodeNumber)
+		if a.tmdbGet(ctx, path, nil, &raw) == nil && raw.IMDbID != "" {
+			ratings.IMDbID = raw.IMDbID
+			if episode.ID > 0 && ratings.TMDbID == "" {
+				ratings.TMDbID = strconv.Itoa(episode.ID)
+			}
+			ratings.Source = appendSource(ratings.Source, "tmdb")
+		}
+	}
+}
+
+type tmdbEpisodeResult struct {
+	ID            int `json:"id"`
+	ShowID        int `json:"show_id"`
+	SeasonNumber  int `json:"season_number"`
+	EpisodeNumber int `json:"episode_number"`
+}
+
+func matchingTMDbEpisode(results []tmdbEpisodeResult, item media.Item) (tmdbEpisodeResult, bool) {
+	for _, episode := range results {
+		if item.SeasonNumber > 0 && episode.SeasonNumber != item.SeasonNumber {
+			continue
+		}
+		if item.EpisodeNumber > 0 && episode.EpisodeNumber != item.EpisodeNumber {
+			continue
+		}
+		return episode, true
+	}
+	if len(results) > 0 {
+		return results[0], true
+	}
+	return tmdbEpisodeResult{}, false
+}
+
+func (a *App) tmdbEpisodeLocation(ctx context.Context, item media.Item, ratings *externalRatings) (tmdbEpisodeResult, bool) {
+	if item.Kind != "episode" || item.SeasonNumber < 0 || item.EpisodeNumber <= 0 {
+		return tmdbEpisodeResult{}, false
+	}
+	showID := a.tmdbShowIDForEpisode(ctx, item)
+	if showID > 0 {
+		return tmdbEpisodeResult{
+			ID:            atoi(ratings.TMDbID),
+			ShowID:        showID,
+			SeasonNumber:  item.SeasonNumber,
+			EpisodeNumber: item.EpisodeNumber,
+		}, true
+	}
+	if ratings.IMDbID == "" {
+		return tmdbEpisodeResult{}, false
+	}
+	var raw struct {
+		TVEpisodeResults []tmdbEpisodeResult `json:"tv_episode_results"`
+	}
+	values := url.Values{"external_source": {"imdb_id"}}
+	if a.tmdbGet(ctx, "/3/find/"+url.PathEscape(ratings.IMDbID), values, &raw) != nil {
+		return tmdbEpisodeResult{}, false
+	}
+	return matchingTMDbEpisode(raw.TVEpisodeResults, item)
+}
+
+func (a *App) tmdbShowIDForEpisode(ctx context.Context, item media.Item) int {
+	showNFO := media.ShowNFOPath(a.libraryRoot(item.LibraryID), item.Path)
+	if showNFO == "" {
+		return 0
+	}
+	imdbID, tmdbID, tvdbID := media.ReadNFOExternalIDs(showNFO)
+	if n := atoi(tmdbID); n > 0 {
+		return n
+	}
+	for _, source := range []struct {
+		id     string
+		source string
+	}{
+		{imdbID, "imdb_id"},
+		{tvdbID, "tvdb_id"},
+	} {
+		if source.id == "" {
+			continue
+		}
+		var raw struct {
+			TVResults []struct {
+				ID int `json:"id"`
+			} `json:"tv_results"`
+		}
+		values := url.Values{"external_source": {source.source}}
+		if a.tmdbGet(ctx, "/3/find/"+url.PathEscape(source.id), values, &raw) == nil && len(raw.TVResults) > 0 {
+			return raw.TVResults[0].ID
+		}
+	}
+	return 0
+}
+
+func (a *App) fillEpisodeRatingFromTMDb(ctx context.Context, item media.Item, ratings *externalRatings) {
+	episode, ok := a.tmdbEpisodeLocation(ctx, item, ratings)
+	if !ok {
+		return
+	}
+	var raw struct {
+		ID          int     `json:"id"`
+		VoteAverage float64 `json:"vote_average"`
+	}
+	path := fmt.Sprintf("/3/tv/%d/season/%d/episode/%d", episode.ShowID, episode.SeasonNumber, episode.EpisodeNumber)
+	if a.tmdbGet(ctx, path, nil, &raw) != nil {
+		return
+	}
+	if raw.ID > 0 {
+		ratings.TMDbID = strconv.Itoa(raw.ID)
+	}
+	if raw.VoteAverage > 0 {
+		ratings.TMDbRating = raw.VoteAverage
+		ratings.Source = appendSource(ratings.Source, "tmdb")
+	}
+}
+
+func atoi(v string) int {
+	n, _ := strconv.Atoi(strings.TrimSpace(v))
+	return n
+}
+
+func (a *App) fillMovieRatingFromTMDb(ctx context.Context, ratings *externalRatings) {
+	var raw struct {
+		VoteAverage float64 `json:"vote_average"`
+	}
+	if a.tmdbGet(ctx, "/3/movie/"+url.PathEscape(ratings.TMDbID), nil, &raw) != nil {
+		return
+	}
+	if raw.VoteAverage > 0 {
+		ratings.TMDbRating = raw.VoteAverage
+		ratings.Source = appendSource(ratings.Source, "tmdb")
 	}
 }
 
 func (a *App) fillRatingsFromOMDb(ctx context.Context, imdbID string, ratings *externalRatings) {
 	values := url.Values{"apikey": {a.cfg.OMDbAPIKey}, "i": {imdbID}, "tomatoes": {"true"}}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.omdbapi.com/?"+values.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, omdbAPIBaseURL+"?"+values.Encode(), nil)
 	if err != nil {
 		return
 	}
@@ -252,19 +414,6 @@ func (a *App) fillRatingsFromOMDb(ctx context.Context, imdbID string, ratings *e
 	ratings.Source = appendSource(ratings.Source, "omdb")
 }
 
-func (a *App) fillRatingFromTMDb(ctx context.Context, ratings *externalRatings) {
-	var raw struct {
-		VoteAverage float64 `json:"vote_average"`
-	}
-	if a.tmdbGet(ctx, "/3/movie/"+url.PathEscape(ratings.TMDbID), nil, &raw) != nil {
-		return
-	}
-	if raw.VoteAverage > 0 {
-		ratings.TMDbRating = raw.VoteAverage
-		ratings.Source = appendSource(ratings.Source, "tmdb")
-	}
-}
-
 func (a *App) tmdbGet(ctx context.Context, path string, values url.Values, dest any) error {
 	if values == nil {
 		values = url.Values{}
@@ -272,7 +421,7 @@ func (a *App) tmdbGet(ctx context.Context, path string, values url.Values, dest 
 	if strings.TrimSpace(a.cfg.TMDbReadToken) == "" {
 		values.Set("api_key", a.cfg.TMDbAPIKey)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.themoviedb.org"+path+"?"+values.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(tmdbAPIBaseURL, "/")+path+"?"+values.Encode(), nil)
 	if err != nil {
 		return err
 	}

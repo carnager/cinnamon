@@ -70,6 +70,29 @@ func TestCleanSessionID(t *testing.T) {
 	}
 }
 
+func TestHLSSessionOwnerUsesDeviceScopedAndroidIDs(t *testing.T) {
+	if got, want := hlsSessionOwner("android_dev_ddf855546f1512d4322d0847_1326_1780598803359"), "android_dev_ddf855546f1512d4322d0847"; got != want {
+		t.Fatalf("hlsSessionOwner = %q, want %q", got, want)
+	}
+	if got, want := hlsSessionOwner("phone_user_aruntha_1326_1780598803359"), "phone_user_aruntha"; got != want {
+		t.Fatalf("phone hlsSessionOwner = %q, want %q", got, want)
+	}
+	if got, want := hlsSessionOwner("android_1326_1780598803359"), "android"; got != want {
+		t.Fatalf("legacy hlsSessionOwner = %q, want %q", got, want)
+	}
+}
+
+func TestTranscodeRatesCapStereoAACBitrate(t *testing.T) {
+	videoRate, audioRate := transcodeRates(5000)
+	if videoRate != 4808 || audioRate != 192 {
+		t.Fatalf("transcodeRates(5000) = %d/%d, want 4808/192", videoRate, audioRate)
+	}
+	videoRate, audioRate = transcodeRates(500)
+	if videoRate != 404 || audioRate != 96 {
+		t.Fatalf("transcodeRates(500) = %d/%d, want 404/96", videoRate, audioRate)
+	}
+}
+
 func TestRewritePlaylistSegments(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "index.m3u8")
 	input := strings.Join([]string{

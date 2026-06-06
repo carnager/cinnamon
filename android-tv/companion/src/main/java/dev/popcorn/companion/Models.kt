@@ -5,6 +5,19 @@ data class Library(val id: String, val name: String, val type: String)
 data class Device(val id: String, val name: String, val kind: String)
 data class PlayerState(val itemId: Long, val title: String, val state: String, val positionMs: Long, val durationMs: Long)
 data class PlaybackProgress(val itemId: Long, val positionMs: Long, val durationMs: Long, val completed: Boolean)
+data class ShowProgress(val libraryId: String, val showTitle: String, val episodeCount: Int, val completedCount: Int, val completed: Boolean)
+data class Watchlist(val items: List<PopItem>, val shows: List<ShowSummary>)
+data class AppUpdateInfo(
+    val configured: Boolean,
+    val available: Boolean,
+    val versionCode: Int,
+    val versionName: String,
+    val notes: String,
+    val apkUrl: String,
+    val sha256: String,
+    val sizeBytes: Long,
+    val error: String,
+)
 
 enum class PlaybackTarget { Shield, Phone }
 
@@ -29,7 +42,9 @@ data class PopItem(
     val year: Int,
     val durationMs: Long,
     val posterMtimeUnix: Long,
+    val backdropMtimeUnix: Long,
     val overview: String,
+    val genres: String,
     val rating: Double,
     val imdbId: String,
     val tmdbId: String,
@@ -47,7 +62,14 @@ data class ShowSummary(
     val posterItemId: Long,
     val posterMtimeUnix: Long,
     val overview: String,
+    val genres: String,
     val rating: Double,
+)
+
+data class LibraryFilters(
+    val genre: String = "",
+    val minRating: Double = 0.0,
+    val sort: String = "",
 )
 
 data class ExternalRatings(

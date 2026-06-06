@@ -4,6 +4,9 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val popcornAndroidVersionCode = providers.environmentVariable("POPCORN_ANDROID_VERSION_CODE").map(String::toInt).getOrElse(1)
+val popcornAndroidVersionName = providers.environmentVariable("POPCORN_ANDROID_VERSION_NAME").getOrElse("0.1.0")
+
 android {
     namespace = "dev.popcorn.tv"
     compileSdk = 36
@@ -12,8 +15,8 @@ android {
         applicationId = "dev.popcorn.tv"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = popcornAndroidVersionCode
+        versionName = popcornAndroidVersionName
     }
 
     buildTypes {
@@ -22,6 +25,10 @@ android {
             isMinifyEnabled = false
             isDebuggable = false
         }
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {
@@ -38,6 +45,7 @@ kotlin {
 
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2025.05.00"))
+    implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.activity:activity-compose:1.11.0")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")

@@ -1,6 +1,7 @@
 package dev.popcorn.companion
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -10,6 +11,7 @@ import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.security.MessageDigest
 
 object CompanionCache {
     fun readLibraries(context: Context, session: Session): List<Library> {
@@ -90,6 +92,56 @@ class Api(private val session: Session) {
         request("/api/auth/qr/complete", "POST", JSONObject().put("code", code).toString())
     }
 
+    suspend fun companionUpdate(currentVersionCode: Int): AppUpdateInfo = withContext(Dispatchers.IO) {
+        val json = request("/api/app/companion/update?versionCode=$currentVersionCode")
+        AppUpdateInfo(
+            configured = json.optBoolean("configured", false),
+            available = json.optBoolean("available", false),
+            versionCode = json.optInt("versionCode"),
+            versionName = json.optString("versionName"),
+            notes = json.optString("notes"),
+            apkUrl = json.optString("apkUrl"),
+            sha256 = json.optString("sha256"),
+            sizeBytes = json.optLong("sizeBytes"),
+            error = json.optString("error"),
+        )
+    }
+
+    suspend fun downloadCompanionUpdate(info: AppUpdateInfo, outFile: File): File = withContext(Dispatchers.IO) {
+        outFile.parentFile?.mkdirs()
+        val digest = MessageDigest.getInstance("SHA-256")
+        val conn = URL(session.server + info.apkUrl).openConnection() as HttpURLConnection
+        conn.requestMethod = "GET"
+        conn.connectTimeout = 8000
+        conn.readTimeout = 120000
+        if (session.token.isNotBlank()) conn.setRequestProperty("Authorization", "Bearer ${session.token}")
+        val code = conn.responseCode
+        if (code !in 200..299) {
+            val text = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            error(text.ifBlank { "HTTP $code" })
+        }
+        conn.inputStream.use { input ->
+            outFile.outputStream().use { output ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n <= 0) break
+                    digest.update(buffer, 0, n)
+                    output.write(buffer, 0, n)
+                }
+            }
+        }
+        val expected = info.sha256.trim().lowercase()
+        if (expected.isNotBlank()) {
+            val actual = digest.digest().joinToString("") { "%02x".format(it) }
+            if (actual != expected) {
+                outFile.delete()
+                error("APK checksum mismatch")
+            }
+        }
+        outFile
+    }
+
     suspend fun libraries(): List<Library> = withContext(Dispatchers.IO) {
         val arr = requestArray("/api/libraries")
         (0 until arr.length()).map { jsonToLibrary(arr.getJSONObject(it)) }
@@ -112,20 +164,25 @@ class Api(private val session: Session) {
         requestText("/api/devices/${enc(deviceId)}/commands", "POST", JSONObject().put("type", type).put("payload", payload).toString())
     }
 
-    suspend fun itemsPage(libraryId: String, limit: Int, offset: Int): List<PopItem> = withContext(Dispatchers.IO) {
-        parseItems(requestArray("/api/items?libraryId=${enc(libraryId)}&limit=$limit&offset=$offset"))
+    suspend fun itemsPage(libraryId: String, limit: Int, offset: Int, filters: LibraryFilters = LibraryFilters()): List<PopItem> = withContext(Dispatchers.IO) {
+        parseItems(requestArray("/api/items?libraryId=${enc(libraryId)}&limit=$limit&offset=$offset${filterParams(filters)}"))
     }
 
     suspend fun recentItems(libraryId: String, limit: Int): List<PopItem> = withContext(Dispatchers.IO) {
-        parseItems(requestArray("/api/items?libraryId=${enc(libraryId)}&limit=$limit&sort=recent"))
+        parseItems(requestArray("/api/items?libraryId=${enc(libraryId)}&limit=$limit&sort=mtime"))
     }
 
-    suspend fun showsPage(libraryId: String, limit: Int, offset: Int): List<ShowSummary> = withContext(Dispatchers.IO) {
-        parseShows(requestArray("/api/tv/shows?libraryId=${enc(libraryId)}&limit=$limit&offset=$offset"))
+    suspend fun showsPage(libraryId: String, limit: Int, offset: Int, filters: LibraryFilters = LibraryFilters()): List<ShowSummary> = withContext(Dispatchers.IO) {
+        parseShows(requestArray("/api/tv/shows?libraryId=${enc(libraryId)}&limit=$limit&offset=$offset${filterParams(filters)}"))
     }
 
     suspend fun recentShows(libraryId: String, limit: Int): List<ShowSummary> = withContext(Dispatchers.IO) {
-        parseShows(requestArray("/api/tv/shows?libraryId=${enc(libraryId)}&limit=$limit&sort=recent"))
+        parseShows(requestArray("/api/tv/shows?libraryId=${enc(libraryId)}&limit=$limit&sort=mtime"))
+    }
+
+    suspend fun genres(libraryId: String): List<String> = withContext(Dispatchers.IO) {
+        val arr = requestArray("/api/genres?libraryId=${enc(libraryId)}")
+        (0 until arr.length()).map { arr.getString(it) }
     }
 
     suspend fun seasons(libraryId: String, showTitle: String): List<SeasonSummary> = withContext(Dispatchers.IO) {
@@ -178,6 +235,41 @@ class Api(private val session: Session) {
         )
     }
 
+    suspend fun progressList(): List<PlaybackProgress> = withContext(Dispatchers.IO) {
+        val arr = requestArray("/api/progress?limit=5000")
+        (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            PlaybackProgress(
+                itemId = o.optLong("itemId"),
+                positionMs = o.optLong("positionMs"),
+                durationMs = o.optLong("durationMs"),
+                completed = o.optBoolean("completed"),
+            )
+        }
+    }
+
+    suspend fun showProgress(): List<ShowProgress> = withContext(Dispatchers.IO) {
+        val arr = requestArray("/api/progress/tv")
+        (0 until arr.length()).map {
+            val o = arr.getJSONObject(it)
+            ShowProgress(
+                libraryId = o.optString("libraryId"),
+                showTitle = o.optString("showTitle"),
+                episodeCount = o.optInt("episodeCount"),
+                completedCount = o.optInt("completedCount"),
+                completed = o.optBoolean("completed"),
+            )
+        }
+    }
+
+    suspend fun watchlist(): Watchlist = withContext(Dispatchers.IO) {
+        val root = request("/api/watchlist?limit=5000")
+        Watchlist(
+            items = parseItems(root.optJSONArray("items") ?: JSONArray()),
+            shows = parseShows(root.optJSONArray("shows") ?: JSONArray()),
+        )
+    }
+
     suspend fun saveProgress(itemId: Long, positionMs: Long, durationMs: Long, completed: Boolean) = withContext(Dispatchers.IO) {
         request(
             "/api/items/$itemId/progress",
@@ -195,13 +287,21 @@ class Api(private val session: Session) {
         requestText("/api/hls/${enc(sessionId)}", "DELETE", null)
     }
 
-    suspend fun searchMovies(query: String): List<PopItem> = withContext(Dispatchers.IO) {
-        val root = request("/api/search?limit=40&kind=movie&q=${enc(query)}")
+    suspend fun searchMovies(query: String, filters: LibraryFilters = LibraryFilters()): List<PopItem> = withContext(Dispatchers.IO) {
+        val root = request("/api/search?limit=40&kind=movie&q=${enc(query)}${filterParams(filters)}")
         parseItems(root.optJSONArray("items") ?: JSONArray())
     }
 
-    suspend fun searchShows(query: String): List<ShowSummary> = withContext(Dispatchers.IO) {
-        parseShows(requestArray("/api/tv/shows?limit=40&q=${enc(query)}"))
+    suspend fun searchShows(query: String, filters: LibraryFilters = LibraryFilters()): List<ShowSummary> = withContext(Dispatchers.IO) {
+        parseShows(requestArray("/api/tv/shows?limit=40&q=${enc(query)}${filterParams(filters)}"))
+    }
+
+    private fun filterParams(filters: LibraryFilters): String {
+        val params = mutableListOf<String>()
+        if (filters.genre.isNotBlank()) params += "genre=${enc(filters.genre)}"
+        if (filters.minRating > 0) params += "minRating=${filters.minRating}"
+        if (filters.sort.isNotBlank()) params += "sort=${enc(filters.sort)}"
+        return if (params.isEmpty()) "" else "&${params.joinToString("&")}"
     }
 
     private fun requestArray(path: String): JSONArray {
@@ -236,12 +336,12 @@ class Api(private val session: Session) {
 
     private fun parseShows(arr: JSONArray): List<ShowSummary> = (0 until arr.length()).map {
         val o = arr.getJSONObject(it)
-        ShowSummary(o.getString("libraryId"), o.optString("title"), o.optInt("episodeCount"), o.optInt("seasonCount"), o.optLong("posterItemId"), o.optLong("posterMtimeUnix"), o.optString("overview"), o.optDouble("rating"))
+        ShowSummary(o.getString("libraryId"), o.optString("title"), o.optInt("episodeCount"), o.optInt("seasonCount"), o.optLong("posterItemId"), o.optLong("posterMtimeUnix"), o.optString("overview"), o.optString("genres"), o.optDouble("rating"))
     }
 
     private fun parseItems(arr: JSONArray): List<PopItem> = (0 until arr.length()).map {
         val o = arr.getJSONObject(it)
-        PopItem(o.getLong("id"), o.getString("libraryId"), o.optString("kind"), o.optString("title"), o.optInt("year"), o.optLong("durationMs"), o.optLong("posterMtimeUnix"), o.optString("overview"), o.optDouble("rating"), o.optString("imdbId"), o.optString("tmdbId"), o.optString("showTitle"), o.optInt("seasonNumber"), o.optInt("episodeNumber"), o.optString("episodeTitle"))
+        PopItem(o.getLong("id"), o.getString("libraryId"), o.optString("kind"), o.optString("title"), o.optInt("year"), o.optLong("durationMs"), o.optLong("posterMtimeUnix"), o.optLong("backdropMtimeUnix"), o.optString("overview"), o.optString("genres"), o.optDouble("rating"), o.optString("imdbId"), o.optString("tmdbId"), o.optString("showTitle"), o.optInt("seasonNumber"), o.optInt("episodeNumber"), o.optString("episodeTitle"))
     }
 
     private fun enc(value: String): String = URLEncoder.encode(value, "UTF-8")
@@ -261,7 +361,9 @@ private fun jsonToItem(o: JSONObject): PopItem = PopItem(
     o.optInt("year"),
     o.optLong("durationMs"),
     o.optLong("posterMtimeUnix"),
+    o.optLong("backdropMtimeUnix"),
     o.optString("overview"),
+    o.optString("genres"),
     o.optDouble("rating"),
     o.optString("imdbId"),
     o.optString("tmdbId"),
@@ -279,7 +381,9 @@ private fun itemToJson(item: PopItem): JSONObject = JSONObject()
     .put("year", item.year)
     .put("durationMs", item.durationMs)
     .put("posterMtimeUnix", item.posterMtimeUnix)
+    .put("backdropMtimeUnix", item.backdropMtimeUnix)
     .put("overview", item.overview)
+    .put("genres", item.genres)
     .put("rating", item.rating)
     .put("imdbId", item.imdbId)
     .put("tmdbId", item.tmdbId)
@@ -296,6 +400,7 @@ private fun jsonToShow(o: JSONObject): ShowSummary = ShowSummary(
     o.optLong("posterItemId"),
     o.optLong("posterMtimeUnix"),
     o.optString("overview"),
+    o.optString("genres"),
     o.optDouble("rating"),
 )
 
@@ -307,6 +412,7 @@ private fun showToJson(show: ShowSummary): JSONObject = JSONObject()
     .put("posterItemId", show.posterItemId)
     .put("posterMtimeUnix", show.posterMtimeUnix)
     .put("overview", show.overview)
+    .put("genres", show.genres)
     .put("rating", show.rating)
 
 private fun jsonToSeason(o: JSONObject): SeasonSummary = SeasonSummary(
@@ -330,7 +436,7 @@ private fun seasonToJson(season: SeasonSummary): JSONObject = JSONObject()
     .put("posterMtimeUnix", season.posterMtimeUnix)
     .put("overview", season.overview)
 
-fun imageUrl(session: Session, itemId: Long, version: Long): String = if (itemId > 0) "${session.server}/api/items/$itemId/image/poster?v=$version" else ""
+fun imageUrl(session: Session, itemId: Long, version: Long, kind: String = "poster"): String = if (itemId > 0) "${session.server}/api/items/$itemId/image/$kind?v=$version" else ""
 
 fun streamUrl(session: Session, itemId: Long): String = "${session.server}/api/items/$itemId/stream"
 
@@ -342,6 +448,11 @@ fun hlsUrl(session: Session, itemId: Long, hlsSession: String, bandwidthKbps: In
     if (audioIndex != null) params += "audio=$audioIndex"
     if (subtitleIndex != null) params += "subtitle=$subtitleIndex"
     return "${session.server}/api/items/$itemId/hls/$hlsSession/index.m3u8?${params.joinToString("&")}"
+}
+
+fun hlsOwnerToken(value: String): String {
+    val cleaned = value.filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(24)
+    return cleaned.ifBlank { "local" }
 }
 
 fun sameServer(a: String, b: String): Boolean = a.trimEnd('/') == b.trimEnd('/')
@@ -379,15 +490,20 @@ fun postShieldSetup(callback: String, code: String, session: Session) {
         .put("token", session.token)
         .put("username", session.username)
         .toString()
+        .toByteArray(Charsets.UTF_8)
+    Log.i("PopcornQR", "Posting Shield setup to $callback")
     val conn = URL(callback).openConnection() as HttpURLConnection
     conn.requestMethod = "POST"
     conn.connectTimeout = 5000
     conn.readTimeout = 8000
     conn.setRequestProperty("Content-Type", "application/json")
+    conn.setRequestProperty("Content-Length", body.size.toString())
     conn.doOutput = true
-    OutputStreamWriter(conn.outputStream).use { it.write(body) }
+    conn.setFixedLengthStreamingMode(body.size)
+    conn.outputStream.use { it.write(body) }
     val codeResult = conn.responseCode
     val stream = if (codeResult in 200..299) conn.inputStream else conn.errorStream
-    val text = stream.bufferedReader().use { it.readText() }
+    val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+    Log.i("PopcornQR", "Shield setup response HTTP $codeResult ${text.take(160)}")
     if (codeResult !in 200..299) error(text.ifBlank { "HTTP $codeResult" })
 }

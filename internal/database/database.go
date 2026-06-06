@@ -54,7 +54,13 @@ CREATE TABLE IF NOT EXISTS media_items (
 	backdrop_mtime_unix INTEGER NOT NULL DEFAULT 0,
 	overview TEXT,
 	tagline TEXT,
+	official_rating TEXT,
 	genres TEXT,
+	tags TEXT,
+	studios TEXT,
+	directors TEXT,
+	writers TEXT,
+	countries TEXT,
 	rating REAL,
 	premiered TEXT,
 	show_title TEXT,
@@ -66,6 +72,72 @@ CREATE TABLE IF NOT EXISTS media_items (
 );
 CREATE INDEX IF NOT EXISTS idx_media_library_sort ON media_items(library_id, sort_title);
 CREATE INDEX IF NOT EXISTS idx_media_updated ON media_items(updated_at);
+CREATE TABLE IF NOT EXISTS media_shows (
+	library_id TEXT NOT NULL,
+	show_title TEXT NOT NULL,
+	sort_title TEXT NOT NULL,
+	original_title TEXT,
+	year INTEGER,
+	nfo_path TEXT,
+	nfo_mtime_unix INTEGER NOT NULL DEFAULT 0,
+	overview TEXT,
+	genres TEXT,
+	rating REAL,
+	premiered TEXT,
+	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY(library_id, show_title)
+);
+CREATE INDEX IF NOT EXISTS idx_media_shows_sort ON media_shows(library_id, sort_title);
+CREATE TABLE IF NOT EXISTS media_seasons (
+	library_id TEXT NOT NULL,
+	show_title TEXT NOT NULL,
+	season_number INTEGER NOT NULL,
+	title TEXT,
+	nfo_path TEXT,
+	nfo_mtime_unix INTEGER NOT NULL DEFAULT 0,
+	poster_path TEXT,
+	poster_mtime_unix INTEGER NOT NULL DEFAULT 0,
+	overview TEXT,
+	rating REAL,
+	premiered TEXT,
+	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY(library_id, show_title, season_number)
+);
+CREATE INDEX IF NOT EXISTS idx_media_seasons_show ON media_seasons(library_id, show_title, season_number);
+CREATE TABLE IF NOT EXISTS media_actors (
+	id INTEGER PRIMARY KEY,
+	scope TEXT NOT NULL,
+	item_id INTEGER REFERENCES media_items(id) ON DELETE CASCADE,
+	library_id TEXT,
+	show_title TEXT,
+	season_number INTEGER,
+	name TEXT NOT NULL,
+	role TEXT,
+	thumb TEXT,
+	sort_order INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_media_actors_item ON media_actors(scope, item_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_media_actors_show ON media_actors(scope, library_id, show_title, sort_order);
+CREATE INDEX IF NOT EXISTS idx_media_actors_season ON media_actors(scope, library_id, show_title, season_number, sort_order);
+CREATE TABLE IF NOT EXISTS actor_metadata_cache (
+	name TEXT PRIMARY KEY,
+	tmdb_id TEXT,
+	imdb_id TEXT,
+	biography TEXT,
+	birthday TEXT,
+	deathday TEXT,
+	place_of_birth TEXT,
+	known_for_department TEXT,
+	profile_path TEXT,
+	source TEXT NOT NULL DEFAULT '',
+	fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS metadata_backfills (
+	library_id TEXT NOT NULL,
+	name TEXT NOT NULL,
+	completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY(library_id, name)
+);
 CREATE TABLE IF NOT EXISTS scan_state (
 	library_id TEXT PRIMARY KEY,
 	started_at TEXT,
@@ -174,6 +246,15 @@ CREATE TABLE IF NOT EXISTS remote_device_state (
 	duration_ms INTEGER NOT NULL DEFAULT 0,
 	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	payload TEXT NOT NULL DEFAULT '{}'
+);
+CREATE TABLE IF NOT EXISTS app_updates (
+	app TEXT PRIMARY KEY,
+	apk_path TEXT NOT NULL,
+	version_code INTEGER NOT NULL,
+	version_name TEXT NOT NULL,
+	release_notes TEXT NOT NULL DEFAULT '',
+	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );`)
 	if err != nil {
 		return err
@@ -189,13 +270,85 @@ CREATE TABLE IF NOT EXISTS remote_device_state (
 		`ALTER TABLE media_items ADD COLUMN backdrop_mtime_unix INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE media_items ADD COLUMN overview TEXT`,
 		`ALTER TABLE media_items ADD COLUMN tagline TEXT`,
+		`ALTER TABLE media_items ADD COLUMN official_rating TEXT`,
 		`ALTER TABLE media_items ADD COLUMN genres TEXT`,
+		`ALTER TABLE media_items ADD COLUMN tags TEXT`,
+		`ALTER TABLE media_items ADD COLUMN studios TEXT`,
+		`ALTER TABLE media_items ADD COLUMN directors TEXT`,
+		`ALTER TABLE media_items ADD COLUMN writers TEXT`,
+		`ALTER TABLE media_items ADD COLUMN countries TEXT`,
 		`ALTER TABLE media_items ADD COLUMN rating REAL`,
 		`ALTER TABLE media_items ADD COLUMN premiered TEXT`,
 		`ALTER TABLE media_items ADD COLUMN season_number INTEGER`,
 		`ALTER TABLE media_items ADD COLUMN episode_number INTEGER`,
 		`ALTER TABLE media_items ADD COLUMN episode_title TEXT`,
 		`CREATE INDEX IF NOT EXISTS idx_media_show ON media_items(library_id, show_title, season_number, episode_number)`,
+		`CREATE TABLE IF NOT EXISTS media_shows (
+			library_id TEXT NOT NULL,
+			show_title TEXT NOT NULL,
+			sort_title TEXT NOT NULL,
+			original_title TEXT,
+			year INTEGER,
+			nfo_path TEXT,
+			nfo_mtime_unix INTEGER NOT NULL DEFAULT 0,
+			overview TEXT,
+			genres TEXT,
+			rating REAL,
+			premiered TEXT,
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY(library_id, show_title)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_media_shows_sort ON media_shows(library_id, sort_title)`,
+		`CREATE TABLE IF NOT EXISTS media_seasons (
+			library_id TEXT NOT NULL,
+			show_title TEXT NOT NULL,
+			season_number INTEGER NOT NULL,
+			title TEXT,
+			nfo_path TEXT,
+			nfo_mtime_unix INTEGER NOT NULL DEFAULT 0,
+			poster_path TEXT,
+			poster_mtime_unix INTEGER NOT NULL DEFAULT 0,
+			overview TEXT,
+			rating REAL,
+			premiered TEXT,
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY(library_id, show_title, season_number)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_media_seasons_show ON media_seasons(library_id, show_title, season_number)`,
+		`CREATE TABLE IF NOT EXISTS media_actors (
+			id INTEGER PRIMARY KEY,
+			scope TEXT NOT NULL,
+			item_id INTEGER REFERENCES media_items(id) ON DELETE CASCADE,
+			library_id TEXT,
+			show_title TEXT,
+			season_number INTEGER,
+			name TEXT NOT NULL,
+			role TEXT,
+			thumb TEXT,
+			sort_order INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_media_actors_item ON media_actors(scope, item_id, sort_order)`,
+		`CREATE INDEX IF NOT EXISTS idx_media_actors_show ON media_actors(scope, library_id, show_title, sort_order)`,
+		`CREATE INDEX IF NOT EXISTS idx_media_actors_season ON media_actors(scope, library_id, show_title, season_number, sort_order)`,
+		`CREATE TABLE IF NOT EXISTS actor_metadata_cache (
+			name TEXT PRIMARY KEY,
+			tmdb_id TEXT,
+			imdb_id TEXT,
+			biography TEXT,
+			birthday TEXT,
+			deathday TEXT,
+			place_of_birth TEXT,
+			known_for_department TEXT,
+			profile_path TEXT,
+			source TEXT NOT NULL DEFAULT '',
+			fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS metadata_backfills (
+			library_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			completed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY(library_id, name)
+		)`,
 		`ALTER TABLE scan_state ADD COLUMN files_seen INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE scan_state ADD COLUMN media_found INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE scan_state ADD COLUMN items_imported INTEGER NOT NULL DEFAULT 0`,
@@ -210,6 +363,7 @@ CREATE TABLE IF NOT EXISTS remote_device_state (
 		`ALTER TABLE external_ratings_cache ADD COLUMN tmdb_rating REAL`,
 		`CREATE INDEX IF NOT EXISTS idx_remote_commands_device ON remote_commands(device_id, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_remote_pairing_expires ON remote_pairing_codes(expires_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_app_updates_updated ON app_updates(updated_at)`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumn(err) {
 			return err

@@ -178,6 +178,56 @@ func (a *App) progressShowDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"libraryId": libraryID, "showTitle": showTitle, "itemsUnmarked": len(episodes)})
 }
 
+func (a *App) progressSeasonSave(w http.ResponseWriter, r *http.Request) {
+	a.progressSeasonSet(w, r, true)
+}
+
+func (a *App) progressSeasonDelete(w http.ResponseWriter, r *http.Request) {
+	a.progressSeasonSet(w, r, false)
+}
+
+func (a *App) progressSeasonSet(w http.ResponseWriter, r *http.Request, completed bool) {
+	user, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
+	libraryID := r.URL.Query().Get("libraryId")
+	showTitle := r.URL.Query().Get("showTitle")
+	season, err := strconv.Atoi(r.URL.Query().Get("season"))
+	if libraryID == "" || showTitle == "" || err != nil {
+		http.Error(w, "libraryId, showTitle and season are required", http.StatusBadRequest)
+		return
+	}
+	episodes, err := a.store.ListEpisodes(r.Context(), libraryID, showTitle, season)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for _, episode := range episodes {
+		if completed {
+			duration := episode.DurationMS
+			if duration <= 0 {
+				duration = 1
+			}
+			if _, err := a.store.SaveProgress(r.Context(), user.ID, episode.ID, duration, duration, true); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			continue
+		}
+		if err := a.store.DeleteProgress(r.Context(), user.ID, episode.ID); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	go a.traktSyncHistoryItems(user.ID, episodes, !completed)
+	key := "itemsMarked"
+	if !completed {
+		key = "itemsUnmarked"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"libraryId": libraryID, "showTitle": showTitle, "season": season, key: len(episodes)})
+}
+
 func isFinished(positionMS, durationMS int64) bool {
 	if durationMS <= 0 || positionMS <= 0 {
 		return false

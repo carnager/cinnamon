@@ -83,6 +83,47 @@ func TestAuthenticateNormalizesUsernameAndRejectsInvalidUsers(t *testing.T) {
 	}
 }
 
+func TestUpdateUserChangesProfileRoleAndPassword(t *testing.T) {
+	store, ctx := newTestStore(t)
+	user, err := store.CreateUser(ctx, CreateUserInput{
+		Username:    "player",
+		DisplayName: "Player",
+		Password:    "secret1",
+		IsAdmin:     false,
+	})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	displayName := "Movie Player"
+	isAdmin := true
+	disabled := false
+	updated, err := store.UpdateUser(ctx, user.ID, UpdateUserInput{
+		DisplayName: &displayName,
+		Password:    "secret2",
+		IsAdmin:     &isAdmin,
+		Disabled:    &disabled,
+	})
+	if err != nil {
+		t.Fatalf("update user: %v", err)
+	}
+	if updated.DisplayName != "Movie Player" || !updated.IsAdmin || updated.Disabled {
+		t.Fatalf("updated user = %#v, want display name, admin, enabled", updated)
+	}
+	if _, err := store.Authenticate(ctx, "player", "secret1"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("old password auth error = %v, want ErrInvalidCredentials", err)
+	}
+	if _, err := store.Authenticate(ctx, "player", "secret2"); err != nil {
+		t.Fatalf("new password auth: %v", err)
+	}
+	count, err := store.EnabledAdminCount(ctx)
+	if err != nil {
+		t.Fatalf("enabled admin count: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("enabled admin count = %d, want 1", count)
+	}
+}
+
 func TestSessionLifecycleAndExpiry(t *testing.T) {
 	store, ctx := newTestStore(t)
 	user, err := store.CreateUser(ctx, CreateUserInput{

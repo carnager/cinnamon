@@ -14,13 +14,37 @@ type Store struct {
 }
 
 type SearchOptions struct {
-	Query     string
+	Query          string
+	LibraryID      string
+	Kind           string
+	Genre          string
+	Sort           string
+	SeenStatus     string
+	UserID         int64
+	NameStartsWith string
+	TitleOnly      bool
+	MinRating      float64
+	Limit          int
+	Offset         int
+}
+
+type ShowOptions struct {
+	Query          string
+	LibraryID      string
+	Genre          string
+	Sort           string
+	SeenStatus     string
+	UserID         int64
+	NameStartsWith string
+	MinRating      float64
+	Limit          int
+	Offset         int
+}
+
+type AlphabetOptions struct {
 	LibraryID string
 	Kind      string
 	Genre     string
-	Sort      string
-	Limit     int
-	Offset    int
 }
 
 func NewStore(db *sql.DB) *Store {
@@ -32,13 +56,19 @@ func (s *Store) DB() *sql.DB {
 }
 
 func (s *Store) UpsertItem(ctx context.Context, item Item) error {
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
 INSERT INTO media_items (
 	library_id, path, kind, title, sort_title, original_title, year, duration_ms, container,
 	video_codec, audio_codec, imdb_id, tmdb_id, tvdb_id, width, height, size_bytes, mtime_unix,
 	nfo_path, nfo_mtime_unix, poster_path, poster_mtime_unix, backdrop_path, backdrop_mtime_unix,
-	overview, tagline, genres, rating, premiered, show_title, season_number, episode_number, episode_title, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+	overview, tagline, official_rating, genres, tags, studios, directors, writers, countries, rating, premiered,
+	show_title, season_number, episode_number, episode_title, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 ON CONFLICT(path) DO UPDATE SET
 	library_id=excluded.library_id,
 	kind=excluded.kind,
@@ -65,7 +95,13 @@ ON CONFLICT(path) DO UPDATE SET
 	backdrop_mtime_unix=excluded.backdrop_mtime_unix,
 	overview=excluded.overview,
 	tagline=excluded.tagline,
+	official_rating=excluded.official_rating,
 	genres=excluded.genres,
+	tags=excluded.tags,
+	studios=excluded.studios,
+	directors=excluded.directors,
+	writers=excluded.writers,
+	countries=excluded.countries,
 	rating=excluded.rating,
 	premiered=excluded.premiered,
 	show_title=excluded.show_title,
@@ -79,10 +115,122 @@ ON CONFLICT(path) DO UPDATE SET
 		nullableInt(item.Width), nullableInt(item.Height), item.SizeBytes, item.MTimeUnix,
 		nullString(item.NFOPath), item.NFOMTimeUnix, nullString(item.PosterPath), item.PosterMTimeUnix,
 		nullString(item.BackdropPath), item.BackdropMTimeUnix,
-		nullString(item.Overview), nullString(item.Tagline), nullString(item.Genres), nullableFloat(item.Rating), nullString(item.Premiered),
+		nullString(item.Overview), nullString(item.Tagline), nullString(item.OfficialRating), nullString(item.Genres),
+		nullString(item.Tags), nullString(item.Studios), nullString(item.Directors), nullString(item.Writers), nullString(item.Countries),
+		nullableFloat(item.Rating), nullString(item.Premiered),
 		nullString(item.ShowTitle), nullableInt(item.SeasonNumber), nullableInt(item.EpisodeNumber),
-		nullString(item.EpisodeTitle))
-	return err
+		nullString(item.EpisodeTitle)); err != nil {
+		return err
+	}
+	var itemID int64
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM media_items WHERE path = ?`, item.Path).Scan(&itemID); err != nil {
+		return err
+	}
+	if err := replaceActorsTx(ctx, tx, "item", itemID, item.LibraryID, item.ShowTitle, item.SeasonNumber, item.Actors); err != nil {
+		return err
+	}
+	if item.ShowMetadata != nil {
+		if err := upsertShowMetadataTx(ctx, tx, *item.ShowMetadata); err != nil {
+			return err
+		}
+	}
+	if item.SeasonMetadata != nil {
+		if err := upsertSeasonMetadataTx(ctx, tx, *item.SeasonMetadata); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func upsertShowMetadataTx(ctx context.Context, tx *sql.Tx, meta ShowMetadata) error {
+	if strings.TrimSpace(meta.LibraryID) == "" || strings.TrimSpace(meta.Title) == "" {
+		return nil
+	}
+	if meta.SortTitle == "" {
+		meta.SortTitle = sortKey(meta.Title)
+	}
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO media_shows(library_id, show_title, sort_title, original_title, year, nfo_path, nfo_mtime_unix, overview, genres, rating, premiered, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(library_id, show_title) DO UPDATE SET
+	sort_title=excluded.sort_title,
+	original_title=excluded.original_title,
+	year=excluded.year,
+	nfo_path=excluded.nfo_path,
+	nfo_mtime_unix=excluded.nfo_mtime_unix,
+	overview=excluded.overview,
+	genres=excluded.genres,
+	rating=excluded.rating,
+	premiered=excluded.premiered,
+	updated_at=CURRENT_TIMESTAMP`,
+		meta.LibraryID, meta.Title, meta.SortTitle, nullString(meta.OriginalTitle), nullableInt(meta.Year),
+		nullString(meta.NFOPath), meta.NFOMTimeUnix, nullString(meta.Overview), nullString(meta.Genres),
+		nullableFloat(meta.Rating), nullString(meta.Premiered))
+	if err != nil {
+		return err
+	}
+	return replaceActorsTx(ctx, tx, "show", 0, meta.LibraryID, meta.Title, 0, meta.Actors)
+}
+
+func upsertSeasonMetadataTx(ctx context.Context, tx *sql.Tx, meta SeasonMetadata) error {
+	if strings.TrimSpace(meta.LibraryID) == "" || strings.TrimSpace(meta.ShowTitle) == "" {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO media_seasons(library_id, show_title, season_number, title, nfo_path, nfo_mtime_unix, poster_path, poster_mtime_unix, overview, rating, premiered, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(library_id, show_title, season_number) DO UPDATE SET
+	title=excluded.title,
+	nfo_path=excluded.nfo_path,
+	nfo_mtime_unix=excluded.nfo_mtime_unix,
+	poster_path=excluded.poster_path,
+	poster_mtime_unix=excluded.poster_mtime_unix,
+	overview=excluded.overview,
+	rating=excluded.rating,
+	premiered=excluded.premiered,
+	updated_at=CURRENT_TIMESTAMP`,
+		meta.LibraryID, meta.ShowTitle, meta.SeasonNumber, nullString(meta.Title), nullString(meta.NFOPath), meta.NFOMTimeUnix,
+		nullString(meta.PosterPath), meta.PosterMTimeUnix, nullString(meta.Overview), nullableFloat(meta.Rating), nullString(meta.Premiered))
+	if err != nil {
+		return err
+	}
+	return replaceActorsTx(ctx, tx, "season", 0, meta.LibraryID, meta.ShowTitle, meta.SeasonNumber, meta.Actors)
+}
+
+func replaceActorsTx(ctx context.Context, tx *sql.Tx, scope string, itemID int64, libraryID, showTitle string, seasonNumber int, actors []Actor) error {
+	switch scope {
+	case "item":
+		if _, err := tx.ExecContext(ctx, `DELETE FROM media_actors WHERE scope = 'item' AND item_id = ?`, itemID); err != nil {
+			return err
+		}
+	case "show":
+		if _, err := tx.ExecContext(ctx, `DELETE FROM media_actors WHERE scope = 'show' AND library_id = ? AND show_title = ?`, libraryID, showTitle); err != nil {
+			return err
+		}
+	case "season":
+		if _, err := tx.ExecContext(ctx, `DELETE FROM media_actors WHERE scope = 'season' AND library_id = ? AND show_title = ? AND season_number = ?`, libraryID, showTitle, seasonNumber); err != nil {
+			return err
+		}
+	default:
+		return nil
+	}
+	for i, actor := range actors {
+		name := strings.TrimSpace(actor.Name)
+		if name == "" {
+			continue
+		}
+		order := actor.Order
+		if order == 0 {
+			order = i + 1
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO media_actors(scope, item_id, library_id, show_title, season_number, name, role, thumb, sort_order)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			scope, nullableInt64(itemID), nullString(libraryID), nullString(showTitle), nullableInt(seasonNumber), name, nullString(actor.Role), nullString(actor.Thumb), order); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) RemoveMissing(ctx context.Context, libraryID string, seen map[string]struct{}) error {
@@ -135,14 +283,18 @@ func (s *Store) RemovePathPrefix(ctx context.Context, libraryID, prefix string) 
 	return nil
 }
 
-func (s *Store) ListItems(ctx context.Context, libraryID, q, genre, sort string, limit, offset int) ([]Item, error) {
+func (s *Store) ListItems(ctx context.Context, libraryID, q, genre, sort string, minRating float64, limit, offset int) ([]Item, error) {
+	return s.ListItemsForUser(ctx, libraryID, q, genre, sort, "", 0, minRating, limit, offset)
+}
+
+func (s *Store) ListItemsForUser(ctx context.Context, libraryID, q, genre, sort, seenStatus string, userID int64, minRating float64, limit, offset int) ([]Item, error) {
 	if limit <= 0 {
 		limit = 250
 	}
 	if limit > 2000 {
 		limit = 2000
 	}
-	return s.searchItems(ctx, SearchOptions{Query: q, LibraryID: libraryID, Genre: genre, Sort: sort, Limit: limit, Offset: offset})
+	return s.searchItems(ctx, SearchOptions{Query: q, LibraryID: libraryID, Genre: genre, Sort: sort, SeenStatus: seenStatus, UserID: userID, MinRating: minRating, Limit: limit, Offset: offset})
 }
 
 func (s *Store) SearchItems(ctx context.Context, opts SearchOptions) ([]Item, error) {
@@ -158,12 +310,93 @@ func (s *Store) SearchItems(ctx context.Context, opts SearchOptions) ([]Item, er
 	return s.searchItems(ctx, opts)
 }
 
+func (s *Store) AlphabetIndex(ctx context.Context, opts AlphabetOptions) ([]AlphabetEntry, error) {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	genres := splitFilterList(opts.Genre)
+	switch opts.Kind {
+	case "tv":
+		genreWhere, genreArgs := itemGenreFilterSQL("genres", genres)
+		args := []any{opts.LibraryID, opts.LibraryID}
+		args = append(args, genreArgs...)
+		rows, err = s.db.QueryContext(ctx, `
+SELECT LOWER(COALESCE(show_title, '')) AS sort_title
+FROM media_items
+WHERE kind = 'episode'
+AND (? = '' OR library_id = ?)
+`+genreWhere+`
+AND show_title IS NOT NULL AND show_title != ''
+GROUP BY library_id, show_title
+ORDER BY sort_title`, args...)
+	default:
+		genreWhere, genreArgs := itemGenreFilterSQL("genres", genres)
+		args := []any{opts.LibraryID, opts.LibraryID}
+		args = append(args, genreArgs...)
+		rows, err = s.db.QueryContext(ctx, `
+SELECT LOWER(COALESCE(NULLIF(sort_title, ''), title, '')) AS sort_title
+FROM media_items
+WHERE kind = 'movie'
+AND (? = '' OR library_id = ?)
+`+genreWhere+`
+ORDER BY sort_title`, args...)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AlphabetEntry{}
+	byLetter := map[string]int{}
+	offset := 0
+	for rows.Next() {
+		var title string
+		if err := rows.Scan(&title); err != nil {
+			return nil, err
+		}
+		letter := alphabetLetter(title)
+		if idx, ok := byLetter[letter]; ok {
+			out[idx].Count++
+		} else {
+			byLetter[letter] = len(out)
+			out = append(out, AlphabetEntry{Letter: letter, Offset: offset, Count: 1})
+		}
+		offset++
+	}
+	return out, rows.Err()
+}
+
+func alphabetLetter(title string) string {
+	title = strings.TrimSpace(title)
+	runes := []rune(title)
+	if len(runes) == 0 {
+		return "#"
+	}
+	r := runes[0]
+	switch {
+	case r >= 'a' && r <= 'z':
+		return strings.ToUpper(string(r))
+	case r >= 'A' && r <= 'Z':
+		return string(r)
+	default:
+		return "#"
+	}
+}
+
 func (s *Store) searchItems(ctx context.Context, opts SearchOptions) ([]Item, error) {
 	q := opts.Query
 	libraryID := opts.LibraryID
 	kind := opts.Kind
 	genre := opts.Genre
-	orderBy := `ORDER BY
+	genres := splitFilterList(genre)
+	genreWhere, genreArgs := itemGenreFilterSQL("genres", genres)
+	nameStartsWith := strings.TrimSpace(opts.NameStartsWith)
+	seenStatus := normalizedSeenStatus(opts.SeenStatus)
+	userID := opts.UserID
+	sortMode := normalizedSort(opts.Sort)
+	orderBy := itemOrderBy(sortMode)
+	if sortMode == "" {
+		orderBy = `ORDER BY
 	CASE
 		WHEN ? = '' THEN 0
 		WHEN title LIKE ? || '%' THEN 0
@@ -173,15 +406,8 @@ func (s *Store) searchItems(ctx context.Context, opts SearchOptions) ([]Item, er
 		ELSE 3
 	END,
 	sort_title, season_number, episode_number`
-	if opts.Sort == "recent" {
-		orderBy = `ORDER BY updated_at DESC, sort_title, season_number, episode_number`
 	}
-	query := itemSelect + `
-FROM media_items
-WHERE (? = '' OR library_id = ?)
-AND (? = '' OR kind = ?)
-AND (? = '' OR genres LIKE '%' || ? || '%')
-AND (
+	textWhere := `AND (
 	? = ''
 	OR title LIKE '%' || ? || '%'
 	OR sort_title LIKE '%' || ? || '%'
@@ -191,16 +417,61 @@ AND (
 	OR overview LIKE '%' || ? || '%'
 	OR genres LIKE '%' || ? || '%'
 	OR CAST(year AS TEXT) = ?
+	OR EXISTS (
+		SELECT 1 FROM media_actors ma
+		WHERE ma.scope = 'item'
+		AND ma.item_id = media_items.id
+		AND ma.name LIKE '%' || ? || '%'
+	)
+)`
+	textArgs := []any{q, q, q, q, q, q, q, q, q, q}
+	if opts.TitleOnly {
+		textWhere = `AND (
+	? = ''
+	OR title LIKE '%' || ? || '%'
+	OR sort_title LIKE '%' || ? || '%'
+	OR original_title LIKE '%' || ? || '%'
+	OR CAST(year AS TEXT) = ?
+)`
+		textArgs = []any{q, q, q, q, q}
+	}
+	query := itemSelect + `
+FROM media_items
+WHERE (? = '' OR library_id = ?)
+AND (? = '' OR kind = ?)
+` + genreWhere + `
+AND (? <= 0 OR COALESCE(rating, 0) >= ?)
+AND (
+	? = ''
+	OR (? = 'seen' AND ? > 0 AND EXISTS (
+		SELECT 1 FROM playback_progress pp
+		WHERE pp.user_id = ? AND pp.item_id = media_items.id AND pp.completed = 1
+	))
+	OR (? = 'unseen' AND (? <= 0 OR NOT EXISTS (
+		SELECT 1 FROM playback_progress pp
+		WHERE pp.user_id = ? AND pp.item_id = media_items.id AND pp.completed = 1
+	)))
 )
+AND (
+	? = ''
+	OR (? = '#' AND LOWER(COALESCE(NULLIF(sort_title, ''), title, '')) NOT GLOB '[a-z]*')
+	OR (? != '#' AND LOWER(COALESCE(NULLIF(sort_title, ''), title, '')) LIKE LOWER(?) || '%')
+)
+` + textWhere + `
 ` + orderBy + `
 LIMIT ? OFFSET ?`
 	args := []any{
 		libraryID, libraryID,
 		kind, kind,
-		genre, genre,
-		q, q, q, q, q, q, q, q, q,
 	}
-	if opts.Sort != "recent" {
+	args = append(args, genreArgs...)
+	args = append(args,
+		opts.MinRating, opts.MinRating,
+		seenStatus, seenStatus, userID, userID, seenStatus, userID, userID,
+		nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith,
+	)
+	args = append(args, textArgs...)
+	if sortMode == "" {
 		args = append(args, q, q, q, q, q)
 	}
 	args = append(args, opts.Limit, opts.Offset)
@@ -220,21 +491,115 @@ LIMIT ? OFFSET ?`
 	return out, rows.Err()
 }
 
+func itemOrderBy(sortMode string) string {
+	switch sortMode {
+	case "title_desc":
+		return `ORDER BY sort_title DESC, season_number DESC, episode_number DESC`
+	case "year":
+		return `ORDER BY COALESCE(year, 0), sort_title, season_number, episode_number`
+	case "year_desc":
+		return `ORDER BY COALESCE(year, 0) DESC, sort_title, season_number, episode_number`
+	case "recent":
+		return `ORDER BY updated_at DESC, sort_title, season_number, episode_number`
+	case "recent_asc":
+		return `ORDER BY updated_at, sort_title, season_number, episode_number`
+	case "mtime":
+		return `ORDER BY mtime_unix DESC, sort_title, season_number, episode_number`
+	case "mtime_asc":
+		return `ORDER BY mtime_unix, sort_title, season_number, episode_number`
+	case "rating":
+		return `ORDER BY COALESCE(rating, 0) DESC, sort_title, season_number, episode_number`
+	case "rating_asc":
+		return `ORDER BY COALESCE(rating, 0), sort_title, season_number, episode_number`
+	default:
+		return `ORDER BY sort_title, season_number, episode_number`
+	}
+}
+
+func normalizedSort(sortMode string) string {
+	switch strings.ToLower(strings.TrimSpace(sortMode)) {
+	case "title_desc", "year", "year_desc", "recent", "recent_asc", "mtime", "mtime_asc", "rating", "rating_asc":
+		return strings.ToLower(strings.TrimSpace(sortMode))
+	default:
+		return ""
+	}
+}
+
+func normalizedSeenStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "seen", "unseen":
+		return strings.ToLower(strings.TrimSpace(status))
+	default:
+		return ""
+	}
+}
+
+func splitFilterList(value string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, part := range strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == '|' }) {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		key := strings.ToLower(part)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, part)
+	}
+	return out
+}
+
+func itemGenreFilterSQL(column string, genres []string) (string, []any) {
+	if len(genres) == 0 {
+		return "", nil
+	}
+	clauses := make([]string, 0, len(genres))
+	args := make([]any, 0, len(genres))
+	for _, genre := range genres {
+		clauses = append(clauses, column+" LIKE '%' || ? || '%'")
+		args = append(args, genre)
+	}
+	return "AND (" + strings.Join(clauses, " OR ") + ")", args
+}
+
+func showGenreFilterSQL(genres []string) (string, []any) {
+	if len(genres) == 0 {
+		return "", nil
+	}
+	clauses := make([]string, 0, len(genres))
+	args := make([]any, 0, len(genres)*2)
+	for _, genre := range genres {
+		clauses = append(clauses, "(mi.genres LIKE '%' || ? || '%' OR ms.genres LIKE '%' || ? || '%')")
+		args = append(args, genre, genre)
+	}
+	return "AND (" + strings.Join(clauses, " OR ") + ")", args
+}
+
 const itemSelect = `SELECT id, library_id, path, kind, title, sort_title, COALESCE(original_title, ''), COALESCE(year, 0), COALESCE(duration_ms, 0),
 COALESCE(container, ''), COALESCE(video_codec, ''), COALESCE(audio_codec, ''), COALESCE(imdb_id, ''), COALESCE(tmdb_id, ''), COALESCE(tvdb_id, ''), COALESCE(width, 0),
 COALESCE(height, 0), size_bytes, mtime_unix, COALESCE(nfo_path, ''), COALESCE(nfo_mtime_unix, 0), COALESCE(poster_path, ''), COALESCE(poster_mtime_unix, 0), COALESCE(backdrop_path, ''), COALESCE(backdrop_mtime_unix, 0),
-COALESCE(overview, ''), COALESCE(tagline, ''), COALESCE(genres, ''), COALESCE(rating, 0), COALESCE(premiered, ''),
+COALESCE(overview, ''), COALESCE(tagline, ''), COALESCE(official_rating, ''), COALESCE(genres, ''), COALESCE(tags, ''),
+COALESCE(studios, ''), COALESCE(directors, ''), COALESCE(writers, ''), COALESCE(countries, ''), COALESCE(rating, 0), COALESCE(premiered, ''),
 COALESCE(show_title, ''), COALESCE(season_number, 0), COALESCE(episode_number, 0), COALESCE(episode_title, '')`
 
 const itemSelectMI = `SELECT mi.id, mi.library_id, mi.path, mi.kind, mi.title, mi.sort_title, COALESCE(mi.original_title, ''), COALESCE(mi.year, 0), COALESCE(mi.duration_ms, 0),
 COALESCE(mi.container, ''), COALESCE(mi.video_codec, ''), COALESCE(mi.audio_codec, ''), COALESCE(mi.imdb_id, ''), COALESCE(mi.tmdb_id, ''), COALESCE(mi.tvdb_id, ''), COALESCE(mi.width, 0),
 COALESCE(mi.height, 0), mi.size_bytes, mi.mtime_unix, COALESCE(mi.nfo_path, ''), COALESCE(mi.nfo_mtime_unix, 0), COALESCE(mi.poster_path, ''), COALESCE(mi.poster_mtime_unix, 0), COALESCE(mi.backdrop_path, ''), COALESCE(mi.backdrop_mtime_unix, 0),
-COALESCE(mi.overview, ''), COALESCE(mi.tagline, ''), COALESCE(mi.genres, ''), COALESCE(mi.rating, 0), COALESCE(mi.premiered, ''),
+COALESCE(mi.overview, ''), COALESCE(mi.tagline, ''), COALESCE(mi.official_rating, ''), COALESCE(mi.genres, ''), COALESCE(mi.tags, ''),
+COALESCE(mi.studios, ''), COALESCE(mi.directors, ''), COALESCE(mi.writers, ''), COALESCE(mi.countries, ''), COALESCE(mi.rating, 0), COALESCE(mi.premiered, ''),
 COALESCE(mi.show_title, ''), COALESCE(mi.season_number, 0), COALESCE(mi.episode_number, 0), COALESCE(mi.episode_title, '')`
 
 func (s *Store) GetItem(ctx context.Context, id int64) (Item, error) {
 	row := s.db.QueryRowContext(ctx, itemSelect+` FROM media_items WHERE id = ?`, id)
-	return scanItem(row)
+	item, err := scanItem(row)
+	if err != nil {
+		return Item{}, err
+	}
+	item.Actors, err = s.ListItemActors(ctx, item.ID)
+	return item, err
 }
 
 func (s *Store) AllItems(ctx context.Context) ([]Item, error) {
@@ -271,7 +636,55 @@ func (s *Store) LibrarySnapshot(ctx context.Context, libraryID string) (map[stri
 	return out, rows.Err()
 }
 
-func (s *Store) ListShows(ctx context.Context, libraryID, q, genre, sort string, limit, offset int) ([]ShowSummary, error) {
+func (s *Store) MetadataBackfillNeeded(ctx context.Context, libraryID, name string) (bool, error) {
+	var exists int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM metadata_backfills WHERE library_id = ? AND name = ?`, libraryID, name).Scan(&exists)
+	if err == nil {
+		return false, nil
+	}
+	if err == sql.ErrNoRows {
+		return true, nil
+	}
+	return false, err
+}
+
+func (s *Store) MarkMetadataBackfillComplete(ctx context.Context, libraryID, name string) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO metadata_backfills(library_id, name, completed_at)
+VALUES (?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(library_id, name) DO UPDATE SET completed_at = CURRENT_TIMESTAMP`, libraryID, name)
+	return err
+}
+
+func (s *Store) ListShows(ctx context.Context, libraryID, q, genre, sort string, minRating float64, limit, offset int) ([]ShowSummary, error) {
+	return s.ListShowsForUser(ctx, libraryID, q, genre, sort, "", 0, minRating, limit, offset)
+}
+
+func (s *Store) ListShowsForUser(ctx context.Context, libraryID, q, genre, sort, seenStatus string, userID int64, minRating float64, limit, offset int) ([]ShowSummary, error) {
+	return s.SearchShows(ctx, ShowOptions{
+		Query:      q,
+		LibraryID:  libraryID,
+		Genre:      genre,
+		Sort:       sort,
+		SeenStatus: seenStatus,
+		UserID:     userID,
+		MinRating:  minRating,
+		Limit:      limit,
+		Offset:     offset,
+	})
+}
+
+func (s *Store) SearchShows(ctx context.Context, opts ShowOptions) ([]ShowSummary, error) {
+	libraryID := opts.LibraryID
+	q := opts.Query
+	genre := opts.Genre
+	genres := splitFilterList(genre)
+	genreWhere, genreArgs := showGenreFilterSQL(genres)
+	nameStartsWith := strings.TrimSpace(opts.NameStartsWith)
+	seenStatus := normalizedSeenStatus(opts.SeenStatus)
+	userID := opts.UserID
+	limit := opts.Limit
+	offset := opts.Offset
 	if limit <= 0 {
 		limit = 250
 	}
@@ -279,34 +692,87 @@ func (s *Store) ListShows(ctx context.Context, libraryID, q, genre, sort string,
 		limit = 1000
 	}
 	orderBy := "ORDER BY sort_title"
-	if sort == "recent" {
-		orderBy = "ORDER BY MAX(updated_at) DESC, sort_title"
+	switch normalizedSort(opts.Sort) {
+	case "title_desc":
+		orderBy = "ORDER BY sort_title DESC"
+	case "year":
+		orderBy = "ORDER BY COALESCE(ms.year, MIN(NULLIF(mi.year, 0)), 0), sort_title"
+	case "year_desc":
+		orderBy = "ORDER BY COALESCE(ms.year, MIN(NULLIF(mi.year, 0)), 0) DESC, sort_title"
+	case "recent":
+		orderBy = "ORDER BY MAX(mi.updated_at) DESC, sort_title"
+	case "recent_asc":
+		orderBy = "ORDER BY MAX(mi.updated_at), sort_title"
+	case "mtime":
+		orderBy = "ORDER BY MAX(mi.mtime_unix) DESC, sort_title"
+	case "mtime_asc":
+		orderBy = "ORDER BY MAX(mi.mtime_unix), sort_title"
+	case "rating":
+		orderBy = "ORDER BY COALESCE(ms.rating, MAX(mi.rating), 0) DESC, sort_title"
+	case "rating_asc":
+		orderBy = "ORDER BY COALESCE(ms.rating, MAX(mi.rating), 0), sort_title"
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT library_id,
-	COALESCE(show_title, '') AS show_title,
-	LOWER(COALESCE(show_title, '')) AS sort_title,
-	CASE WHEN COUNT(DISTINCT NULLIF(original_title, '')) = 1 THEN COALESCE(MAX(NULLIF(original_title, '')), '') ELSE '' END,
-	COALESCE(MIN(NULLIF(year, 0)), 0),
+SELECT mi.library_id,
+	COALESCE(mi.show_title, '') AS show_title,
+	COALESCE(ms.sort_title, LOWER(COALESCE(mi.show_title, ''))) AS sort_title,
+	COALESCE(ms.original_title, CASE WHEN COUNT(DISTINCT NULLIF(mi.original_title, '')) = 1 THEN COALESCE(MAX(NULLIF(mi.original_title, '')), '') ELSE '' END, ''),
+	COALESCE(ms.year, MIN(NULLIF(mi.year, 0)), 0),
 	COUNT(*),
-	COUNT(DISTINCT season_number),
-	COALESCE(MIN(CASE WHEN poster_path IS NOT NULL AND poster_path != '' THEN id END), 0),
-	COALESCE(MAX(poster_mtime_unix), 0),
-	COALESCE(MIN(CASE WHEN backdrop_path IS NOT NULL AND backdrop_path != '' THEN id END), 0),
-	COALESCE(MAX(backdrop_mtime_unix), 0),
-	COALESCE(MAX(NULLIF(overview, '')), ''),
-	COALESCE(MAX(NULLIF(genres, '')), ''),
-	COALESCE(MAX(rating), 0),
-	COALESCE(MAX(NULLIF(premiered, '')), '')
-FROM media_items
-WHERE kind = 'episode'
-AND (? = '' OR library_id = ?)
-AND (? = '' OR genres LIKE '%' || ? || '%')
-AND show_title IS NOT NULL AND show_title != ''
-AND (? = '' OR show_title LIKE '%' || ? || '%' OR original_title LIKE '%' || ? || '%')
-GROUP BY library_id, show_title
+	COUNT(DISTINCT mi.season_number),
+	COALESCE(MIN(CASE WHEN mi.poster_path IS NOT NULL AND mi.poster_path != '' THEN mi.id END), 0),
+	COALESCE(MAX(mi.poster_mtime_unix), 0),
+	COALESCE(MIN(CASE WHEN mi.backdrop_path IS NOT NULL AND mi.backdrop_path != '' THEN mi.id END), 0),
+	COALESCE(MAX(mi.backdrop_mtime_unix), 0),
+	COALESCE(ms.overview, MAX(NULLIF(mi.overview, '')), ''),
+	COALESCE(ms.genres, MAX(NULLIF(mi.genres, '')), ''),
+	COALESCE(ms.rating, MAX(mi.rating), 0),
+	COALESCE(ms.premiered, MAX(NULLIF(mi.premiered, '')), '')
+FROM media_items mi
+LEFT JOIN media_shows ms ON ms.library_id = mi.library_id AND ms.show_title = mi.show_title
+WHERE mi.kind = 'episode'
+AND (? = '' OR mi.library_id = ?)
+`+genreWhere+`
+AND mi.show_title IS NOT NULL AND mi.show_title != ''
+AND (
+	? = ''
+	OR (? = 'seen' AND ? > 0 AND NOT EXISTS (
+		SELECT 1 FROM media_items e
+		LEFT JOIN playback_progress pp ON pp.user_id = ? AND pp.item_id = e.id AND pp.completed = 1
+		WHERE e.kind = 'episode' AND e.library_id = mi.library_id AND e.show_title = mi.show_title
+		AND pp.item_id IS NULL
+	))
+	OR (? = 'unseen' AND (? <= 0 OR EXISTS (
+		SELECT 1 FROM media_items e
+		LEFT JOIN playback_progress pp ON pp.user_id = ? AND pp.item_id = e.id AND pp.completed = 1
+		WHERE e.kind = 'episode' AND e.library_id = mi.library_id AND e.show_title = mi.show_title
+		AND pp.item_id IS NULL
+	)))
+)
+AND (
+	? = ''
+	OR (? = '#' AND LOWER(COALESCE(NULLIF(ms.sort_title, ''), mi.show_title, '')) NOT GLOB '[a-z]*')
+	OR (? != '#' AND LOWER(COALESCE(NULLIF(ms.sort_title, ''), mi.show_title, '')) LIKE LOWER(?) || '%')
+)
+AND (
+	? = ''
+	OR mi.show_title LIKE '%' || ? || '%'
+	OR mi.original_title LIKE '%' || ? || '%'
+	OR ms.original_title LIKE '%' || ? || '%'
+	OR EXISTS (
+		SELECT 1 FROM media_actors ma
+		WHERE ma.name LIKE '%' || ? || '%'
+		AND (
+			(ma.scope = 'show' AND ma.library_id = mi.library_id AND ma.show_title = mi.show_title)
+			OR (ma.scope = 'season' AND ma.library_id = mi.library_id AND ma.show_title = mi.show_title)
+			OR (ma.scope = 'item' AND ma.item_id = mi.id)
+		)
+	)
+)
+GROUP BY mi.library_id, mi.show_title
+HAVING (? <= 0 OR COALESCE(ms.rating, MAX(mi.rating), 0) >= ?)
 `+orderBy+`
-LIMIT ? OFFSET ?`, libraryID, libraryID, genre, genre, q, q, q, limit, offset)
+LIMIT ? OFFSET ?`, append(append([]any{libraryID, libraryID}, genreArgs...), seenStatus, seenStatus, userID, userID, seenStatus, userID, userID, nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith, q, q, q, q, q, opts.MinRating, opts.MinRating, limit, offset)...)
 	if err != nil {
 		return nil, err
 	}
@@ -356,21 +822,26 @@ AND genres IS NOT NULL AND genres != ''`, libraryID, libraryID)
 
 func (s *Store) ListSeasons(ctx context.Context, libraryID, showTitle string) ([]SeasonSummary, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT library_id,
-	COALESCE(show_title, ''),
-	COALESCE(season_number, 0),
-	COALESCE(MIN(path), ''),
+SELECT mi.library_id,
+	COALESCE(mi.show_title, ''),
+	COALESCE(mi.season_number, 0),
 	COUNT(*),
-	COALESCE(SUM(duration_ms), 0),
-	COALESCE(MIN(id), 0),
-	COALESCE(MIN(CASE WHEN backdrop_path IS NOT NULL AND backdrop_path != '' THEN id END), 0),
-	COALESCE(MAX(rating), 0)
-FROM media_items
-WHERE kind = 'episode'
-AND library_id = ?
-AND show_title = ?
-GROUP BY library_id, show_title, season_number
-ORDER BY season_number`, libraryID, showTitle)
+	COALESCE(SUM(mi.duration_ms), 0),
+	COALESCE(MIN(mi.id), 0),
+	COALESCE(ms.poster_path, ''),
+	COALESCE(ms.poster_mtime_unix, 0),
+	COALESCE(MIN(CASE WHEN mi.backdrop_path IS NOT NULL AND mi.backdrop_path != '' THEN mi.id END), 0),
+	COALESCE(ms.title, ''),
+	COALESCE(ms.overview, ''),
+	COALESCE(ms.rating, MAX(mi.rating), 0),
+	COALESCE(ms.premiered, '')
+FROM media_items mi
+LEFT JOIN media_seasons ms ON ms.library_id = mi.library_id AND ms.show_title = mi.show_title AND ms.season_number = COALESCE(mi.season_number, 0)
+WHERE mi.kind = 'episode'
+AND mi.library_id = ?
+AND mi.show_title = ?
+GROUP BY mi.library_id, mi.show_title, mi.season_number
+ORDER BY mi.season_number`, libraryID, showTitle)
 	if err != nil {
 		return nil, err
 	}
@@ -378,39 +849,15 @@ ORDER BY season_number`, libraryID, showTitle)
 	seasons := []SeasonSummary{}
 	for rows.Next() {
 		var season SeasonSummary
-		var firstEpisodePath string
-		if err := rows.Scan(&season.LibraryID, &season.ShowTitle, &season.SeasonNumber, &firstEpisodePath, &season.EpisodeCount, &season.DurationMS, &season.PosterItemID, &season.BackdropItemID, &season.Rating); err != nil {
+		if err := rows.Scan(&season.LibraryID, &season.ShowTitle, &season.SeasonNumber, &season.EpisodeCount, &season.DurationMS, &season.PosterItemID, &season.PosterPath, &season.PosterMTimeUnix, &season.BackdropItemID, &season.Title, &season.Overview, &season.Rating, &season.Premiered); err != nil {
 			return nil, err
 		}
-		enrichSeasonSummary(&season, firstEpisodePath)
-		seasons = append(seasons, season)
-	}
-	return seasons, rows.Err()
-}
-
-func enrichSeasonSummary(season *SeasonSummary, firstEpisodePath string) {
-	if firstEpisodePath == "" {
-		return
-	}
-	nfo := findSeasonNFO(firstEpisodePath, season.SeasonNumber)
-	season.PosterMTimeUnix = fileMTimeUnix(seasonImagePath(firstEpisodePath, season.SeasonNumber))
-	if nfo == "" {
 		if season.Title == "" && season.SeasonNumber > 0 {
 			season.Title = "Season " + strconv.Itoa(season.SeasonNumber)
 		}
-		return
+		seasons = append(seasons, season)
 	}
-	meta := readNFO(nfo)
-	if meta.Title != "" {
-		season.Title = meta.Title
-	}
-	if season.Overview == "" {
-		season.Overview = firstNonEmpty(meta.Plot, meta.Outline)
-	}
-	if meta.Rating > 0 {
-		season.Rating = meta.Rating
-	}
-	season.Premiered = firstNonEmpty(meta.Premiered, meta.Released)
+	return seasons, rows.Err()
 }
 
 func (s *Store) ListEpisodes(ctx context.Context, libraryID, showTitle string, seasonNumber int) ([]Item, error) {
@@ -434,6 +881,304 @@ ORDER BY season_number, episode_number, sort_title`, libraryID, showTitle, seaso
 		episodes = append(episodes, item)
 	}
 	return episodes, rows.Err()
+}
+
+func (s *Store) ListItemsByActor(ctx context.Context, actorName, libraryID, kind, sort string, limit, offset int) ([]Item, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT DISTINCT mi.id, COALESCE(mi.sort_title, mi.title, '') AS sort_title, mi.mtime_unix, COALESCE(mi.rating, 0)
+FROM media_items mi
+JOIN media_actors ma ON ma.scope = 'item' AND ma.item_id = mi.id
+WHERE ma.name = ?
+AND (? = '' OR mi.library_id = ?)
+AND (? = '' OR mi.kind = ?)
+`+actorItemsOrderBy(normalizedSort(sort))+`
+LIMIT ? OFFSET ?`, actorName, libraryID, libraryID, kind, kind, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []int64{}
+	for rows.Next() {
+		var id int64
+		var sortTitle string
+		var mtime int64
+		var rating float64
+		if err := rows.Scan(&id, &sortTitle, &mtime, &rating); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	items := make([]Item, 0, len(ids))
+	for _, id := range ids {
+		item, err := s.GetItem(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func actorItemsOrderBy(sortMode string) string {
+	switch sortMode {
+	case "recent", "mtime":
+		return `ORDER BY mi.mtime_unix DESC, sort_title`
+	case "rating":
+		return `ORDER BY COALESCE(mi.rating, 0) DESC, sort_title`
+	default:
+		return `ORDER BY sort_title`
+	}
+}
+
+func (s *Store) ListShowsByActor(ctx context.Context, actorName, libraryID, sort string, limit, offset int) ([]ShowSummary, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT DISTINCT
+	COALESCE(NULLIF(ma.library_id, ''), mi.library_id) AS library_id,
+	COALESCE(NULLIF(ma.show_title, ''), mi.show_title) AS show_title,
+	COALESCE(ms.sort_title, LOWER(COALESCE(NULLIF(ma.show_title, ''), mi.show_title, ''))) AS sort_title,
+	COALESCE(ms.rating, 0) AS rating,
+	COALESCE(MAX(mi.mtime_unix), 0) AS mtime
+FROM media_actors ma
+LEFT JOIN media_items mi ON ma.scope = 'item' AND ma.item_id = mi.id
+LEFT JOIN media_shows ms ON ms.library_id = COALESCE(NULLIF(ma.library_id, ''), mi.library_id) AND ms.show_title = COALESCE(NULLIF(ma.show_title, ''), mi.show_title)
+WHERE ma.name = ?
+AND (
+	ma.scope = 'show'
+	OR ma.scope = 'season'
+	OR (ma.scope = 'item' AND mi.kind = 'episode')
+)
+AND (? = '' OR COALESCE(NULLIF(ma.library_id, ''), mi.library_id) = ?)
+AND COALESCE(NULLIF(ma.show_title, ''), mi.show_title, '') != ''
+GROUP BY 1, 2
+`+actorShowsOrderBy(normalizedSort(sort))+`
+LIMIT ? OFFSET ?`, actorName, libraryID, libraryID, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	type key struct {
+		libraryID string
+		showTitle string
+		sortTitle string
+		rating    float64
+		mtime     int64
+	}
+	keys := []key{}
+	for rows.Next() {
+		var k key
+		if err := rows.Scan(&k.libraryID, &k.showTitle, &k.sortTitle, &k.rating, &k.mtime); err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	shows := make([]ShowSummary, 0, len(keys))
+	for _, k := range keys {
+		candidates, err := s.SearchShows(ctx, ShowOptions{LibraryID: k.libraryID, Query: k.showTitle, Limit: 20})
+		if err != nil {
+			return nil, err
+		}
+		for _, show := range candidates {
+			if show.LibraryID == k.libraryID && strings.EqualFold(show.Title, k.showTitle) {
+				show.Actors, _ = s.ListShowActors(ctx, show.LibraryID, show.Title)
+				shows = append(shows, show)
+				break
+			}
+		}
+	}
+	return shows, nil
+}
+
+func actorShowsOrderBy(sortMode string) string {
+	switch sortMode {
+	case "recent", "mtime":
+		return `ORDER BY mtime DESC, sort_title`
+	case "rating":
+		return `ORDER BY rating DESC, sort_title`
+	default:
+		return `ORDER BY sort_title`
+	}
+}
+
+func (s *Store) ActorCreditCounts(ctx context.Context, actorName string) (movies, series int, err error) {
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(DISTINCT mi.id)
+FROM media_actors ma
+JOIN media_items mi ON ma.scope = 'item' AND ma.item_id = mi.id
+WHERE ma.name = ? AND mi.kind = 'movie'`, actorName).Scan(&movies); err != nil {
+		return 0, 0, err
+	}
+	if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM (
+	SELECT COALESCE(NULLIF(ma.library_id, ''), mi.library_id) AS library_id,
+		COALESCE(NULLIF(ma.show_title, ''), mi.show_title) AS show_title
+	FROM media_actors ma
+	LEFT JOIN media_items mi ON ma.scope = 'item' AND ma.item_id = mi.id
+	WHERE ma.name = ?
+	AND (
+		ma.scope = 'show'
+		OR ma.scope = 'season'
+		OR (ma.scope = 'item' AND mi.kind = 'episode')
+	)
+	AND COALESCE(NULLIF(ma.show_title, ''), mi.show_title, '') != ''
+	GROUP BY 1, 2
+)`, actorName).Scan(&series); err != nil {
+		return 0, 0, err
+	}
+	return movies, series, nil
+}
+
+func (s *Store) ListItemActors(ctx context.Context, itemID int64) ([]Actor, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT name, COALESCE(role, ''), COALESCE(thumb, ''), sort_order
+FROM media_actors
+WHERE scope = 'item' AND item_id = ?
+ORDER BY sort_order, name`, itemID)
+	if err != nil {
+		return nil, err
+	}
+	return scanActors(rows)
+}
+
+func (s *Store) ListShowActors(ctx context.Context, libraryID, showTitle string) ([]Actor, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT name, COALESCE(role, ''), COALESCE(thumb, ''), sort_order
+FROM media_actors
+WHERE scope = 'show' AND library_id = ? AND show_title = ?
+ORDER BY sort_order, name`, libraryID, showTitle)
+	if err != nil {
+		return nil, err
+	}
+	return scanActors(rows)
+}
+
+func (s *Store) ListSeasonActors(ctx context.Context, libraryID, showTitle string, seasonNumber int) ([]Actor, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT name, COALESCE(role, ''), COALESCE(thumb, ''), sort_order
+FROM media_actors
+WHERE scope = 'season' AND library_id = ? AND show_title = ? AND season_number = ?
+ORDER BY sort_order, name`, libraryID, showTitle, seasonNumber)
+	if err != nil {
+		return nil, err
+	}
+	return scanActors(rows)
+}
+
+func (s *Store) ListActors(ctx context.Context, q string, limit, offset int) ([]Actor, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT name,
+	'' AS role,
+	COALESCE(MAX(NULLIF(thumb, '')), '') AS thumb,
+	MIN(sort_order) AS sort_order
+FROM media_actors
+WHERE (? = '' OR name LIKE '%' || ? || '%')
+GROUP BY name
+ORDER BY name
+LIMIT ? OFFSET ?`, q, q, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	return scanActors(rows)
+}
+
+func (s *Store) ActorByName(ctx context.Context, name string) (Actor, error) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT name,
+	COALESCE(MAX(NULLIF(role, '')), '') AS role,
+	COALESCE(MAX(NULLIF(thumb, '')), '') AS thumb,
+	MIN(sort_order) AS sort_order
+FROM media_actors
+WHERE name = ?
+GROUP BY name`, name)
+	var actor Actor
+	if err := row.Scan(&actor.Name, &actor.Role, &actor.Thumb, &actor.Order); err != nil {
+		return Actor{}, err
+	}
+	return actor, nil
+}
+
+func (s *Store) CachedActorInfo(ctx context.Context, name string) (ActorInfo, bool) {
+	row := s.db.QueryRowContext(ctx, `
+SELECT name, COALESCE(tmdb_id, ''), COALESCE(imdb_id, ''), COALESCE(biography, ''),
+	COALESCE(birthday, ''), COALESCE(deathday, ''), COALESCE(place_of_birth, ''),
+	COALESCE(known_for_department, ''), COALESCE(profile_path, ''), source, fetched_at
+FROM actor_metadata_cache
+WHERE name = ?`, name)
+	var info ActorInfo
+	if err := row.Scan(&info.Name, &info.TMDbID, &info.IMDbID, &info.Biography, &info.Birthday, &info.Deathday, &info.PlaceOfBirth, &info.KnownForDepartment, &info.ProfilePath, &info.Source, &info.FetchedAt); err != nil {
+		return ActorInfo{}, false
+	}
+	return info, true
+}
+
+func (s *Store) SaveActorInfo(ctx context.Context, info ActorInfo) error {
+	if strings.TrimSpace(info.Name) == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO actor_metadata_cache(name, tmdb_id, imdb_id, biography, birthday, deathday, place_of_birth, known_for_department, profile_path, source, fetched_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(name) DO UPDATE SET
+	tmdb_id=excluded.tmdb_id,
+	imdb_id=excluded.imdb_id,
+	biography=excluded.biography,
+	birthday=excluded.birthday,
+	deathday=excluded.deathday,
+	place_of_birth=excluded.place_of_birth,
+	known_for_department=excluded.known_for_department,
+	profile_path=excluded.profile_path,
+	source=excluded.source,
+	fetched_at=excluded.fetched_at`,
+		info.Name, nullString(info.TMDbID), nullString(info.IMDbID), nullString(info.Biography),
+		nullString(info.Birthday), nullString(info.Deathday), nullString(info.PlaceOfBirth),
+		nullString(info.KnownForDepartment), nullString(info.ProfilePath), info.Source, info.FetchedAt)
+	return err
+}
+
+func scanActors(rows *sql.Rows) ([]Actor, error) {
+	defer rows.Close()
+	actors := []Actor{}
+	for rows.Next() {
+		var actor Actor
+		if err := rows.Scan(&actor.Name, &actor.Role, &actor.Thumb, &actor.Order); err != nil {
+			return nil, err
+		}
+		actors = append(actors, actor)
+	}
+	return actors, rows.Err()
 }
 
 func (s *Store) SetScanStatus(ctx context.Context, status ScanStatus) error {
@@ -482,7 +1227,8 @@ func scanItem(row rowScanner) (Item, error) {
 		&item.OriginalTitle, &item.Year, &item.DurationMS, &item.Container, &item.VideoCodec, &item.AudioCodec,
 		&item.IMDbID, &item.TMDbID, &item.TVDbID, &item.Width, &item.Height, &item.SizeBytes, &item.MTimeUnix, &item.NFOPath,
 		&item.NFOMTimeUnix, &item.PosterPath, &item.PosterMTimeUnix, &item.BackdropPath, &item.BackdropMTimeUnix,
-		&item.Overview, &item.Tagline, &item.Genres,
+		&item.Overview, &item.Tagline, &item.OfficialRating, &item.Genres, &item.Tags,
+		&item.Studios, &item.Directors, &item.Writers, &item.Countries,
 		&item.Rating, &item.Premiered, &item.ShowTitle, &item.SeasonNumber,
 		&item.EpisodeNumber, &item.EpisodeTitle)
 	return item, err
@@ -665,22 +1411,23 @@ func (s *Store) listWatchlistShows(ctx context.Context, userID int64, limit int)
 	rows, err := s.db.QueryContext(ctx, `
 SELECT mi.library_id,
 	COALESCE(mi.show_title, '') AS show_title,
-	LOWER(COALESCE(mi.show_title, '')) AS sort_title,
-	CASE WHEN COUNT(DISTINCT NULLIF(mi.original_title, '')) = 1 THEN COALESCE(MAX(NULLIF(mi.original_title, '')), '') ELSE '' END,
-	COALESCE(MIN(NULLIF(mi.year, 0)), 0),
+	COALESCE(ms.sort_title, LOWER(COALESCE(mi.show_title, ''))) AS sort_title,
+	COALESCE(ms.original_title, CASE WHEN COUNT(DISTINCT NULLIF(mi.original_title, '')) = 1 THEN COALESCE(MAX(NULLIF(mi.original_title, '')), '') ELSE '' END, ''),
+	COALESCE(ms.year, MIN(NULLIF(mi.year, 0)), 0),
 	COUNT(*),
 	COUNT(DISTINCT mi.season_number),
 	COALESCE(MIN(CASE WHEN mi.poster_path IS NOT NULL AND mi.poster_path != '' THEN mi.id END), 0),
 	COALESCE(MAX(mi.poster_mtime_unix), 0),
 	COALESCE(MIN(CASE WHEN mi.backdrop_path IS NOT NULL AND mi.backdrop_path != '' THEN mi.id END), 0),
 	COALESCE(MAX(mi.backdrop_mtime_unix), 0),
-	COALESCE(MAX(NULLIF(mi.overview, '')), ''),
-	COALESCE(MAX(NULLIF(mi.genres, '')), ''),
-	COALESCE(MAX(mi.rating), 0),
-	COALESCE(MAX(NULLIF(mi.premiered, '')), ''),
+	COALESCE(ms.overview, MAX(NULLIF(mi.overview, '')), ''),
+	COALESCE(ms.genres, MAX(NULLIF(mi.genres, '')), ''),
+	COALESCE(ms.rating, MAX(mi.rating), 0),
+	COALESCE(ms.premiered, MAX(NULLIF(mi.premiered, '')), ''),
 	MAX(w.updated_at)
 FROM user_watchlist w
 JOIN media_items mi ON mi.library_id = w.library_id AND mi.show_title = w.show_title
+LEFT JOIN media_shows ms ON ms.library_id = mi.library_id AND ms.show_title = mi.show_title
 WHERE w.user_id = ? AND w.kind = 'show' AND mi.kind = 'episode'
 GROUP BY mi.library_id, mi.show_title
 ORDER BY MAX(w.updated_at) DESC

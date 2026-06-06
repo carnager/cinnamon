@@ -6,7 +6,9 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.io.OutputStreamWriter
+import java.security.MessageDigest
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -112,24 +114,49 @@ private fun showToJson(show: ShowSummary): JSONObject {
 }
 
 private fun jsonToItem(o: JSONObject): PopItem {
+    val actors = o.optJSONArray("actors") ?: JSONArray()
     return PopItem(
         id = o.getLong("id"),
         libraryId = o.getString("libraryId"),
         kind = o.optString("kind"),
         title = o.optString("title"),
+        originalTitle = o.optString("originalTitle"),
         year = o.optInt("year"),
         durationMs = o.optLong("durationMs"),
+        videoCodec = o.optString("videoCodec"),
+        audioCodec = o.optString("audioCodec"),
+        imdbId = o.optString("imdbId"),
+        tmdbId = o.optString("tmdbId"),
+        tvdbId = o.optString("tvdbId"),
+        width = o.optInt("width"),
+        height = o.optInt("height"),
         posterPath = o.optString("posterPath"),
         posterMtimeUnix = o.optLong("posterMtimeUnix"),
         backdropPath = o.optString("backdropPath"),
         backdropMtimeUnix = o.optLong("backdropMtimeUnix"),
         overview = o.optString("overview"),
+        tagline = o.optString("tagline"),
+        officialRating = o.optString("officialRating"),
         genres = o.optString("genres"),
+        tags = o.optString("tags"),
+        studios = o.optString("studios"),
+        directors = o.optString("directors"),
+        writers = o.optString("writers"),
+        countries = o.optString("countries"),
+        premiered = o.optString("premiered"),
         rating = o.optDouble("rating"),
         showTitle = o.optString("showTitle"),
         seasonNumber = o.optInt("seasonNumber"),
         episodeNumber = o.optInt("episodeNumber"),
         episodeTitle = o.optString("episodeTitle"),
+        actors = (0 until actors.length()).map { i ->
+            val actor = actors.getJSONObject(i)
+            Actor(
+                name = actor.optString("name"),
+                role = actor.optString("role"),
+                thumb = actor.optString("thumb"),
+            )
+        },
     )
 }
 
@@ -139,19 +166,58 @@ private fun itemToJson(item: PopItem): JSONObject {
         .put("libraryId", item.libraryId)
         .put("kind", item.kind)
         .put("title", item.title)
+        .put("originalTitle", item.originalTitle)
         .put("year", item.year)
         .put("durationMs", item.durationMs)
+        .put("videoCodec", item.videoCodec)
+        .put("audioCodec", item.audioCodec)
+        .put("imdbId", item.imdbId)
+        .put("tmdbId", item.tmdbId)
+        .put("tvdbId", item.tvdbId)
+        .put("width", item.width)
+        .put("height", item.height)
         .put("posterPath", item.posterPath)
         .put("posterMtimeUnix", item.posterMtimeUnix)
         .put("backdropPath", item.backdropPath)
         .put("backdropMtimeUnix", item.backdropMtimeUnix)
         .put("overview", item.overview)
+        .put("tagline", item.tagline)
+        .put("officialRating", item.officialRating)
         .put("genres", item.genres)
+        .put("tags", item.tags)
+        .put("studios", item.studios)
+        .put("directors", item.directors)
+        .put("writers", item.writers)
+        .put("countries", item.countries)
+        .put("premiered", item.premiered)
         .put("rating", item.rating)
         .put("showTitle", item.showTitle)
         .put("seasonNumber", item.seasonNumber)
         .put("episodeNumber", item.episodeNumber)
         .put("episodeTitle", item.episodeTitle)
+}
+
+private fun jsonToActor(o: JSONObject): Actor {
+    return Actor(
+        name = o.optString("name"),
+        role = o.optString("role"),
+        thumb = o.optString("thumb"),
+    )
+}
+
+private fun jsonToActorInfo(o: JSONObject): ActorInfo {
+    return ActorInfo(
+        name = o.optString("name"),
+        tmdbId = o.optString("tmdbId"),
+        imdbId = o.optString("imdbId"),
+        biography = o.optString("biography"),
+        birthday = o.optString("birthday"),
+        deathday = o.optString("deathday"),
+        placeOfBirth = o.optString("placeOfBirth"),
+        knownForDepartment = o.optString("knownForDepartment"),
+        profilePath = o.optString("profilePath"),
+        source = o.optString("source"),
+    )
 }
 
 fun JSONObject.optIntOrNull(name: String): Int? {
@@ -215,13 +281,16 @@ class Api(private val session: Session) {
         itemsPage(libraryId, limit, offset, "")
     }
 
-    suspend fun itemsPage(libraryId: String, limit: Int, offset: Int, genre: String): List<PopItem> = withContext(Dispatchers.IO) {
+    suspend fun itemsPage(libraryId: String, limit: Int, offset: Int, genre: String, sort: String = "", minRating: Double = 0.0, seenStatus: String = ""): List<PopItem> = withContext(Dispatchers.IO) {
         val genreParam = if (genre.isNotBlank()) "&genre=${enc(genre)}" else ""
-        parseItems(requestArray("/api/items?libraryId=${enc(libraryId)}&limit=$limit&offset=$offset$genreParam"))
+        val sortParam = if (sort.isNotBlank()) "&sort=${enc(sort)}" else ""
+        val ratingParam = if (minRating > 0.0) "&minRating=$minRating" else ""
+        val seenParam = if (seenStatus.isNotBlank()) "&seen=${enc(seenStatus)}" else ""
+        parseItems(requestArray("/api/items?libraryId=${enc(libraryId)}&limit=$limit&offset=$offset$genreParam$sortParam$ratingParam$seenParam"))
     }
 
     suspend fun recentItems(libraryId: String, limit: Int): List<PopItem> = withContext(Dispatchers.IO) {
-        parseItems(requestArray("/api/items?libraryId=${enc(libraryId)}&limit=$limit&offset=0&sort=recent"))
+        parseItems(requestArray("/api/items?libraryId=${enc(libraryId)}&limit=$limit&offset=0&sort=mtime"))
     }
 
     suspend fun searchMovies(query: String): List<PopItem> = withContext(Dispatchers.IO) {
@@ -249,18 +318,38 @@ class Api(private val session: Session) {
         showsPage(libraryId, limit, offset, "")
     }
 
-    suspend fun showsPage(libraryId: String, limit: Int, offset: Int, genre: String): List<ShowSummary> = withContext(Dispatchers.IO) {
+    suspend fun showsPage(libraryId: String, limit: Int, offset: Int, genre: String, sort: String = "", minRating: Double = 0.0, seenStatus: String = ""): List<ShowSummary> = withContext(Dispatchers.IO) {
         val genreParam = if (genre.isNotBlank()) "&genre=${enc(genre)}" else ""
-        parseShows(requestArray("/api/tv/shows?libraryId=${enc(libraryId)}&limit=$limit&offset=$offset$genreParam"))
+        val sortParam = if (sort.isNotBlank()) "&sort=${enc(sort)}" else ""
+        val ratingParam = if (minRating > 0.0) "&minRating=$minRating" else ""
+        val seenParam = if (seenStatus.isNotBlank()) "&seen=${enc(seenStatus)}" else ""
+        parseShows(requestArray("/api/tv/shows?libraryId=${enc(libraryId)}&limit=$limit&offset=$offset$genreParam$sortParam$ratingParam$seenParam"))
     }
 
     suspend fun recentShows(libraryId: String, limit: Int): List<ShowSummary> = withContext(Dispatchers.IO) {
-        parseShows(requestArray("/api/tv/shows?libraryId=${enc(libraryId)}&limit=$limit&offset=0&sort=recent"))
+        parseShows(requestArray("/api/tv/shows?libraryId=${enc(libraryId)}&limit=$limit&offset=0&sort=mtime"))
     }
 
     suspend fun genres(libraryId: String): List<String> = withContext(Dispatchers.IO) {
         val arr = requestArray("/api/genres?libraryId=${enc(libraryId)}")
         (0 until arr.length()).map { i -> arr.getString(i) }
+    }
+
+    suspend fun scanLibraries() = withContext(Dispatchers.IO) {
+        requestText("/api/scan", "POST", "{}")
+    }
+
+    suspend fun alphabet(libraryId: String, kind: String, genre: String = ""): List<AlphabetEntry> = withContext(Dispatchers.IO) {
+        val genreParam = if (genre.isNotBlank()) "&genre=${enc(genre)}" else ""
+        val arr = requestArray("/api/alphabet?libraryId=${enc(libraryId)}&kind=${enc(kind)}$genreParam")
+        (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            AlphabetEntry(
+                letter = o.optString("letter"),
+                offset = o.optInt("offset"),
+                count = o.optInt("count"),
+            )
+        }
     }
 
     private fun parseShows(arr: JSONArray): List<ShowSummary> {
@@ -333,6 +422,19 @@ class Api(private val session: Session) {
         )
     }
 
+    suspend fun actorDetail(name: String): ActorDetail = withContext(Dispatchers.IO) {
+        val o = request("/api/actors?name=${enc(name)}")
+        val movies = o.optJSONArray("movies") ?: JSONArray()
+        val shows = o.optJSONArray("shows") ?: JSONArray()
+        ActorDetail(
+            actor = jsonToActor(o.optJSONObject("actor") ?: JSONObject()),
+            info = jsonToActorInfo(o.optJSONObject("info") ?: JSONObject()),
+            profileUrl = o.optString("profileUrl"),
+            movies = parseItems(movies),
+            shows = parseShows(shows),
+        )
+    }
+
     suspend fun progressList(): List<PlaybackProgress> = withContext(Dispatchers.IO) {
         val out = mutableListOf<PlaybackProgress>()
         val limit = 500
@@ -378,6 +480,50 @@ class Api(private val session: Session) {
             items = parseItems(itemsArr),
             shows = parseShows(showsArr),
         )
+    }
+
+    suspend fun tvUpdate(currentVersionCode: Int): AppUpdateInfo = withContext(Dispatchers.IO) {
+        val json = request("/api/app/tv/update?versionCode=$currentVersionCode")
+        AppUpdateInfo(
+            configured = json.optBoolean("configured", false),
+            available = json.optBoolean("available", false),
+            versionCode = json.optInt("versionCode"),
+            versionName = json.optString("versionName"),
+            notes = json.optString("notes"),
+            apkUrl = json.optString("apkUrl"),
+            sha256 = json.optString("sha256"),
+            sizeBytes = json.optLong("sizeBytes"),
+            error = json.optString("error"),
+        )
+    }
+
+    suspend fun downloadTvUpdate(info: AppUpdateInfo, outFile: File): File = withContext(Dispatchers.IO) {
+        outFile.parentFile?.mkdirs()
+        val digest = MessageDigest.getInstance("SHA-256")
+        val conn = openConnection(info.apkUrl)
+        conn.requestMethod = "GET"
+        val code = conn.responseCode
+        if (code !in 200..299) {
+            val text = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            error(text.ifBlank { "HTTP $code" })
+        }
+        conn.inputStream.use { input ->
+            FileOutputStream(outFile).use { output ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    digest.update(buffer, 0, n)
+                    output.write(buffer, 0, n)
+                }
+            }
+        }
+        val actual = digest.digest().joinToString("") { "%02x".format(it) }
+        if (info.sha256.isNotBlank() && !actual.equals(info.sha256, ignoreCase = true)) {
+            outFile.delete()
+            error("Downloaded APK checksum mismatch")
+        }
+        outFile
     }
 
     suspend fun saveProgress(itemId: Long, positionMs: Long, durationMs: Long, completed: Boolean, state: String) = withContext(Dispatchers.IO) {
@@ -484,7 +630,7 @@ class Api(private val session: Session) {
     }
 
     private fun requestText(path: String, method: String, body: String?): String {
-        val conn = URL(session.server + path).openConnection() as HttpURLConnection
+        val conn = openConnection(path)
         conn.requestMethod = method
         conn.connectTimeout = 8000
         conn.readTimeout = 20000
@@ -499,6 +645,15 @@ class Api(private val session: Session) {
         val text = stream.bufferedReader().use { it.readText() }
         if (code !in 200..299) error(text.ifBlank { "HTTP $code" })
         return text
+    }
+
+    private fun openConnection(path: String): HttpURLConnection {
+        val url = if (path.startsWith("http://") || path.startsWith("https://")) path else session.server + path
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.connectTimeout = 8000
+        conn.readTimeout = 20000
+        if (session.token.isNotBlank()) conn.setRequestProperty("Authorization", "Bearer ${session.token}")
+        return conn
     }
 
     private fun enc(value: String): String = URLEncoder.encode(value, "UTF-8")

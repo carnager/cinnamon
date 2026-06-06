@@ -4,8 +4,18 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 version="${POPCORN_RELEASE_VERSION:-$(cd "$repo_root" && git describe --tags --always --dirty)}"
 out_dir="${POPCORN_RELEASE_DIR:-$repo_root/dist/$version}"
+commit="$(cd "$repo_root" && git rev-parse --short HEAD 2>/dev/null || true)"
+build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+android_version_code="${POPCORN_ANDROID_VERSION_CODE:-$(($(date -u +%s) / 60))}"
+android_version_name="${POPCORN_ANDROID_VERSION_NAME:-$version}"
+
+if [[ -z "${JAVA_HOME:-}" && -d /usr/lib/jvm/java-21-openjdk ]]; then
+  export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
+fi
 
 mkdir -p "$out_dir"
+out_dir="$(cd "$out_dir" && pwd -P)"
+rm -f "$out_dir/app-update.toml"
 
 echo "==> release $version"
 echo "==> output $out_dir"
@@ -14,10 +24,10 @@ echo "==> go test ./..."
 (cd "$repo_root" && go test ./...)
 
 echo "==> build popcornd"
-(cd "$repo_root" && go build -trimpath -ldflags "-s -w" -o "$out_dir/popcornd" ./cmd/popcornd)
+(cd "$repo_root" && go build -trimpath -ldflags "-s -w -X popcorn/internal/version.Version=$version -X popcorn/internal/version.Commit=$commit -X popcorn/internal/version.BuildTime=$build_time" -o "$out_dir/popcornd" ./cmd/popcornd)
 
 echo "==> build Android APKs"
-(cd "$repo_root/android-tv" && gradle :app:assembleRelease :companion:assembleRelease)
+(cd "$repo_root/android-tv" && POPCORN_ANDROID_VERSION_CODE="$android_version_code" POPCORN_ANDROID_VERSION_NAME="$android_version_name" gradle :app:assembleRelease :companion:assembleRelease)
 
 cp "$repo_root/android-tv/app/build/outputs/apk/release/app-release.apk" "$out_dir/popcorn-tv-$version.apk"
 cp "$repo_root/android-tv/companion/build/outputs/apk/release/companion-release.apk" "$out_dir/popcorn-companion-$version.apk"
@@ -31,3 +41,12 @@ cp "$repo_root/packaging/popcornd.service" "$out_dir/popcornd.service"
 
 echo "==> wrote:"
 find "$out_dir" -maxdepth 1 -type f -printf '  %f\n' | sort
+
+echo
+echo "==> upload these APKs in the web admin App Updates screen:"
+echo "  Android TV:       $out_dir/popcorn-tv-$version.apk"
+echo "  Phone Companion:  $out_dir/popcorn-companion-$version.apk"
+echo
+echo "==> APK version metadata:"
+echo "  versionCode:      $android_version_code"
+echo "  versionName:      $android_version_name"

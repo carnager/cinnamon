@@ -74,14 +74,15 @@ fun DetailPage(
         item {
             ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = Surface1), shape = RoundedCornerShape(18.dp)) {
                 Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.Top) {
-                    PosterImage(imageUrl(session, item.id, item.posterMtimeUnix), Modifier.width(132.dp))
+                    PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix), Modifier.width(132.dp))
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text(displayTitle(item), color = TextColor, fontSize = 25.sp, lineHeight = 29.sp, fontWeight = FontWeight.Black, maxLines = 4, overflow = TextOverflow.Ellipsis)
                         val meta = listOf(
                             item.year.takeIf { it > 0 }?.toString(),
                             fmtDuration(item.durationMs),
+                            fmtEndsAround(item.durationMs),
                             if (item.kind == "episode") "S%02d E%02d".format(item.seasonNumber, item.episodeNumber) else null,
-                        ).filterNotNull().joinToString(" \u00b7 ")
+                        ).filterNotNull().filter { it.isNotBlank() }.joinToString(" \u00b7 ")
                         if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         RatingBadges(item, ratings)
                     }

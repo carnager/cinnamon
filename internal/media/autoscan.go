@@ -50,12 +50,15 @@ func (a *AutoScanner) Run(ctx context.Context) {
 	}
 	defer watcher.Close()
 
+	watchedDirs := 0
 	for _, lib := range a.cfg.Libraries {
-		if err := addRecursiveWatch(watcher, lib.Path); err != nil {
+		n, err := addRecursiveWatch(watcher, lib.Path, a.cfg.AutoScanWatchDepth)
+		watchedDirs += n
+		if err != nil {
 			a.log.Warn("auto scan watch failed", "library", lib.ID, "path", lib.Path, "error", err)
 		}
 	}
-	a.log.Info("auto scan enabled", "debounce", a.cfg.AutoScanDebounce, "interval", a.cfg.AutoScanInterval)
+	a.log.Info("auto scan enabled", "debounce", a.cfg.AutoScanDebounce, "interval", a.cfg.AutoScanInterval, "watchDepth", a.cfg.AutoScanWatchDepth, "watchedDirs", watchedDirs)
 
 	pending := map[string]map[string]struct{}{}
 	var timer *time.Timer
@@ -150,7 +153,7 @@ func (a *AutoScanner) handleWatchEvent(watcher *fsnotify.Watcher, pending map[st
 	}
 	if event.Op&(fsnotify.Create|fsnotify.Rename) != 0 {
 		if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-			if err := addRecursiveWatch(watcher, event.Name); err != nil {
+			if _, err := addRecursiveWatch(watcher, event.Name, a.cfg.AutoScanWatchDepth); err != nil {
 				a.log.Debug("auto scan add watch failed", "path", event.Name, "error", err)
 			}
 		}
@@ -202,13 +205,19 @@ func (a *AutoScanner) scanPending(ctx context.Context, pending map[string]map[st
 	}
 }
 
-func addRecursiveWatch(watcher *fsnotify.Watcher, root string) error {
-	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+func addRecursiveWatch(watcher *fsnotify.Watcher, root string, maxDepth int) (int, error) {
+	watched := 0
+	root = filepath.Clean(root)
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if !d.IsDir() {
 			return nil
+		}
+		depth := watchDepth(root, path)
+		if maxDepth >= 0 && depth > maxDepth {
+			return filepath.SkipDir
 		}
 		name := d.Name()
 		if strings.HasPrefix(name, ".") || name == "@eaDir" {
@@ -217,8 +226,18 @@ func addRecursiveWatch(watcher *fsnotify.Watcher, root string) error {
 		if err := watcher.Add(path); err != nil {
 			return nil
 		}
+		watched++
 		return nil
 	})
+	return watched, err
+}
+
+func watchDepth(root, path string) int {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." {
+		return 0
+	}
+	return len(strings.Split(filepath.Clean(rel), string(filepath.Separator)))
 }
 
 func matchingLibrary(libraries []config.Library, path string) (config.Library, bool) {

@@ -28,6 +28,8 @@ var videoExts = map[string]struct{}{
 
 var episodePattern = regexp.MustCompile(`(?i)(?:^|[\s._-])s(\d{1,2})e(\d{1,3})(?:[\s._-]|$)`)
 
+const metadataBackfillNFOActors = "nfo-metadata-actors-v1"
+
 type Scanner struct {
 	cfg   config.Config
 	store *Store
@@ -233,6 +235,14 @@ func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
 	if err != nil {
 		return err
 	}
+	backfillNeeded, err := s.store.MetadataBackfillNeeded(ctx, lib.ID, metadataBackfillNFOActors)
+	if err != nil {
+		return err
+	}
+	if backfillNeeded {
+		s.log.Info("scan metadata backfill started", "library", lib.ID, "name", metadataBackfillNFOActors)
+		snapshot = map[string]Item{}
+	}
 	s.log.Debug("scan snapshot loaded", "library", lib.ID, "items", len(snapshot))
 	seen := map[string]struct{}{}
 	var seenMu sync.Mutex
@@ -336,6 +346,13 @@ func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
 	if err == nil {
 		err = s.store.RemoveMissing(ctx, lib.ID, seen)
 	}
+	if err == nil && backfillNeeded {
+		if markErr := s.store.MarkMetadataBackfillComplete(ctx, lib.ID, metadataBackfillNFOActors); markErr != nil {
+			err = markErr
+		} else {
+			s.log.Info("scan metadata backfill finished", "library", lib.ID, "name", metadataBackfillNFOActors)
+		}
+	}
 	finalStatus := status("finished", "")
 	finalStatus.FinishedAt = time.Now().UTC().Format(time.RFC3339)
 	if err != nil {
@@ -403,6 +420,9 @@ func (s *Scanner) buildItem(ctx context.Context, lib config.Library, path string
 	episodeNumber := 0
 	episodeTitle := ""
 	showNFO := ""
+	showMeta := nfoMovie{}
+	seasonNFO := ""
+	seasonMeta := nfoMovie{}
 	if lib.Type == "tv" {
 		kind = "episode"
 		episodeTitle = title
@@ -412,31 +432,60 @@ func (s *Scanner) buildItem(ctx context.Context, lib config.Library, path string
 		if seasonNumber == 0 || episodeNumber == 0 {
 			seasonNumber, episodeNumber = parseEpisodeNumbers(path)
 		}
+		showNFO = findShowNFO(lib.Path, path)
+		showMeta = readNFO(showNFO)
 		if showTitle == "" {
-			showTitle = readShowTitle(lib.Path, path)
+			showTitle = firstNonEmpty(showMeta.Title, readShowTitle(lib.Path, path), fallbackShowTitle(lib.Path, path))
 		}
-		if showTitle == "" {
-			showTitle = fallbackShowTitle(lib.Path, path)
+		if meta.OriginalTitle == "" {
+			meta.OriginalTitle = showMeta.OriginalTitle
 		}
-		if meta.Rating == 0 || meta.OriginalTitle == "" {
-			showNFO = findShowNFO(lib.Path, path)
-			showMeta := readNFO(showNFO)
-			if meta.Rating == 0 {
-				meta.Rating = showMeta.Rating
-			}
-			if meta.OriginalTitle == "" {
-				meta.OriginalTitle = showMeta.OriginalTitle
-			}
+		if showMeta.Title == "" {
+			showMeta.Title = showTitle
 		}
-		if showNFO == "" {
-			showNFO = findShowNFO(lib.Path, path)
-		}
+		seasonNFO = findSeasonNFO(path, seasonNumber)
+		seasonMeta = readNFO(seasonNFO)
 		nfoMTime = maxInt64(nfoMTime, fileMTimeUnix(showNFO))
+		nfoMTime = maxInt64(nfoMTime, fileMTimeUnix(seasonNFO))
 		title = episodeDisplayTitle(showTitle, seasonNumber, episodeNumber, episodeTitle)
 	}
 	posterPath, backdropPath := artworkPaths(lib, path)
 	posterMTime := fileMTimeUnix(posterPath)
 	backdropMTime := fileMTimeUnix(backdropPath)
+	itemActors := actorsFromNFO(meta.Actors)
+	var showMetadata *ShowMetadata
+	var seasonMetadata *SeasonMetadata
+	if lib.Type == "tv" && showTitle != "" {
+		showMetadata = &ShowMetadata{
+			LibraryID:     lib.ID,
+			Title:         showTitle,
+			SortTitle:     sortKey(showTitle),
+			OriginalTitle: showMeta.OriginalTitle,
+			Year:          showMeta.Year,
+			NFOPath:       showNFO,
+			NFOMTimeUnix:  fileMTimeUnix(showNFO),
+			Overview:      firstNonEmpty(showMeta.Plot, showMeta.Outline),
+			Genres:        strings.Join(showMeta.Genres, ", "),
+			Rating:        showMeta.Rating,
+			Premiered:     firstNonEmpty(showMeta.Premiered, showMeta.Released),
+			Actors:        actorsFromNFO(showMeta.Actors),
+		}
+		seasonPoster := seasonImagePath(path, seasonNumber)
+		seasonMetadata = &SeasonMetadata{
+			LibraryID:       lib.ID,
+			ShowTitle:       showTitle,
+			SeasonNumber:    seasonNumber,
+			Title:           seasonMeta.Title,
+			NFOPath:         seasonNFO,
+			NFOMTimeUnix:    fileMTimeUnix(seasonNFO),
+			PosterPath:      seasonPoster,
+			PosterMTimeUnix: fileMTimeUnix(seasonPoster),
+			Overview:        firstNonEmpty(seasonMeta.Plot, seasonMeta.Outline),
+			Rating:          seasonMeta.Rating,
+			Premiered:       firstNonEmpty(seasonMeta.Premiered, seasonMeta.Released),
+			Actors:          actorsFromNFO(seasonMeta.Actors),
+		}
+	}
 	probed := probeResult{
 		DurationMS: existing.DurationMS,
 		VideoCodec: existing.VideoCodec,
@@ -477,20 +526,29 @@ func (s *Scanner) buildItem(ctx context.Context, lib config.Library, path string
 		BackdropMTimeUnix: backdropMTime,
 		Overview:          firstNonEmpty(meta.Plot, meta.Outline),
 		Tagline:           meta.Tagline,
+		OfficialRating:    firstNonEmpty(meta.Certification, meta.MPAA),
 		Genres:            strings.Join(meta.Genres, ", "),
+		Tags:              strings.Join(cleanStrings(meta.Tags), ", "),
+		Studios:           strings.Join(cleanStrings(meta.Studios), ", "),
+		Directors:         strings.Join(cleanNFOText(meta.Directors), ", "),
+		Writers:           strings.Join(cleanNFOText(meta.Credits), ", "),
+		Countries:         strings.Join(cleanStrings(meta.Countries), ", "),
 		Rating:            meta.Rating,
 		Premiered:         firstNonEmpty(meta.Premiered, meta.Released),
 		ShowTitle:         showTitle,
 		SeasonNumber:      seasonNumber,
 		EpisodeNumber:     episodeNumber,
 		EpisodeTitle:      episodeTitle,
+		Actors:            itemActors,
+		ShowMetadata:      showMetadata,
+		SeasonMetadata:    seasonMetadata,
 	}
 }
 
 func artworkPaths(lib config.Library, video string) (string, string) {
 	if lib.Type == "tv" {
 		poster, backdrop := TVShowArtworkPaths(lib.Path, video)
-		if episodeThumb := findSidecar(video, []string{"-thumb.jpg", "-thumb.png", ".thumb.jpg", ".thumb.png"}); episodeThumb != "" {
+		if episodeThumb := EpisodeArtworkPath(video); episodeThumb != "" {
 			backdrop = episodeThumb
 		}
 		return poster, backdrop
@@ -508,11 +566,22 @@ func artworkPaths(lib config.Library, video string) (string, string) {
 	return poster, backdrop
 }
 
+func EpisodeArtworkPath(video string) string {
+	return findSidecar(video, []string{
+		"-thumb.jpg", "-thumb.jpeg", "-thumb.png", "-thumb.webp",
+		".thumb.jpg", ".thumb.jpeg", ".thumb.png", ".thumb.webp",
+		"-landscape.jpg", "-landscape.jpeg", "-landscape.png", "-landscape.webp",
+		".jpg", ".jpeg", ".png", ".webp",
+	})
+}
+
 func expectedNFOMTime(lib config.Library, video string) int64 {
 	nfo := findSidecar(video, []string{".nfo"})
 	mtime := fileMTimeUnix(nfo)
 	if lib.Type == "tv" {
 		mtime = maxInt64(mtime, fileMTimeUnix(findShowNFO(lib.Path, video)))
+		season, _ := parseEpisodeNumbers(video)
+		mtime = maxInt64(mtime, fileMTimeUnix(findSeasonNFO(video, season)))
 	}
 	return mtime
 }
@@ -631,7 +700,14 @@ type nfoMovie struct {
 	Plot          string      `xml:"plot"`
 	Outline       string      `xml:"outline"`
 	Tagline       string      `xml:"tagline"`
+	MPAA          string      `xml:"mpaa"`
+	Certification string      `xml:"certification"`
 	Genres        []string    `xml:"genre"`
+	Tags          []string    `xml:"tag"`
+	Studios       []string    `xml:"studio"`
+	Directors     []nfoText   `xml:"director"`
+	Credits       []nfoText   `xml:"credits"`
+	Countries     []string    `xml:"country"`
 	Rating        float64     `xml:"rating"`
 	Ratings       []nfoRating `xml:"ratings>rating"`
 	Premiered     string      `xml:"premiered"`
@@ -639,6 +715,18 @@ type nfoMovie struct {
 	ShowTitle     string      `xml:"showtitle"`
 	Season        int         `xml:"season"`
 	Episode       int         `xml:"episode"`
+	Actors        []nfoActor  `xml:"actor"`
+}
+
+type nfoActor struct {
+	Name  string `xml:"name"`
+	Role  string `xml:"role"`
+	Thumb string `xml:"thumb"`
+	Order int    `xml:"order"`
+}
+
+type nfoText struct {
+	Value string `xml:",chardata"`
 }
 
 type nfoID struct {
@@ -708,6 +796,10 @@ func ReadNFOExternalIDs(path string) (string, string, string) {
 	return meta.imdbID(), meta.tmdbID(), meta.tvdbID()
 }
 
+func ShowNFOPath(root, video string) string {
+	return findShowNFO(root, video)
+}
+
 func ReadNFOSourceRatings(path string) SourceRatings {
 	meta := readNFO(path)
 	var out SourceRatings
@@ -736,7 +828,87 @@ func ReadNFOSourceRatings(path string) SourceRatings {
 	return out
 }
 
+func ReadNFOExtras(path string) NFOExtras {
+	meta := readNFO(path)
+	return NFOExtras{
+		Tagline:        strings.TrimSpace(meta.Tagline),
+		OfficialRating: firstNonEmpty(meta.Certification, meta.MPAA),
+		Tags:           cleanStrings(meta.Tags),
+		Studios:        cleanStrings(meta.Studios),
+		Directors:      cleanNFOText(meta.Directors),
+		Writers:        cleanNFOText(meta.Credits),
+		Countries:      cleanStrings(meta.Countries),
+	}
+}
+
+func cleanNFOText(values []nfoText) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		text := strings.TrimSpace(value.Value)
+		if text == "" {
+			continue
+		}
+		key := strings.ToLower(text)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, text)
+	}
+	return out
+}
+
+func cleanStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		text := strings.TrimSpace(value)
+		if text == "" {
+			continue
+		}
+		key := strings.ToLower(text)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, text)
+	}
+	return out
+}
+
+func actorsFromNFO(in []nfoActor) []Actor {
+	out := make([]Actor, 0, len(in))
+	for i, actor := range in {
+		name := strings.TrimSpace(actor.Name)
+		if name == "" {
+			continue
+		}
+		order := actor.Order
+		if order == 0 {
+			order = i + 1
+		}
+		out = append(out, Actor{
+			Name:  name,
+			Role:  strings.TrimSpace(actor.Role),
+			Thumb: strings.TrimSpace(actor.Thumb),
+			Order: order,
+		})
+	}
+	return out
+}
+
 func bestRating(simple float64, ratings []nfoRating) float64 {
+	for _, rating := range ratings {
+		if rating.Value > 0 && ratingNameMatches(rating.Name, "imdb") {
+			return normalizeRating(rating.Value, rating.Max)
+		}
+	}
+	for _, rating := range ratings {
+		if rating.Value > 0 && ratingNameMatches(rating.Name, "tvdb") {
+			return normalizeRating(rating.Value, rating.Max)
+		}
+	}
 	if simple > 0 {
 		return normalizeRating(simple, 10)
 	}
@@ -746,16 +918,27 @@ func bestRating(simple float64, ratings []nfoRating) float64 {
 		}
 	}
 	for _, rating := range ratings {
-		if rating.Value > 0 && strings.EqualFold(rating.Name, "imdb") {
-			return normalizeRating(rating.Value, rating.Max)
-		}
-	}
-	for _, rating := range ratings {
 		if rating.Value > 0 {
 			return normalizeRating(rating.Value, rating.Max)
 		}
 	}
 	return 0
+}
+
+func ratingNameMatches(name, source string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	source = strings.ToLower(strings.TrimSpace(source))
+	if name == source {
+		return true
+	}
+	switch source {
+	case "imdb":
+		return strings.Contains(name, "internet movie")
+	case "tvdb":
+		return strings.Contains(name, "tvdb") || strings.Contains(name, "the tv db") || strings.Contains(name, "thetvdb")
+	default:
+		return false
+	}
 }
 
 func normalizeRating(value, max float64) float64 {

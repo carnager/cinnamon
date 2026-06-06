@@ -1,6 +1,6 @@
 # Popcorn
 
-Popcorn is a small Jellyfin-adjacent media daemon. The first version focuses on a clean API, fast local scans, direct playback, ffmpeg transcoding, and a built-in web UI.
+Popcorn is a small media daemon focused on a clean API, fast local scans, direct playback, ffmpeg transcoding, and first-party web, TV, phone, and desktop clients.
 
 ## Run
 
@@ -50,9 +50,20 @@ Create a versioned release bundle with:
 ./scripts/release
 ```
 
-The bundle is written to `dist/<git-version>/` and contains `popcornd`, the TV APK, the companion APK, example config, systemd unit, and SHA-256 checksums.
+The bundle is written to `dist/<git-version>/` and contains `popcornd`, the TV APK, the companion APK, example config, systemd unit, and SHA-256 checksums. The script prints the TV and companion APK paths at the end; upload those manually from the web admin App Updates screen.
+
+On the first run with an empty database, Popcorn creates the bootstrap admin user
+from `POPCORN_ADMIN_USER` or `admin`. Set `POPCORN_ADMIN_PASSWORD` to choose the
+initial password; otherwise `popcornd` generates one and prints it once in the
+startup log.
 
 ## API
+
+All API routes require either `Authorization: Bearer <token>` or the `popcorn_token`
+login cookie, except `GET /api/health`, `POST /api/auth/login`, and the QR
+start/poll endpoints used by first-time TV setup.
+Repeated failed login attempts for the same username and client are temporarily
+throttled.
 
 - `GET /api/health`
 - `GET /api/libraries`
@@ -81,7 +92,7 @@ The bundle is written to `dist/<git-version>/` and contains `popcornd`, the TV A
 - `POST /api/trakt/import-watchlist`
 - `DELETE /api/trakt`
 
-Progress, watchlist, and Trakt routes are per authenticated user.
+Progress, watchlist, Trakt, and remote-device state are per authenticated user.
 
 ## Transcoding
 

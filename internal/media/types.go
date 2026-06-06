@@ -1,40 +1,80 @@
 package media
 
 type Item struct {
-	ID                int64   `json:"id"`
-	LibraryID         string  `json:"libraryId"`
-	Path              string  `json:"-"`
-	Kind              string  `json:"kind"`
-	Title             string  `json:"title"`
-	SortTitle         string  `json:"sortTitle"`
-	OriginalTitle     string  `json:"originalTitle,omitempty"`
-	Year              int     `json:"year,omitempty"`
-	DurationMS        int64   `json:"durationMs,omitempty"`
-	Container         string  `json:"container,omitempty"`
-	VideoCodec        string  `json:"videoCodec,omitempty"`
-	AudioCodec        string  `json:"audioCodec,omitempty"`
-	IMDbID            string  `json:"imdbId,omitempty"`
-	TMDbID            string  `json:"tmdbId,omitempty"`
-	TVDbID            string  `json:"tvdbId,omitempty"`
-	Width             int     `json:"width,omitempty"`
-	Height            int     `json:"height,omitempty"`
-	SizeBytes         int64   `json:"sizeBytes"`
-	MTimeUnix         int64   `json:"mtimeUnix"`
-	NFOPath           string  `json:"-"`
-	NFOMTimeUnix      int64   `json:"nfoMtimeUnix,omitempty"`
-	PosterPath        string  `json:"posterPath,omitempty"`
-	PosterMTimeUnix   int64   `json:"posterMtimeUnix,omitempty"`
-	BackdropPath      string  `json:"backdropPath,omitempty"`
-	BackdropMTimeUnix int64   `json:"backdropMtimeUnix,omitempty"`
-	Overview          string  `json:"overview,omitempty"`
-	Tagline           string  `json:"tagline,omitempty"`
-	Genres            string  `json:"genres,omitempty"`
-	Rating            float64 `json:"rating,omitempty"`
-	Premiered         string  `json:"premiered,omitempty"`
-	ShowTitle         string  `json:"showTitle,omitempty"`
-	SeasonNumber      int     `json:"seasonNumber,omitempty"`
-	EpisodeNumber     int     `json:"episodeNumber,omitempty"`
-	EpisodeTitle      string  `json:"episodeTitle,omitempty"`
+	ID                int64           `json:"id"`
+	LibraryID         string          `json:"libraryId"`
+	Path              string          `json:"-"`
+	Kind              string          `json:"kind"`
+	Title             string          `json:"title"`
+	SortTitle         string          `json:"sortTitle"`
+	OriginalTitle     string          `json:"originalTitle,omitempty"`
+	Year              int             `json:"year,omitempty"`
+	DurationMS        int64           `json:"durationMs,omitempty"`
+	Container         string          `json:"container,omitempty"`
+	VideoCodec        string          `json:"videoCodec,omitempty"`
+	AudioCodec        string          `json:"audioCodec,omitempty"`
+	IMDbID            string          `json:"imdbId,omitempty"`
+	TMDbID            string          `json:"tmdbId,omitempty"`
+	TVDbID            string          `json:"tvdbId,omitempty"`
+	Width             int             `json:"width,omitempty"`
+	Height            int             `json:"height,omitempty"`
+	SizeBytes         int64           `json:"sizeBytes"`
+	MTimeUnix         int64           `json:"mtimeUnix"`
+	NFOPath           string          `json:"-"`
+	NFOMTimeUnix      int64           `json:"nfoMtimeUnix,omitempty"`
+	PosterPath        string          `json:"posterPath,omitempty"`
+	PosterMTimeUnix   int64           `json:"posterMtimeUnix,omitempty"`
+	BackdropPath      string          `json:"backdropPath,omitempty"`
+	BackdropMTimeUnix int64           `json:"backdropMtimeUnix,omitempty"`
+	Overview          string          `json:"overview,omitempty"`
+	Tagline           string          `json:"tagline,omitempty"`
+	OfficialRating    string          `json:"officialRating,omitempty"`
+	Genres            string          `json:"genres,omitempty"`
+	Tags              string          `json:"tags,omitempty"`
+	Studios           string          `json:"studios,omitempty"`
+	Directors         string          `json:"directors,omitempty"`
+	Writers           string          `json:"writers,omitempty"`
+	Countries         string          `json:"countries,omitempty"`
+	Rating            float64         `json:"rating,omitempty"`
+	Premiered         string          `json:"premiered,omitempty"`
+	ShowTitle         string          `json:"showTitle,omitempty"`
+	SeasonNumber      int             `json:"seasonNumber,omitempty"`
+	EpisodeNumber     int             `json:"episodeNumber,omitempty"`
+	EpisodeTitle      string          `json:"episodeTitle,omitempty"`
+	Actors            []Actor         `json:"actors,omitempty"`
+	ShowMetadata      *ShowMetadata   `json:"-"`
+	SeasonMetadata    *SeasonMetadata `json:"-"`
+}
+
+type Actor struct {
+	Name  string `json:"name"`
+	Role  string `json:"role,omitempty"`
+	Thumb string `json:"thumb,omitempty"`
+	Order int    `json:"order,omitempty"`
+}
+
+type ActorInfo struct {
+	Name               string `json:"name"`
+	TMDbID             string `json:"tmdbId,omitempty"`
+	IMDbID             string `json:"imdbId,omitempty"`
+	Biography          string `json:"biography,omitempty"`
+	Birthday           string `json:"birthday,omitempty"`
+	Deathday           string `json:"deathday,omitempty"`
+	PlaceOfBirth       string `json:"placeOfBirth,omitempty"`
+	KnownForDepartment string `json:"knownForDepartment,omitempty"`
+	ProfilePath        string `json:"profilePath,omitempty"`
+	Source             string `json:"source,omitempty"`
+	FetchedAt          string `json:"fetchedAt,omitempty"`
+}
+
+type NFOExtras struct {
+	Tagline        string
+	OfficialRating string
+	Tags           []string
+	Studios        []string
+	Directors      []string
+	Writers        []string
+	Countries      []string
 }
 
 type ScanStatus struct {
@@ -66,6 +106,7 @@ type ShowSummary struct {
 	Genres            string  `json:"genres,omitempty"`
 	Rating            float64 `json:"rating,omitempty"`
 	Premiered         string  `json:"premiered,omitempty"`
+	Actors            []Actor `json:"actors,omitempty"`
 }
 
 type SeasonSummary struct {
@@ -76,11 +117,49 @@ type SeasonSummary struct {
 	EpisodeCount    int     `json:"episodeCount"`
 	DurationMS      int64   `json:"durationMs,omitempty"`
 	PosterItemID    int64   `json:"posterItemId,omitempty"`
+	PosterPath      string  `json:"posterPath,omitempty"`
 	PosterMTimeUnix int64   `json:"posterMtimeUnix,omitempty"`
 	BackdropItemID  int64   `json:"backdropItemId,omitempty"`
 	Overview        string  `json:"overview,omitempty"`
 	Rating          float64 `json:"rating,omitempty"`
 	Premiered       string  `json:"premiered,omitempty"`
+	Actors          []Actor `json:"actors,omitempty"`
+}
+
+type ShowMetadata struct {
+	LibraryID     string
+	Title         string
+	SortTitle     string
+	OriginalTitle string
+	Year          int
+	NFOPath       string
+	NFOMTimeUnix  int64
+	Overview      string
+	Genres        string
+	Rating        float64
+	Premiered     string
+	Actors        []Actor
+}
+
+type SeasonMetadata struct {
+	LibraryID       string
+	ShowTitle       string
+	SeasonNumber    int
+	Title           string
+	NFOPath         string
+	NFOMTimeUnix    int64
+	PosterPath      string
+	PosterMTimeUnix int64
+	Overview        string
+	Rating          float64
+	Premiered       string
+	Actors          []Actor
+}
+
+type AlphabetEntry struct {
+	Letter string `json:"letter"`
+	Offset int    `json:"offset"`
+	Count  int    `json:"count"`
 }
 
 type PlaybackProgress struct {

@@ -50,7 +50,7 @@ Create a versioned release bundle with:
 ./scripts/release
 ```
 
-The bundle is written to `dist/<git-version>/` and contains `popcornd`, the TV APK, the companion APK, example config, systemd unit, and SHA-256 checksums. The script prints the TV and companion APK paths at the end; upload those manually from the web admin App Updates screen.
+The bundle is written to `dist/<git-version>/` and contains `popcornd`, the TV APK, the companion APK, example config, systemd unit, and SHA-256 checksums. The script prints the TV and companion APK paths at the end; upload those manually from the web admin App Updates screen, or set `POPCORN_RELEASE_UPLOAD=1`, `POPCORN_UPLOAD_SERVER`, `POPCORN_UPLOAD_USER`, and `POPCORN_UPLOAD_PASSWORD` to publish both APKs through the admin upload API.
 
 On the first run with an empty database, Popcorn creates the bootstrap admin user
 from `POPCORN_ADMIN_USER` or `admin`. Set `POPCORN_ADMIN_PASSWORD` to choose the

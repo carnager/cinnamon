@@ -1,6 +1,8 @@
 package dev.popcorn.tv
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.activity.ComponentActivity
@@ -547,6 +549,13 @@ fun PopcornApp() {
         }
     }
 
+    fun openExternalTrailer(item: PopItem) {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(youtubeTrailerSearchUrl(item.title, item.year)))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(intent) }
+            .onFailure { error = "No app can open trailer search" }
+    }
+
     BackHandler(enabled = screen !is Screen.Home && screen !is Screen.Login) {
         when (val s = screen) {
             Screen.Watchlist -> screen = Screen.Home
@@ -562,6 +571,7 @@ fun PopcornApp() {
                 lastPlayerReturnScreen = null
                 session?.let { active -> refreshProgress(active) }
             }
+            is Screen.SidecarPlayer -> screen = s.returnScreen
             else -> screen = Screen.Home
         }
     }
@@ -795,6 +805,13 @@ fun PopcornApp() {
                 lastPlayerReturnScreen = current
                 screen = Screen.Player(current.item, audioIndex, subtitleIndex, startPositionMs)
             },
+            onTrailer = { localTrailer ->
+                if (localTrailer) {
+                    screen = Screen.SidecarPlayer(trailerUrl(session, current.item.id), current)
+                } else {
+                    openExternalTrailer(current.item)
+                }
+            },
             onWatchedChange = { watched ->
                 session?.let { setItemWatched(it, current.item, watched) }
             },
@@ -848,6 +865,11 @@ fun PopcornApp() {
             onRemoteCommandConsumed = { id ->
                 if (pendingPlayerCommand?.id == id) pendingPlayerCommand = null
             },
+        )
+        is Screen.SidecarPlayer -> SidecarPlayerScreen(
+            url = current.url,
+            session = session,
+            onBack = { screen = current.returnScreen },
         )
     }
     watchMenu?.let { menu ->

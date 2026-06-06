@@ -399,6 +399,16 @@ class Api(private val session: Session) {
         }
     }
 
+    suspend fun itemSidecars(itemId: Long): SidecarStatus = withContext(Dispatchers.IO) {
+        val o = request("/api/items/$itemId/sidecars")
+        SidecarStatus(trailer = o.optBoolean("trailer"), theme = o.optBoolean("theme"))
+    }
+
+    suspend fun showTheme(libraryId: String, showTitle: String): SidecarStatus = withContext(Dispatchers.IO) {
+        val o = request("/api/tv/theme?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}")
+        SidecarStatus(theme = o.optBoolean("theme"))
+    }
+
     suspend fun progress(itemId: Long): PlaybackProgress = withContext(Dispatchers.IO) {
         val o = request("/api/items/$itemId/progress")
         PlaybackProgress(

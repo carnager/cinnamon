@@ -69,7 +69,9 @@ fun <T> PosterGrid(
     alphabetTitle: ((T) -> String)? = null,
     alphabetEntries: List<AlphabetEntry> = emptyList(),
     onAlphabet: ((AlphabetEntry) -> Unit)? = null,
-    content: @Composable (T, Boolean, Int, FocusRequester) -> Unit,
+    alphabetFocusRequester: FocusRequester? = null,
+    restoreFocus: (() -> Boolean)? = null,
+    content: @Composable (T, Boolean, Int, Boolean, Boolean, FocusRequester) -> Unit,
 ) {
     val firstKey = entries.firstOrNull()?.let { key(it) }
     val targetKey = initialFocusKey?.takeIf { requested -> entries.any { key(it) == requested } } ?: firstKey
@@ -110,13 +112,16 @@ fun <T> PosterGrid(
             gridItemsIndexed(entries, key = { _, item -> key(item) }) { index, item ->
                 val focusRequester = remember { FocusRequester() }
                 val focusNow = initialFocusPending && targetKey != null && key(item) == targetKey
+                val column = index % columns
+                val firstRow = index < columns
+                val rightEdge = column == columns - 1 || index == entries.lastIndex
                 if (focusNow) {
                     LaunchedEffect(key(item)) {
                         delay(450)
                         initialFocusPending = false
                     }
                 }
-                content(item, focusNow, index % columns, focusRequester)
+                content(item, focusNow, column, firstRow, rightEdge, focusRequester)
             }
         }
         if (alphabetIndex.isNotEmpty()) {
@@ -124,6 +129,8 @@ fun <T> PosterGrid(
                 index = alphabetIndex,
                 gridState = gridState,
                 onAlphabet = onAlphabet,
+                focusRequester = alphabetFocusRequester,
+                restoreFocus = restoreFocus,
                 modifier = Modifier.align(Alignment.CenterEnd).padding(end = 10.dp),
             )
         }
@@ -136,14 +143,22 @@ private fun alphabetLetter(title: String): String {
 }
 
 @Composable
-private fun AlphabetRail(index: Map<String, AlphabetEntry>, gridState: LazyGridState, onAlphabet: ((AlphabetEntry) -> Unit)?, modifier: Modifier = Modifier) {
+private fun AlphabetRail(
+    index: Map<String, AlphabetEntry>,
+    gridState: LazyGridState,
+    onAlphabet: ((AlphabetEntry) -> Unit)?,
+    focusRequester: FocusRequester? = null,
+    restoreFocus: (() -> Boolean)? = null,
+    modifier: Modifier = Modifier,
+) {
     val scope = rememberCoroutineScope()
     val letters = listOf("#") + ('A'..'Z').map { it.toString() }
+    val firstEnabledLetter = letters.firstOrNull { index[it] != null }
     Column(
         modifier
             .clip(RoundedCornerShape(10.dp))
-            .background(SurfaceColor.copy(alpha = .85f))
-            .border(1.dp, Line, RoundedCornerShape(10.dp))
+            .background(Color.Black.copy(alpha = .48f))
+            .border(1.dp, Color.White.copy(alpha = .14f), RoundedCornerShape(10.dp))
             .padding(vertical = 5.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -163,14 +178,28 @@ private fun AlphabetRail(index: Map<String, AlphabetEntry>, gridState: LazyGridS
                 modifier = Modifier
                     .width(26.dp)
                     .height(17.dp)
+                    .then(if (letter == firstEnabledLetter && focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
                     .clip(RoundedCornerShape(5.dp))
                     .background(if (focused && target != null) Accent else Color.Transparent)
                     .onFocusChanged { focused = it.isFocused }
                     .focusable(enabled = target != null)
+                    .onKeyEvent {
+                        if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && restoreFocus != null) {
+                            restoreFocus()
+                        } else {
+                            false
+                        }
+                    }
                     .tvActivate {
                         if (target != null) {
                             if (onAlphabet != null) {
                                 onAlphabet(target)
+                                if (focusRequester != null) {
+                                    scope.launch {
+                                        delay(180)
+                                        runCatching { focusRequester.requestFocus() }
+                                    }
+                                }
                             } else {
                                 scope.launch { gridState.scrollToItem(target.offset) }
                             }
@@ -192,10 +221,12 @@ fun ShowCard(
     focusRequester: FocusRequester? = null,
     onFocus: (() -> Unit)? = null,
     onLeftEdge: (() -> Boolean)? = null,
+    onRightEdge: (() -> Boolean)? = null,
+    onUp: (() -> Boolean)? = null,
     onClick: () -> Unit,
     onLongClick: ((FocusRequester) -> Unit)? = null,
 ) {
-    CardShell(autoFocus = autoFocus, focusRequester = focusRequester, onFocus = onFocus, onLeftEdge = onLeftEdge, onClick = onClick, onLongClick = onLongClick) {
+    CardShell(autoFocus = autoFocus, focusRequester = focusRequester, onFocus = onFocus, onLeftEdge = onLeftEdge, onRightEdge = onRightEdge, onUp = onUp, onClick = onClick, onLongClick = onLongClick) {
         Box {
             Poster(session, show.posterItemId, Modifier.fillMaxWidth(), show.posterMtimeUnix)
             if (show.rating > 0) PosterRating(show.rating)
@@ -218,10 +249,12 @@ fun ItemCard(
     focusRequester: FocusRequester? = null,
     onFocus: (() -> Unit)? = null,
     onLeftEdge: (() -> Boolean)? = null,
+    onRightEdge: (() -> Boolean)? = null,
+    onUp: (() -> Boolean)? = null,
     onClick: () -> Unit,
     onLongClick: ((FocusRequester) -> Unit)? = null,
 ) {
-    CardShell(autoFocus = autoFocus, focusRequester = focusRequester, onFocus = onFocus, onLeftEdge = onLeftEdge, onClick = onClick, onLongClick = onLongClick) {
+    CardShell(autoFocus = autoFocus, focusRequester = focusRequester, onFocus = onFocus, onLeftEdge = onLeftEdge, onRightEdge = onRightEdge, onUp = onUp, onClick = onClick, onLongClick = onLongClick) {
         Box {
             Poster(session, item.id, Modifier.fillMaxWidth(), item.posterMtimeUnix)
             if (item.rating > 0) PosterRating(item.rating)
@@ -386,6 +419,8 @@ fun WatchActionOverlay(
     onDismiss: () -> Unit,
 ) {
     val firstFocus = remember { FocusRequester() }
+    val secondFocus = remember { FocusRequester() }
+    val cancelFocus = remember { FocusRequester() }
     BackHandler(onBack = onDismiss)
     LaunchedEffect(Unit) {
         delay(80)
@@ -394,7 +429,7 @@ fun WatchActionOverlay(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = .65f))
+            .background(Color.Black.copy(alpha = .54f))
             .onKeyEvent {
                 if (it.type == KeyEventType.KeyUp && it.key == Key.Back) {
                     onDismiss()
@@ -403,33 +438,105 @@ fun WatchActionOverlay(
                     false
                 }
             },
-        contentAlignment = Alignment.Center,
+        contentAlignment = Alignment.BottomCenter,
     ) {
         Column(
             Modifier
-                .width(340.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(SurfaceColor)
-                .border(1.dp, Line, RoundedCornerShape(10.dp))
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(bottom = 48.dp)
+                .width(410.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(Color.Black.copy(alpha = .78f))
+                .border(1.dp, Color.White.copy(alpha = .18f), RoundedCornerShape(18.dp))
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(title, color = TextColor, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(
-                listOf(
-                    if (watched) "Watched" else "Unwatched",
-                    if (watchlisted) "In watchlist" else "Not in watchlist",
-                ).joinToString(" \u00b7 "),
-                color = Muted,
-                fontSize = 12.sp,
+            Text(title, color = TextColor, fontSize = 18.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                WatchStateChip(if (watched) "Seen" else "Unseen", active = watched)
+                WatchStateChip(if (watchlisted) "In watchlist" else "Not listed", active = watchlisted)
+            }
+            Spacer(Modifier.height(6.dp))
+            WatchContextAction(
+                label = if (watched) "Mark as unwatched" else "Mark as watched",
+                primary = !watched,
+                modifier = Modifier.focusRequester(firstFocus),
+                onUp = { firstFocus.requestFocus(); true },
+                onClick = if (watched) onMarkUnwatched else onMarkWatched,
             )
-            Spacer(Modifier.height(4.dp))
-            FocusButton("Mark watched", primary = !watched, modifier = Modifier.focusRequester(firstFocus)) { onMarkWatched() }
-            FocusButton("Mark unwatched", primary = watched) { onMarkUnwatched() }
-            FocusButton("Add to watchlist", primary = !watchlisted) { onAddWatchlist() }
-            FocusButton("Remove from watchlist", primary = watchlisted) { onRemoveWatchlist() }
-            FocusButton("Cancel", primary = false) { onDismiss() }
+            WatchContextAction(
+                label = if (watchlisted) "Remove from watchlist" else "Add to watchlist",
+                primary = !watchlisted,
+                modifier = Modifier.focusRequester(secondFocus),
+                onClick = if (watchlisted) onRemoveWatchlist else onAddWatchlist,
+            )
+            WatchContextAction(
+                "Cancel",
+                primary = false,
+                modifier = Modifier.focusRequester(cancelFocus),
+                onDown = { cancelFocus.requestFocus(); true },
+                onClick = onDismiss,
+            )
         }
+    }
+}
+
+@Composable
+private fun WatchStateChip(label: String, active: Boolean) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (active) Accent.copy(alpha = .24f) else Color.White.copy(alpha = .08f))
+            .border(1.dp, if (active) Accent.copy(alpha = .45f) else Color.White.copy(alpha = .14f), RoundedCornerShape(999.dp))
+            .padding(horizontal = 9.dp, vertical = 4.dp),
+    ) {
+        Text(label, color = if (active) Accent else Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun WatchContextAction(
+    label: String,
+    primary: Boolean,
+    modifier: Modifier = Modifier,
+    onUp: (() -> Boolean)? = null,
+    onDown: (() -> Boolean)? = null,
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val bg = when {
+        focused && primary -> Accent
+        focused -> Color.White.copy(alpha = .16f)
+        primary -> Accent.copy(alpha = .28f)
+        else -> Color.White.copy(alpha = .08f)
+    }
+    val border = when {
+        focused -> Color.White.copy(alpha = .78f)
+        primary -> Accent.copy(alpha = .48f)
+        else -> Color.White.copy(alpha = .14f)
+    }
+    Row(
+        modifier
+            .fillMaxWidth()
+            .height(42.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(bg)
+            .border(1.dp, border, RoundedCornerShape(999.dp))
+            .onFocusChanged { focused = it.isFocused }
+            .focusable()
+            .onKeyEvent {
+                when {
+                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionUp && onUp != null -> onUp()
+                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionDown && onDown != null -> onDown()
+                    else -> false
+                }
+            }
+            .tvActivate(onClick)
+            .padding(horizontal = 15.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Text(if (primary) "\u25CF" else "\u25CB", color = if (focused && primary) Color.Black else Accent, fontSize = 10.sp, fontWeight = FontWeight.Black)
+        Text(label, color = if (focused && primary) Color.Black else TextColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -441,6 +548,8 @@ fun CardShell(
     focusRequester: FocusRequester? = null,
     onFocus: (() -> Unit)? = null,
     onLeftEdge: (() -> Boolean)? = null,
+    onRightEdge: (() -> Boolean)? = null,
+    onUp: (() -> Boolean)? = null,
     onClick: () -> Unit,
     onLongClick: ((FocusRequester) -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
@@ -480,6 +589,8 @@ fun CardShell(
             .onKeyEvent {
                 when {
                     it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && onLeftEdge != null -> onLeftEdge()
+                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionRight && onRightEdge != null -> onRightEdge()
+                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionUp && onUp != null -> onUp()
                     isActivationKey(it.key) && it.type == KeyEventType.KeyDown -> {
                         if (onLongClick != null) {
                             if (longPressJob == null) {
@@ -512,8 +623,8 @@ fun CardShell(
                 scaleY = scale
             }
             .clip(CardShape)
-            .border(2.dp, if (focused) FocusGlow else Color.Transparent, CardShape)
-            .background(if (focused) Surface2 else Color.Transparent)
+            .border(2.dp, if (focused) Color.White.copy(alpha = .88f) else Color.White.copy(alpha = .10f), CardShape)
+            .background(if (focused) Color.White.copy(alpha = .13f) else Color.White.copy(alpha = .055f))
             .padding(4.dp),
         content = content,
     )

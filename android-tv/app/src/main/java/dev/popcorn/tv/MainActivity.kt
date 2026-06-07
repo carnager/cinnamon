@@ -30,6 +30,7 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
     override fun dispatchKeyEvent(event: AndroidKeyEvent): Boolean {
         if (PlayerOsdBridge.dispatch(event)) return true
+        if (BrowseBackBridge.dispatch(event)) return true
         return super.dispatchKeyEvent(event)
     }
 
@@ -90,9 +91,11 @@ fun PopcornApp() {
     var watchlistMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var watchlistTvShows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
     var updateAvailable by remember { mutableStateOf(false) }
+    var updateDialogOpen by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var searchReturnScreen by remember { mutableStateOf<Screen>(Screen.Home) }
     var loadGeneration by remember { mutableStateOf(0) }
     var libraryFullyLoaded by remember { mutableStateOf(false) }
     var loadingMore by remember { mutableStateOf(false) }
@@ -135,7 +138,9 @@ fun PopcornApp() {
     }
 
     suspend fun loadContinueRows(api: Api): Pair<List<PopItem>, List<PopItem>> {
-        val resumable = api.progressList()
+        val progress = api.progressList()
+        val completedItemIds = progress.filter { it.completed }.map { it.itemId }.toSet()
+        val resumable = progress
             .filter { progress ->
                 val duration = progress.durationMs
                 val position = progress.positionMs
@@ -148,7 +153,21 @@ fun PopcornApp() {
         val entries = resumable.mapNotNull { progress ->
             runCatching { api.item(progress.itemId) }.getOrNull()
         }
-        return entries.filter { it.kind == "movie" }.take(24) to entries.filter { it.kind == "episode" }.take(24)
+        val resumeMovies = entries.filter { it.kind == "movie" }.take(24)
+        val resumeEpisodes = entries.filter { it.kind == "episode" }.toMutableList()
+        val resumeEpisodeIds = resumeEpisodes.map { it.id }.toMutableSet()
+        val partialShows = api.showProgress().filter { it.completedCount > 0 && !it.completed }.take(40)
+        for (show in partialShows) {
+            if (resumeEpisodes.size >= 24) break
+            val nextEpisode = runCatching {
+                api.episodes(show.libraryId, show.showTitle)
+                    .firstOrNull { episode -> episode.id !in completedItemIds && episode.id !in resumeEpisodeIds }
+            }.getOrNull()
+            if (nextEpisode != null && resumeEpisodeIds.add(nextEpisode.id)) {
+                resumeEpisodes.add(nextEpisode)
+            }
+        }
+        return resumeMovies to resumeEpisodes.take(24)
     }
 
     fun refreshWatchlist(activeSession: Session) {
@@ -379,7 +398,7 @@ fun PopcornApp() {
         }
     }
 
-    fun loadLibraryPage(library: Library, activeSession: Session, page: Int = 0, genre: String = selectedGenre, sort: String = selectedSort, minRating: Double = selectedMinRating, seenStatus: String = selectedSeenStatus) {
+    fun loadLibraryPage(library: Library, activeSession: Session, page: Int = 0, genre: String = selectedGenre, sort: String = selectedSort, minRating: Double = selectedMinRating, seenStatus: String = selectedSeenStatus, resetFiltersOnLibraryChange: Boolean = true) {
         loadGeneration += 1
         val generation = loadGeneration
         scope.launch {
@@ -389,14 +408,15 @@ fun PopcornApp() {
             activeLibrary = library
             items = emptyList()
             shows = emptyList()
-            val activeGenre = if (page == 0 && library.id != previousLibraryID) {
+            val shouldResetFilters = resetFiltersOnLibraryChange && page == 0 && library.id != previousLibraryID
+            val activeGenre = if (shouldResetFilters) {
                 ""
             } else {
                 genre
             }
-            val activeSort = if (page == 0 && library.id != previousLibraryID) "" else sort
-            val activeMinRating = if (page == 0 && library.id != previousLibraryID) 0.0 else minRating
-            val activeSeenStatus = if (page == 0 && library.id != previousLibraryID) "" else seenStatus
+            val activeSort = if (shouldResetFilters) "" else sort
+            val activeMinRating = if (shouldResetFilters) 0.0 else minRating
+            val activeSeenStatus = if (shouldResetFilters) "" else seenStatus
             selectedGenre = activeGenre
             selectedSort = activeSort
             selectedMinRating = activeMinRating
@@ -556,12 +576,29 @@ fun PopcornApp() {
             .onFailure { error = "No app can open trailer search" }
     }
 
-    BackHandler(enabled = screen !is Screen.Home && screen !is Screen.Login) {
+    fun openSearch() {
+        if (screen !is Screen.Search && screen !is Screen.Login && screen !is Screen.Loading) {
+            searchReturnScreen = screen
+        }
+        screen = Screen.Search
+    }
+
+    fun closeSearch() {
+        screen = when (val target = searchReturnScreen) {
+            Screen.Search, Screen.Login, Screen.Loading -> Screen.Home
+            else -> target
+        }
+    }
+
+    BackHandler(
+        enabled = screen !is Screen.Home &&
+            screen !is Screen.Login &&
+            screen !is Screen.Watchlist &&
+            screen !is Screen.LibraryPage &&
+            screen !is Screen.Search,
+    ) {
         when (val s = screen) {
-            Screen.Watchlist -> screen = Screen.Home
             Screen.Updates -> screen = Screen.Home
-            is Screen.LibraryPage -> screen = Screen.Home
-            Screen.Search -> screen = Screen.Home
             is Screen.Show -> screen = if (s.fromActor != null) Screen.Actor(s.fromActor) else if (s.fromSearch) Screen.Search else if (s.fromWatchlist) Screen.Watchlist else if (s.fromHome) Screen.Home else if (activeLibrary?.type == "tv") Screen.LibraryPage(activeLibrary!!) else Screen.Home
             is Screen.Season -> screen = Screen.Show(s.show, fromHome = s.fromHome, fromSearch = s.fromSearch, fromWatchlist = s.fromWatchlist, fromActor = s.fromActor)
             is Screen.Detail -> returnFromDetail(s)
@@ -625,13 +662,41 @@ fun PopcornApp() {
                 session?.let { refreshWatchlist(it) }
                 screen = Screen.Watchlist
             },
-            onSearch = { screen = Screen.Search },
-            onUpdates = { screen = Screen.Updates },
+            onSearch = ::openSearch,
+            onUpdates = { updateDialogOpen = true },
             onScan = ::scanLibraries,
             onLogout = {
                 prefs.edit().clear().apply()
                 session = null
                 screen = Screen.Login
+            },
+            onMoreContinueMovies = {
+                val active = session
+                val movieLib = libraries.firstOrNull { it.type == "movies" || it.type == "movie" }
+                if (active != null && movieLib != null) {
+                    loadLibraryPage(movieLib, active, page = 0, genre = "", sort = "", minRating = 0.0, seenStatus = "started", resetFiltersOnLibraryChange = false)
+                }
+            },
+            onMoreContinueTv = {
+                val active = session
+                val tvLib = libraries.firstOrNull { it.type == "tv" }
+                if (active != null && tvLib != null) {
+                    loadLibraryPage(tvLib, active, page = 0, genre = "", sort = "", minRating = 0.0, seenStatus = "started", resetFiltersOnLibraryChange = false)
+                }
+            },
+            onMoreRecentMovies = {
+                val active = session
+                val movieLib = libraries.firstOrNull { it.type == "movies" || it.type == "movie" }
+                if (active != null && movieLib != null) {
+                    loadLibraryPage(movieLib, active, page = 0, genre = "", sort = "mtime", minRating = 0.0, seenStatus = "", resetFiltersOnLibraryChange = false)
+                }
+            },
+            onMoreRecentTv = {
+                val active = session
+                val tvLib = libraries.firstOrNull { it.type == "tv" }
+                if (active != null && tvLib != null) {
+                    loadLibraryPage(tvLib, active, page = 0, genre = "", sort = "mtime", minRating = 0.0, seenStatus = "", resetFiltersOnLibraryChange = false)
+                }
             },
             onItem = { screen = Screen.Detail(it, null, fromHome = true) },
             onShow = {
@@ -658,8 +723,8 @@ fun PopcornApp() {
                 session?.let { refreshWatchlist(it) }
                 screen = Screen.Watchlist
             },
-            onSearch = { screen = Screen.Search },
-            onUpdates = { screen = Screen.Updates },
+            onSearch = ::openSearch,
+            onUpdates = { updateDialogOpen = true },
             onScan = ::scanLibraries,
             onLogout = {
                 prefs.edit().clear().apply()
@@ -701,8 +766,8 @@ fun PopcornApp() {
                 session?.let { refreshWatchlist(it) }
                 screen = Screen.Watchlist
             },
-            onSearch = { screen = Screen.Search },
-            onUpdates = { screen = Screen.Updates },
+            onSearch = ::openSearch,
+            onUpdates = { updateDialogOpen = true },
             onScan = ::scanLibraries,
             onLogout = {
                 prefs.edit().clear().apply()
@@ -737,7 +802,7 @@ fun PopcornApp() {
             watchlistItems = watchlistItems,
             watchlistShows = watchlistShows,
             onQueryChange = { searchQuery = it },
-            onBack = { screen = Screen.Home },
+            onBack = ::closeSearch,
             onItem = { screen = Screen.Detail(it, null, fromSearch = true) },
             onShow = {
                 showFocusSeason = null
@@ -770,6 +835,10 @@ fun PopcornApp() {
                 screen = Screen.Detail(item, current.show, fromHome = current.fromHome, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist, fromActor = current.fromActor)
             },
             onEpisodeMenu = { episode, requester -> openItemWatchMenu(episode, requester) },
+            onActor = { actor ->
+                lastActorReturnScreen = current
+                screen = Screen.Actor(actor)
+            },
         )
         is Screen.Season -> ShowView(
             session = session,
@@ -794,6 +863,10 @@ fun PopcornApp() {
                 screen = Screen.Detail(item, current.show, fromHome = current.fromHome, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist, fromActor = current.fromActor)
             },
             onEpisodeMenu = { episode, requester -> openItemWatchMenu(episode, requester) },
+            onActor = { actor ->
+                lastActorReturnScreen = current
+                screen = Screen.Actor(actor)
+            },
         )
         is Screen.Detail -> DetailView(
             item = current.item,
@@ -805,12 +878,13 @@ fun PopcornApp() {
                 lastPlayerReturnScreen = current
                 screen = Screen.Player(current.item, audioIndex, subtitleIndex, startPositionMs)
             },
-            onTrailer = { localTrailer ->
-                if (localTrailer) {
-                    screen = Screen.SidecarPlayer(trailerUrl(session, current.item.id), current)
-                } else {
-                    openExternalTrailer(current.item)
-                }
+	            onTrailer = { localTrailer ->
+	                if (localTrailer) {
+	                    val title = if (current.item.kind == "episode") current.item.episodeTitle.ifBlank { current.item.title } else current.item.title
+	                    screen = Screen.SidecarPlayer(trailerUrl(session, current.item.id), "$title Trailer", current)
+	                } else {
+	                    openExternalTrailer(current.item)
+	                }
             },
             onWatchedChange = { watched ->
                 session?.let { setItemWatched(it, current.item, watched) }
@@ -820,7 +894,7 @@ fun PopcornApp() {
             },
             onBack = { returnFromDetail(current) },
             onHome = { screen = Screen.Home },
-            onSearch = { screen = Screen.Search },
+            onSearch = ::openSearch,
             onWatchlist = { screen = Screen.Watchlist },
             onActor = { actor ->
                 lastActorReturnScreen = current
@@ -866,11 +940,12 @@ fun PopcornApp() {
                 if (pendingPlayerCommand?.id == id) pendingPlayerCommand = null
             },
         )
-        is Screen.SidecarPlayer -> SidecarPlayerScreen(
-            url = current.url,
-            session = session,
-            onBack = { screen = current.returnScreen },
-        )
+	        is Screen.SidecarPlayer -> SidecarPlayerScreen(
+	            url = current.url,
+	            title = current.title,
+	            session = session,
+	            onBack = { screen = current.returnScreen },
+	        )
     }
     watchMenu?.let { menu ->
         WatchActionOverlay(
@@ -894,6 +969,13 @@ fun PopcornApp() {
                 menu.onRemoveWatchlist()
             },
             onDismiss = { closeWatchMenu(menu) },
+        )
+    }
+    if (updateDialogOpen) {
+        UpdateApplyDialog(
+            session = session,
+            onDismiss = { updateDialogOpen = false },
+            onUpdateStarted = { updateAvailable = false },
         )
     }
 }

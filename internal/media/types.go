@@ -18,6 +18,7 @@ type Item struct {
 	TVDbID            string          `json:"tvdbId,omitempty"`
 	Width             int             `json:"width,omitempty"`
 	Height            int             `json:"height,omitempty"`
+	BitRate           int64           `json:"bitRate,omitempty"`
 	SizeBytes         int64           `json:"sizeBytes"`
 	MTimeUnix         int64           `json:"mtimeUnix"`
 	NFOPath           string          `json:"-"`
@@ -42,8 +43,44 @@ type Item struct {
 	EpisodeNumber     int             `json:"episodeNumber,omitempty"`
 	EpisodeTitle      string          `json:"episodeTitle,omitempty"`
 	Actors            []Actor         `json:"actors,omitempty"`
+	Streams           []MediaStream   `json:"-"`
+	StreamsKnown      bool            `json:"-"`
 	ShowMetadata      *ShowMetadata   `json:"-"`
 	SeasonMetadata    *SeasonMetadata `json:"-"`
+}
+
+type MediaProbe struct {
+	DurationMS int64
+	BitRate    int64
+	Streams    []MediaStream
+}
+
+type MediaStream struct {
+	ItemID          int64  `json:"-"`
+	Index           int    `json:"index"`
+	Type            string `json:"type"`
+	Codec           string `json:"codec,omitempty"`
+	CodecLongName   string `json:"codecLongName,omitempty"`
+	Profile         string `json:"profile,omitempty"`
+	Level           int    `json:"level,omitempty"`
+	Width           int    `json:"width,omitempty"`
+	Height          int    `json:"height,omitempty"`
+	PixelFormat     string `json:"pixFmt,omitempty"`
+	ColorRange      string `json:"colorRange,omitempty"`
+	ColorSpace      string `json:"colorSpace,omitempty"`
+	ColorTransfer   string `json:"colorTransfer,omitempty"`
+	ColorPrimaries  string `json:"colorPrimaries,omitempty"`
+	HDRFormat       string `json:"hdrFormat,omitempty"`
+	BitRate         int64  `json:"bitRate,omitempty"`
+	Channels        int    `json:"channels,omitempty"`
+	ChannelLayout   string `json:"channelLayout,omitempty"`
+	SampleRate      int    `json:"sampleRate,omitempty"`
+	Language        string `json:"language,omitempty"`
+	Title           string `json:"title,omitempty"`
+	Default         bool   `json:"default,omitempty"`
+	Forced          bool   `json:"forced,omitempty"`
+	DispositionJSON string `json:"-"`
+	RawJSON         string `json:"-"`
 }
 
 type Actor struct {

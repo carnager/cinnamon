@@ -3,6 +3,7 @@ package media
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -64,11 +65,11 @@ func (s *Store) UpsertItem(ctx context.Context, item Item) error {
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO media_items (
 	library_id, path, kind, title, sort_title, original_title, year, duration_ms, container,
-	video_codec, audio_codec, imdb_id, tmdb_id, tvdb_id, width, height, size_bytes, mtime_unix,
+	video_codec, audio_codec, imdb_id, tmdb_id, tvdb_id, width, height, bit_rate, size_bytes, mtime_unix,
 	nfo_path, nfo_mtime_unix, poster_path, poster_mtime_unix, backdrop_path, backdrop_mtime_unix,
 	overview, tagline, official_rating, genres, tags, studios, directors, writers, countries, rating, premiered,
 	show_title, season_number, episode_number, episode_title, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 ON CONFLICT(path) DO UPDATE SET
 	library_id=excluded.library_id,
 	kind=excluded.kind,
@@ -85,6 +86,7 @@ ON CONFLICT(path) DO UPDATE SET
 	tvdb_id=excluded.tvdb_id,
 	width=excluded.width,
 	height=excluded.height,
+	bit_rate=excluded.bit_rate,
 	size_bytes=excluded.size_bytes,
 	mtime_unix=excluded.mtime_unix,
 	nfo_path=excluded.nfo_path,
@@ -112,7 +114,7 @@ ON CONFLICT(path) DO UPDATE SET
 		item.LibraryID, item.Path, item.Kind, item.Title, item.SortTitle, nullString(item.OriginalTitle), nullableInt(item.Year),
 		nullableInt64(item.DurationMS), item.Container, item.VideoCodec, item.AudioCodec,
 		nullString(item.IMDbID), nullString(item.TMDbID), nullString(item.TVDbID),
-		nullableInt(item.Width), nullableInt(item.Height), item.SizeBytes, item.MTimeUnix,
+		nullableInt(item.Width), nullableInt(item.Height), item.BitRate, item.SizeBytes, item.MTimeUnix,
 		nullString(item.NFOPath), item.NFOMTimeUnix, nullString(item.PosterPath), item.PosterMTimeUnix,
 		nullString(item.BackdropPath), item.BackdropMTimeUnix,
 		nullString(item.Overview), nullString(item.Tagline), nullString(item.OfficialRating), nullString(item.Genres),
@@ -129,6 +131,11 @@ ON CONFLICT(path) DO UPDATE SET
 	if err := replaceActorsTx(ctx, tx, "item", itemID, item.LibraryID, item.ShowTitle, item.SeasonNumber, item.Actors); err != nil {
 		return err
 	}
+	if item.StreamsKnown {
+		if err := replaceMediaStreamsTx(ctx, tx, itemID, item.Streams); err != nil {
+			return err
+		}
+	}
 	if item.ShowMetadata != nil {
 		if err := upsertShowMetadataTx(ctx, tx, *item.ShowMetadata); err != nil {
 			return err
@@ -140,6 +147,91 @@ ON CONFLICT(path) DO UPDATE SET
 		}
 	}
 	return tx.Commit()
+}
+
+func replaceMediaStreamsTx(ctx context.Context, tx *sql.Tx, itemID int64, streams []MediaStream) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM media_streams WHERE item_id = ?`, itemID); err != nil {
+		return err
+	}
+	for _, stream := range streams {
+		if strings.TrimSpace(stream.Type) == "" || strings.TrimSpace(stream.Codec) == "" {
+			continue
+		}
+		dispositionJSON := stream.DispositionJSON
+		if dispositionJSON == "" {
+			b, _ := json.Marshal(map[string]any{"default": stream.Default, "forced": stream.Forced})
+			dispositionJSON = string(b)
+		}
+		rawJSON := stream.RawJSON
+		if rawJSON == "" {
+			rawJSON = "{}"
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO media_streams(
+	item_id, stream_index, type, codec, codec_long_name, profile, level, width, height,
+	pix_fmt, color_range, color_space, color_transfer, color_primaries, hdr_format, bit_rate,
+	channels, channel_layout, sample_rate, language, title, is_default, is_forced, disposition_json, raw_json, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+			itemID, stream.Index, stream.Type, stream.Codec, nullString(stream.CodecLongName), nullString(stream.Profile), nullableInt(stream.Level),
+			nullableInt(stream.Width), nullableInt(stream.Height), nullString(stream.PixelFormat), nullString(stream.ColorRange), nullString(stream.ColorSpace),
+			nullString(stream.ColorTransfer), nullString(stream.ColorPrimaries), nullString(stream.HDRFormat), nullableInt64(stream.BitRate),
+			nullableInt(stream.Channels), nullString(stream.ChannelLayout), nullableInt(stream.SampleRate), nullString(stream.Language), nullString(stream.Title),
+			boolInt(stream.Default), boolInt(stream.Forced), nullString(dispositionJSON), rawJSON); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ReplaceMediaStreams(ctx context.Context, itemID int64, streams []MediaStream) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := replaceMediaStreamsTx(ctx, tx, itemID, streams); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) MediaStreams(ctx context.Context, itemID int64) ([]MediaStream, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT item_id, stream_index, type, COALESCE(codec, ''), COALESCE(codec_long_name, ''), COALESCE(profile, ''),
+	COALESCE(level, 0), COALESCE(width, 0), COALESCE(height, 0), COALESCE(pix_fmt, ''), COALESCE(color_range, ''),
+	COALESCE(color_space, ''), COALESCE(color_transfer, ''), COALESCE(color_primaries, ''), COALESCE(hdr_format, ''),
+	COALESCE(bit_rate, 0), COALESCE(channels, 0), COALESCE(channel_layout, ''), COALESCE(sample_rate, 0),
+	COALESCE(language, ''), COALESCE(title, ''), COALESCE(is_default, 0), COALESCE(is_forced, 0),
+	COALESCE(disposition_json, ''), COALESCE(raw_json, '')
+FROM media_streams
+WHERE item_id = ?
+ORDER BY stream_index`, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []MediaStream{}
+	for rows.Next() {
+		var stream MediaStream
+		var isDefault, isForced int
+		if err := rows.Scan(&stream.ItemID, &stream.Index, &stream.Type, &stream.Codec, &stream.CodecLongName, &stream.Profile,
+			&stream.Level, &stream.Width, &stream.Height, &stream.PixelFormat, &stream.ColorRange, &stream.ColorSpace,
+			&stream.ColorTransfer, &stream.ColorPrimaries, &stream.HDRFormat, &stream.BitRate, &stream.Channels,
+			&stream.ChannelLayout, &stream.SampleRate, &stream.Language, &stream.Title, &isDefault, &isForced,
+			&stream.DispositionJSON, &stream.RawJSON); err != nil {
+			return nil, err
+		}
+		stream.Default = isDefault != 0
+		stream.Forced = isForced != 0
+		out = append(out, stream)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) MediaStreamCount(ctx context.Context, itemID int64) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM media_streams WHERE item_id = ?`, itemID).Scan(&n)
+	return n, err
 }
 
 func upsertShowMetadataTx(ctx context.Context, tx *sql.Tx, meta ShowMetadata) error {
@@ -451,6 +543,13 @@ AND (
 		SELECT 1 FROM playback_progress pp
 		WHERE pp.user_id = ? AND pp.item_id = media_items.id AND pp.completed = 1
 	)))
+	OR (? = 'started' AND ? > 0 AND EXISTS (
+		SELECT 1 FROM playback_progress pp
+		WHERE pp.user_id = ? AND pp.item_id = media_items.id
+		AND pp.completed = 0
+		AND pp.position_ms >= 60000
+		AND (pp.duration_ms <= 0 OR pp.duration_ms - pp.position_ms >= 60000)
+	))
 )
 AND (
 	? = ''
@@ -467,7 +566,7 @@ LIMIT ? OFFSET ?`
 	args = append(args, genreArgs...)
 	args = append(args,
 		opts.MinRating, opts.MinRating,
-		seenStatus, seenStatus, userID, userID, seenStatus, userID, userID,
+		seenStatus, seenStatus, userID, userID, seenStatus, userID, userID, seenStatus, userID, userID,
 		nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith,
 	)
 	args = append(args, textArgs...)
@@ -527,7 +626,7 @@ func normalizedSort(sortMode string) string {
 
 func normalizedSeenStatus(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "seen", "unseen":
+	case "seen", "unseen", "started":
 		return strings.ToLower(strings.TrimSpace(status))
 	default:
 		return ""
@@ -580,14 +679,14 @@ func showGenreFilterSQL(genres []string) (string, []any) {
 
 const itemSelect = `SELECT id, library_id, path, kind, title, sort_title, COALESCE(original_title, ''), COALESCE(year, 0), COALESCE(duration_ms, 0),
 COALESCE(container, ''), COALESCE(video_codec, ''), COALESCE(audio_codec, ''), COALESCE(imdb_id, ''), COALESCE(tmdb_id, ''), COALESCE(tvdb_id, ''), COALESCE(width, 0),
-COALESCE(height, 0), size_bytes, mtime_unix, COALESCE(nfo_path, ''), COALESCE(nfo_mtime_unix, 0), COALESCE(poster_path, ''), COALESCE(poster_mtime_unix, 0), COALESCE(backdrop_path, ''), COALESCE(backdrop_mtime_unix, 0),
+COALESCE(height, 0), COALESCE(bit_rate, 0), size_bytes, mtime_unix, COALESCE(nfo_path, ''), COALESCE(nfo_mtime_unix, 0), COALESCE(poster_path, ''), COALESCE(poster_mtime_unix, 0), COALESCE(backdrop_path, ''), COALESCE(backdrop_mtime_unix, 0),
 COALESCE(overview, ''), COALESCE(tagline, ''), COALESCE(official_rating, ''), COALESCE(genres, ''), COALESCE(tags, ''),
 COALESCE(studios, ''), COALESCE(directors, ''), COALESCE(writers, ''), COALESCE(countries, ''), COALESCE(rating, 0), COALESCE(premiered, ''),
 COALESCE(show_title, ''), COALESCE(season_number, 0), COALESCE(episode_number, 0), COALESCE(episode_title, '')`
 
 const itemSelectMI = `SELECT mi.id, mi.library_id, mi.path, mi.kind, mi.title, mi.sort_title, COALESCE(mi.original_title, ''), COALESCE(mi.year, 0), COALESCE(mi.duration_ms, 0),
 COALESCE(mi.container, ''), COALESCE(mi.video_codec, ''), COALESCE(mi.audio_codec, ''), COALESCE(mi.imdb_id, ''), COALESCE(mi.tmdb_id, ''), COALESCE(mi.tvdb_id, ''), COALESCE(mi.width, 0),
-COALESCE(mi.height, 0), mi.size_bytes, mi.mtime_unix, COALESCE(mi.nfo_path, ''), COALESCE(mi.nfo_mtime_unix, 0), COALESCE(mi.poster_path, ''), COALESCE(mi.poster_mtime_unix, 0), COALESCE(mi.backdrop_path, ''), COALESCE(mi.backdrop_mtime_unix, 0),
+COALESCE(mi.height, 0), COALESCE(mi.bit_rate, 0), mi.size_bytes, mi.mtime_unix, COALESCE(mi.nfo_path, ''), COALESCE(mi.nfo_mtime_unix, 0), COALESCE(mi.poster_path, ''), COALESCE(mi.poster_mtime_unix, 0), COALESCE(mi.backdrop_path, ''), COALESCE(mi.backdrop_mtime_unix, 0),
 COALESCE(mi.overview, ''), COALESCE(mi.tagline, ''), COALESCE(mi.official_rating, ''), COALESCE(mi.genres, ''), COALESCE(mi.tags, ''),
 COALESCE(mi.studios, ''), COALESCE(mi.directors, ''), COALESCE(mi.writers, ''), COALESCE(mi.countries, ''), COALESCE(mi.rating, 0), COALESCE(mi.premiered, ''),
 COALESCE(mi.show_title, ''), COALESCE(mi.season_number, 0), COALESCE(mi.episode_number, 0), COALESCE(mi.episode_title, '')`
@@ -748,6 +847,24 @@ AND (
 		WHERE e.kind = 'episode' AND e.library_id = mi.library_id AND e.show_title = mi.show_title
 		AND pp.item_id IS NULL
 	)))
+	OR (? = 'started' AND ? > 0 AND EXISTS (
+		SELECT 1 FROM media_items e
+		JOIN playback_progress pp ON pp.user_id = ? AND pp.item_id = e.id
+		WHERE e.kind = 'episode' AND e.library_id = mi.library_id AND e.show_title = mi.show_title
+		AND (
+			pp.completed = 1
+			OR (
+				pp.completed = 0
+				AND pp.position_ms >= 60000
+				AND (pp.duration_ms <= 0 OR pp.duration_ms - pp.position_ms >= 60000)
+			)
+		)
+	) AND EXISTS (
+		SELECT 1 FROM media_items e
+		LEFT JOIN playback_progress pp ON pp.user_id = ? AND pp.item_id = e.id AND pp.completed = 1
+		WHERE e.kind = 'episode' AND e.library_id = mi.library_id AND e.show_title = mi.show_title
+		AND pp.item_id IS NULL
+	))
 )
 AND (
 	? = ''
@@ -772,7 +889,7 @@ AND (
 GROUP BY mi.library_id, mi.show_title
 HAVING (? <= 0 OR COALESCE(ms.rating, MAX(mi.rating), 0) >= ?)
 `+orderBy+`
-LIMIT ? OFFSET ?`, append(append([]any{libraryID, libraryID}, genreArgs...), seenStatus, seenStatus, userID, userID, seenStatus, userID, userID, nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith, q, q, q, q, q, opts.MinRating, opts.MinRating, limit, offset)...)
+LIMIT ? OFFSET ?`, append(append([]any{libraryID, libraryID}, genreArgs...), seenStatus, seenStatus, userID, userID, seenStatus, userID, userID, seenStatus, userID, userID, userID, nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith, q, q, q, q, q, opts.MinRating, opts.MinRating, limit, offset)...)
 	if err != nil {
 		return nil, err
 	}
@@ -793,7 +910,12 @@ func (s *Store) ListGenres(ctx context.Context, libraryID string) ([]string, err
 SELECT COALESCE(genres, '')
 FROM media_items
 WHERE (? = '' OR library_id = ?)
-AND genres IS NOT NULL AND genres != ''`, libraryID, libraryID)
+AND genres IS NOT NULL AND genres != ''
+UNION ALL
+SELECT COALESCE(genres, '')
+FROM media_shows
+WHERE (? = '' OR library_id = ?)
+AND genres IS NOT NULL AND genres != ''`, libraryID, libraryID, libraryID, libraryID)
 	if err != nil {
 		return nil, err
 	}
@@ -1225,7 +1347,7 @@ func scanItem(row rowScanner) (Item, error) {
 	var item Item
 	err := row.Scan(&item.ID, &item.LibraryID, &item.Path, &item.Kind, &item.Title, &item.SortTitle,
 		&item.OriginalTitle, &item.Year, &item.DurationMS, &item.Container, &item.VideoCodec, &item.AudioCodec,
-		&item.IMDbID, &item.TMDbID, &item.TVDbID, &item.Width, &item.Height, &item.SizeBytes, &item.MTimeUnix, &item.NFOPath,
+		&item.IMDbID, &item.TMDbID, &item.TVDbID, &item.Width, &item.Height, &item.BitRate, &item.SizeBytes, &item.MTimeUnix, &item.NFOPath,
 		&item.NFOMTimeUnix, &item.PosterPath, &item.PosterMTimeUnix, &item.BackdropPath, &item.BackdropMTimeUnix,
 		&item.Overview, &item.Tagline, &item.OfficialRating, &item.Genres, &item.Tags,
 		&item.Studios, &item.Directors, &item.Writers, &item.Countries,

@@ -78,17 +78,23 @@ fun applyOriginalTrackSelection(
     audioIndex: Int?,
     subtitleIndex: Int?,
 ) {
-    applyOriginalTrack(player, originalStreams.firstOrNull { it.index == audioIndex && it.type == "audio" }, C.TRACK_TYPE_AUDIO, disable = false)
+    val audioStreams = originalStreams.filter { it.type == "audio" }
+    val subtitleStreams = originalStreams.filter { it.type == "subtitle" }
+    val audioStream = audioStreams.firstOrNull { it.index == audioIndex }
+    val audioOrdinal = audioStreams.indexOfFirst { it.index == audioIndex }.takeIf { it >= 0 }
+    val subtitleStream = subtitleStreams.firstOrNull { it.index == subtitleIndex }
+    val subtitleOrdinal = subtitleStreams.indexOfFirst { it.index == subtitleIndex }.takeIf { it >= 0 }
+    applyOriginalTrack(player, audioStream, C.TRACK_TYPE_AUDIO, disable = false, preferredOrdinal = audioOrdinal)
     if (subtitleIndex == null) {
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             .build()
     } else {
-        applyOriginalTrack(player, originalStreams.firstOrNull { it.index == subtitleIndex && it.type == "subtitle" }, C.TRACK_TYPE_TEXT, disable = false)
+        applyOriginalTrack(player, subtitleStream, C.TRACK_TYPE_TEXT, disable = false, preferredOrdinal = subtitleOrdinal)
     }
 }
 
-private fun applyOriginalTrack(player: ExoPlayer, stream: StreamInfo?, trackType: Int, disable: Boolean) {
+private fun applyOriginalTrack(player: ExoPlayer, stream: StreamInfo?, trackType: Int, disable: Boolean, preferredOrdinal: Int? = null) {
     if (disable) {
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .setTrackTypeDisabled(trackType, true)
@@ -99,8 +105,10 @@ private fun applyOriginalTrack(player: ExoPlayer, stream: StreamInfo?, trackType
     var bestGroup: androidx.media3.common.Tracks.Group? = null
     var bestIndex = -1
     var bestScore = 0
+    val candidates = mutableListOf<Pair<androidx.media3.common.Tracks.Group, Int>>()
     for (group in player.currentTracks.groups.filter { it.type == trackType }) {
         for (i in 0 until group.length) {
+            candidates.add(group to i)
             val format = group.getTrackFormat(i)
             var score = 0
             if (stream.language.isNotBlank() && format.language?.equals(stream.language, ignoreCase = true) == true) score += 8
@@ -111,6 +119,12 @@ private fun applyOriginalTrack(player: ExoPlayer, stream: StreamInfo?, trackType
                 bestGroup = group
                 bestIndex = i
             }
+        }
+    }
+    if (bestScore <= 0 && preferredOrdinal != null) {
+        candidates.getOrNull(preferredOrdinal)?.let { (group, index) ->
+            bestGroup = group
+            bestIndex = index
         }
     }
     val group = bestGroup ?: return
@@ -231,11 +245,13 @@ private fun showNativeChoiceMenu(
         isFocusableInTouchMode = true
         setBackgroundColor(0x99000000.toInt())
         setOnKeyListener { _, keyCode, event ->
-            if (event.action == AndroidKeyEvent.ACTION_UP && keyCode == AndroidKeyEvent.KEYCODE_BACK) {
-                closeNativeTrackMenu(playerView, returnFocus, onClosed = onClosed)
-                true
-            } else {
-                false
+            when {
+                event.action == AndroidKeyEvent.ACTION_UP && keyCode == AndroidKeyEvent.KEYCODE_BACK -> {
+                    closeNativeTrackMenu(playerView, returnFocus, onClosed = onClosed)
+                    true
+                }
+                event.action == AndroidKeyEvent.ACTION_DOWN && isNativeMenuDpadKey(keyCode) -> true
+                else -> false
             }
         }
     }
@@ -263,6 +279,7 @@ private fun showNativeChoiceMenu(
     var selectedRow: TextView? = null
     fun closeAfterSelection() = closeNativeTrackMenu(playerView, returnFocus, onClosed = onClosed)
     fun addRow(choice: NativeChoice) {
+        val rowIndex = rows.size
         val row = TextView(context).apply {
             text = if (choice.selected) "\u2713  ${choice.label}" else "    ${choice.label}"
             setTextColor(if (choice.selected) 0xFFFFFFFF.toInt() else 0xFFE8ECF2.toInt())
@@ -288,6 +305,18 @@ private fun showNativeChoiceMenu(
                         if (event.action == AndroidKeyEvent.ACTION_UP) closeNativeTrackMenu(playerView, returnFocus, onClosed = onClosed)
                         true
                     }
+                    event.action == AndroidKeyEvent.ACTION_DOWN && keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP -> {
+                        val target = rows.getOrNull((rowIndex - 1).coerceAtLeast(0)) ?: view
+                        target.requestFocus()
+                        true
+                    }
+                    event.action == AndroidKeyEvent.ACTION_DOWN && keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
+                        val target = rows.getOrNull((rowIndex + 1).coerceAtMost(rows.lastIndex)) ?: view
+                        target.requestFocus()
+                        true
+                    }
+                    event.action == AndroidKeyEvent.ACTION_DOWN &&
+                        (keyCode == AndroidKeyEvent.KEYCODE_DPAD_LEFT || keyCode == AndroidKeyEvent.KEYCODE_DPAD_RIGHT) -> true
                     event.action == AndroidKeyEvent.ACTION_UP && (keyCode == AndroidKeyEvent.KEYCODE_DPAD_CENTER || keyCode == AndroidKeyEvent.KEYCODE_ENTER || keyCode == AndroidKeyEvent.KEYCODE_NUMPAD_ENTER) -> {
                         view.performClick()
                         true
@@ -308,6 +337,13 @@ private fun showNativeChoiceMenu(
         (selectedRow ?: rows.firstOrNull { it.text.toString().trim() != "No tracks available yet" })?.requestFocus()
             ?: overlay.requestFocus()
     }
+}
+
+private fun isNativeMenuDpadKey(keyCode: Int): Boolean {
+    return keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP ||
+        keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN ||
+        keyCode == AndroidKeyEvent.KEYCODE_DPAD_LEFT ||
+        keyCode == AndroidKeyEvent.KEYCODE_DPAD_RIGHT
 }
 
 fun closeNativeTrackMenu(

@@ -901,6 +901,9 @@ async function openDetail(item, skipHistory, parent = {}) {
 
   detail.append(poster, body);
   frag.append(detail);
+  if (item.actors?.length) {
+    frag.append(castShelf(item.actors));
+  }
   setView(frag);
 }
 
@@ -969,7 +972,11 @@ async function openShow(show, skipHistory) {
   body.append(actions);
 
   header.append(poster, body);
-  frag.append(header, await seasonBrowser(show));
+  frag.append(header);
+  if (show.actors?.length) {
+    frag.append(castShelf(show.actors));
+  }
+  frag.append(await seasonBrowser(show));
   setView(frag);
 }
 
@@ -1104,4 +1111,59 @@ function streamLabel(stream) {
     stream.default ? "default" : "",
     stream.forced ? "forced" : "",
   ].filter(Boolean).join(" \u00b7 ");
+}
+
+function castShelf(actors) {
+  const section = el("section", "cast-shelf");
+  const filtered = (actors || []).filter((actor) => actor?.name).slice(0, 28);
+  section.append(sectionTitle("Cast", `${filtered.length}`));
+  const row = el("div", "cast-row");
+  for (const actor of filtered) {
+    const card = el("button", "cast-card");
+    card.type = "button";
+    card.addEventListener("click", () => openActor(actor).catch(console.error));
+    const avatar = el("div", "cast-avatar", actorInitials(actor.name));
+    const thumb = actor.thumb || `/api/actors/image?name=${encodeURIComponent(actor.name)}`;
+    avatar.style.backgroundImage = `url(${thumb})`;
+    card.append(
+      avatar,
+      el("div", "cast-name", actor.name),
+      el("div", "cast-role", actor.role || ""),
+    );
+    row.append(card);
+  }
+  section.append(row);
+  return section;
+}
+
+async function openActor(actor) {
+  const detail = await api(`/api/actors?name=${encodeURIComponent(actor.name)}`);
+  const frag = document.createDocumentFragment();
+  frag.append(makeBreadcrumb([
+    { label: "Cast", action: () => history.back() },
+    { label: detail?.actor?.name || actor.name },
+  ]));
+  const info = detail?.info || {};
+  const hero = el("article", "actor-page");
+  const avatar = el("div", "actor-page-avatar", actorInitials(actor.name));
+  const profile = detail?.profileUrl || actor.thumb || `/api/actors/image?name=${encodeURIComponent(actor.name)}`;
+  avatar.style.backgroundImage = `url(${profile})`;
+  const copy = el("div", "actor-page-copy");
+  copy.append(el("h1", null, detail?.actor?.name || actor.name));
+  const meta = [info.knownForDepartment, info.birthday, info.placeOfBirth].filter(Boolean).join(" · ");
+  if (meta) copy.append(el("div", "detail-meta", meta));
+  if (info.biography) copy.append(el("p", "overview", info.biography));
+  hero.append(avatar, copy);
+  frag.append(hero);
+  if (detail?.movies?.length) frag.append(sectionTitle("Movies", `${detail.movies.length}`), renderGrid(detail.movies));
+  if (detail?.shows?.length) {
+    frag.append(sectionTitle("TV Shows", `${detail.shows.length}`));
+    renderTVShows(frag, detail.shows);
+  }
+  setView(frag);
+}
+
+function actorInitials(name) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  return ((parts[0]?.[0] || "?") + (parts.length > 1 ? parts[parts.length - 1][0] : "")).toUpperCase();
 }

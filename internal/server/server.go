@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -37,6 +38,9 @@ type App struct {
 	cancel      context.CancelFunc
 	hlsMu       sync.Mutex
 	hlsSessions map[string]*hlsSession
+	playbackMu  sync.Mutex
+	plans       map[string]PlaybackPlan
+	failHints   map[string]time.Time
 	loginMu     sync.Mutex
 	loginFails  map[string]loginAttempt
 }
@@ -49,7 +53,18 @@ type loginAttempt struct {
 
 func New(opts Options) *App {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &App{cfg: opts.Config, log: opts.Log, store: opts.Store, auth: opts.Auth, ctx: ctx, cancel: cancel, hlsSessions: map[string]*hlsSession{}, loginFails: map[string]loginAttempt{}}
+	return &App{
+		cfg:         opts.Config,
+		log:         opts.Log,
+		store:       opts.Store,
+		auth:        opts.Auth,
+		ctx:         ctx,
+		cancel:      cancel,
+		hlsSessions: map[string]*hlsSession{},
+		plans:       map[string]PlaybackPlan{},
+		failHints:   map[string]time.Time{},
+		loginFails:  map[string]loginAttempt{},
+	}
 }
 
 func (a *App) Close() {
@@ -81,6 +96,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/genres", a.genres)
 	mux.HandleFunc("GET /api/alphabet", a.alphabet)
 	mux.HandleFunc("GET /api/actors", a.actorDetail)
+	mux.HandleFunc("GET /api/actors/image", a.actorImage)
 	mux.HandleFunc("GET /api/tv/shows", a.tvShows)
 	mux.HandleFunc("GET /api/tv/shows/actors", a.tvShowActors)
 	mux.HandleFunc("GET /api/tv/seasons", a.tvSeasons)
@@ -128,10 +144,13 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("PUT /api/devices/{id}/state", a.remotePutState)
 	mux.HandleFunc("GET /api/devices/{id}/state", a.remoteGetState)
 	mux.HandleFunc("GET /api/items/{id}/streams", a.streams)
+	mux.HandleFunc("POST /api/playback/plan", a.playbackPlan)
+	mux.HandleFunc("POST /api/playback/failure", a.playbackFailure)
 	mux.HandleFunc("GET /api/items/{id}/sidecars", a.itemSidecars)
 	mux.HandleFunc("GET /api/items/{id}/trailer", a.itemTrailer)
 	mux.HandleFunc("GET /api/tv/theme", a.showTheme)
 	mux.HandleFunc("GET /api/items/{id}/stream", a.stream)
+	mux.HandleFunc("GET /api/items/{id}/subtitles/{subtitle}", a.subtitle)
 	mux.HandleFunc("GET /api/items/{id}/transcode", a.transcode)
 	mux.HandleFunc("GET /api/items/{id}/hls/{session}/index.m3u8", a.hlsPlaylist)
 	mux.HandleFunc("GET /api/items/{id}/hls/{session}/{segment}", a.hlsSegment)
@@ -194,10 +213,15 @@ func (a *App) libraries(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) scan(w http.ResponseWriter, r *http.Request) {
+	release, ok := media.TryStartScan()
+	if !ok {
+		http.Error(w, "scan already running", http.StatusConflict)
+		return
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.ScanTimeout)
 		defer cancel()
-		if err := media.NewScanner(a.cfg, a.store, a.log).Scan(ctx); err != nil {
+		if err := media.NewScanner(a.cfg, a.store, a.log).ScanWithLease(ctx, release); err != nil {
 			a.log.Error("scan failed", "error", err)
 		}
 	}()
@@ -307,9 +331,10 @@ func (a *App) actorDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	info := a.actorInfo(r.Context(), actor)
+	apiActor := a.actorForResponse(actor)
 	profileURL := ""
-	if strings.TrimSpace(actor.Thumb) != "" {
-		profileURL = strings.TrimSpace(actor.Thumb)
+	if strings.TrimSpace(apiActor.Thumb) != "" {
+		profileURL = strings.TrimSpace(apiActor.Thumb)
 	} else {
 		profileURL = tmdbProfileURL(info.ProfilePath)
 	}
@@ -324,12 +349,41 @@ func (a *App) actorDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"actor":      actor,
+		"actor":      apiActor,
 		"info":       info,
 		"profileUrl": profileURL,
 		"movies":     movies,
 		"shows":      shows,
 	})
+}
+
+func (a *App) actorImage(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	actor, err := a.store.ActorByName(r.Context(), name)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	path := localActorThumbPath(actor.Thumb)
+	if path == "" {
+		http.NotFound(w, r)
+		return
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	http.ServeFile(w, r, path)
 }
 
 func (a *App) tvSeasons(w http.ResponseWriter, r *http.Request) {
@@ -359,7 +413,7 @@ func (a *App) tvShowActors(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, actors)
+	writeJSON(w, http.StatusOK, a.actorsForResponse(actors))
 }
 
 func (a *App) tvSeasonActors(w http.ResponseWriter, r *http.Request) {
@@ -375,7 +429,7 @@ func (a *App) tvSeasonActors(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, actors)
+	writeJSON(w, http.StatusOK, a.actorsForResponse(actors))
 }
 
 func queryFloat(r *http.Request, key string) float64 {
@@ -415,6 +469,8 @@ func (a *App) item(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	item.Actors = a.enrichedItemActors(r.Context(), item)
+	item.Actors = a.actorsForResponse(item.Actors)
 	writeJSON(w, http.StatusOK, item)
 }
 
@@ -423,12 +479,68 @@ func (a *App) streams(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	streams, err := probeStreams(r.Context(), a.cfg.FFprobePath, item.Path)
+	streams, err := a.itemStreams(r.Context(), item)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, streams)
+}
+
+func (a *App) itemStreams(ctx context.Context, item media.Item) ([]media.MediaStream, error) {
+	streams, err := a.store.MediaStreams(ctx, item.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(streams) > 0 {
+		return streams, nil
+	}
+	probe := media.ProbeMedia(ctx, a.cfg.FFprobePath, item.Path)
+	for i := range probe.Streams {
+		probe.Streams[i].ItemID = item.ID
+	}
+	if len(probe.Streams) > 0 {
+		if err := a.store.ReplaceMediaStreams(ctx, item.ID, probe.Streams); err != nil {
+			return nil, err
+		}
+		return probe.Streams, nil
+	}
+	streams = legacyItemStreams(item)
+	if len(streams) > 0 {
+		a.log.Warn("using legacy media stream summary", "item", item.ID, "video", item.VideoCodec, "audio", item.AudioCodec, "reason", "ffprobe returned no streams")
+		return streams, nil
+	}
+	if err := a.store.ReplaceMediaStreams(ctx, item.ID, nil); err != nil {
+		return nil, err
+	}
+	return nil, nil
+}
+
+func legacyItemStreams(item media.Item) []media.MediaStream {
+	streams := []media.MediaStream{}
+	if item.VideoCodec != "" {
+		streams = append(streams, media.MediaStream{
+			ItemID:    item.ID,
+			Index:     0,
+			Type:      "video",
+			Codec:     item.VideoCodec,
+			Width:     item.Width,
+			Height:    item.Height,
+			HDRFormat: "sdr",
+			BitRate:   item.BitRate,
+		})
+	}
+	if item.AudioCodec != "" {
+		streams = append(streams, media.MediaStream{
+			ItemID:   item.ID,
+			Index:    1,
+			Type:     "audio",
+			Codec:    item.AudioCodec,
+			Channels: 2,
+			Default:  true,
+		})
+	}
+	return streams
 }
 
 func (a *App) stream(w http.ResponseWriter, r *http.Request) {
@@ -462,6 +574,8 @@ func (a *App) image(w http.ResponseWriter, r *http.Request) {
 		path = item.BackdropPath
 	case "season":
 		path = seasonImage(item)
+	case "clearlogo":
+		path = media.ClearLogoArtworkPath(a.libraryRoot(item.LibraryID), item)
 	}
 	if path == "" {
 		http.NotFound(w, r)
@@ -482,6 +596,88 @@ func (a *App) libraryRoot(id string) string {
 
 func seasonImage(item media.Item) string {
 	return media.SeasonArtworkPath(item.Path, item.SeasonNumber)
+}
+
+func (a *App) enrichedItemActors(ctx context.Context, item media.Item) []media.Actor {
+	actors := append([]media.Actor(nil), item.Actors...)
+	if item.Kind != "episode" || strings.TrimSpace(item.LibraryID) == "" || strings.TrimSpace(item.ShowTitle) == "" {
+		return actors
+	}
+	showActors, err := a.store.ListShowActors(ctx, item.LibraryID, item.ShowTitle)
+	if err != nil || len(showActors) == 0 {
+		return actors
+	}
+
+	showByName := make(map[string]media.Actor, len(showActors))
+	for _, actor := range showActors {
+		key := actorNameKey(actor.Name)
+		if key != "" {
+			showByName[key] = actor
+		}
+	}
+
+	seen := make(map[string]struct{}, len(actors)+len(showActors))
+	for i := range actors {
+		key := actorNameKey(actors[i].Name)
+		if key == "" {
+			continue
+		}
+		seen[key] = struct{}{}
+		if strings.TrimSpace(actors[i].Thumb) == "" {
+			if showActor, ok := showByName[key]; ok && strings.TrimSpace(showActor.Thumb) != "" {
+				actors[i].Thumb = showActor.Thumb
+			}
+		}
+	}
+
+	for _, actor := range showActors {
+		key := actorNameKey(actor.Name)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		actors = append(actors, actor)
+	}
+	return actors
+}
+
+func actorNameKey(name string) string {
+	return strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(name)), " "))
+}
+
+func (a *App) actorsForResponse(actors []media.Actor) []media.Actor {
+	out := make([]media.Actor, len(actors))
+	for i, actor := range actors {
+		out[i] = a.actorForResponse(actor)
+	}
+	return out
+}
+
+func (a *App) actorForResponse(actor media.Actor) media.Actor {
+	if localActorThumbPath(actor.Thumb) == "" {
+		return actor
+	}
+	values := url.Values{}
+	values.Set("name", actor.Name)
+	if info, err := os.Stat(actor.Thumb); err == nil {
+		values.Set("v", strconv.FormatInt(info.ModTime().Unix(), 10))
+	}
+	actor.Thumb = "/api/actors/image?" + values.Encode()
+	return actor
+}
+
+func localActorThumbPath(thumb string) string {
+	thumb = strings.TrimSpace(thumb)
+	if thumb == "" || strings.HasPrefix(thumb, "http://") || strings.HasPrefix(thumb, "https://") || strings.HasPrefix(thumb, "/api/") {
+		return ""
+	}
+	if !filepath.IsAbs(thumb) {
+		return ""
+	}
+	return thumb
 }
 
 func (a *App) lookupItem(w http.ResponseWriter, r *http.Request) (media.Item, bool) {

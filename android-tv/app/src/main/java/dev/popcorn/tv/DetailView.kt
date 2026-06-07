@@ -54,6 +54,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -146,6 +147,11 @@ fun DetailView(
         resumePosition >= 30_000 &&
         resumePosition < (resumeDuration - 90_000).coerceAtLeast(30_000)
 
+    LaunchedEffect(item.id) {
+        delay(260)
+        runCatching { playFocus.requestFocus() }
+    }
+
     Box(Modifier.fillMaxSize().background(Bg)) {
         // Full-screen backdrop
         if (detailItem.backdropPath.isNotBlank() && session != null) {
@@ -205,7 +211,7 @@ fun DetailView(
                 .fillMaxSize()
                 .padding(start = 52.dp, end = 48.dp),
         ) {
-            Spacer(Modifier.height(72.dp))
+            Spacer(Modifier.height(54.dp))
             DetailHeroContent(
                 session = session,
                 detailItem = detailItem,
@@ -239,7 +245,7 @@ fun DetailView(
             )
 
             if (detailItem.actors.isNotEmpty()) {
-                Spacer(Modifier.height(18.dp))
+                Spacer(Modifier.height(12.dp))
                 CastStrip(
                     session = session,
                     actors = detailItem.actors,
@@ -391,13 +397,8 @@ private fun DetailHeroContent(
 
             DetailRatingRow(detailItem, externalRatings)
 
-            if (detailItem.genres.isNotBlank()) {
-                Spacer(Modifier.height(4.dp))
-                Text(detailItem.genres, color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-
             val chips = detailChips(detailItem, audioTracks, selectedAudio)
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 chips.forEach { TechChip(it) }
                 SelectorBadge(
@@ -841,7 +842,7 @@ private fun DetailFactRows(rows: List<Pair<String, String>>) {
 // ── Cast ──
 
 @Composable
-private fun CastStrip(
+fun CastStrip(
     session: Session?,
     actors: List<Actor>,
     firstFocusRequester: FocusRequester? = null,
@@ -849,8 +850,8 @@ private fun CastStrip(
     onActor: (Actor) -> Unit,
 ) {
     Column(Modifier.widthIn(max = 920.dp)) {
-        Text("Cast", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(12.dp))
+        Text("Cast", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
         LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             itemsIndexed(actors.take(14)) { index, actor ->
                 CastAvatar(
@@ -874,10 +875,11 @@ private fun CastAvatar(
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
+    val thumbUrl = actorImageUrl(session, actor.thumb)
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
-            .width(76.dp)
+            .width(78.dp)
             .onFocusChanged { focused = it.isFocused }
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .focusable()
@@ -888,30 +890,30 @@ private fun CastAvatar(
     ) {
         Box(
             Modifier
-                .size(64.dp)
+                .size(60.dp)
                 .clip(CircleShape)
                 .background(Surface2)
                 .border(2.dp, if (focused) FocusGlow else Color.Transparent, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            if (actor.thumb.startsWith("http://") || actor.thumb.startsWith("https://")) {
+            if (thumbUrl.isNotBlank()) {
                 SizedAsyncImage(
-                    model = actor.thumb,
+                    model = thumbUrl,
                     contentDescription = actor.name,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
-                    widthPx = 130,
-                    heightPx = 130,
-                    authToken = "",
+                    widthPx = 120,
+                    heightPx = 120,
+                    authToken = if (actor.thumb.startsWith("/")) session?.token.orEmpty() else "",
                 )
             } else {
                 Text(actorInitials(actor.name), color = Accent, fontSize = 16.sp, fontWeight = FontWeight.Black)
             }
         }
-        Spacer(Modifier.height(5.dp))
-        Text(actor.name, color = TextColor, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(4.dp))
+        Text(actor.name, color = TextColor, fontSize = 9.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (actor.role.isNotBlank()) {
-            Text(actor.role, color = Muted, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(actor.role, color = Muted, fontSize = 8.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

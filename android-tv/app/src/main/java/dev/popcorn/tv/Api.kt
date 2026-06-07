@@ -378,8 +378,18 @@ class Api(private val session: Session) {
         }
     }
 
+    suspend fun showActors(libraryId: String, showTitle: String): List<Actor> = withContext(Dispatchers.IO) {
+        val arr = requestArray("/api/tv/shows/actors?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}")
+        (0 until arr.length()).map { i -> jsonToActor(arr.getJSONObject(i)) }
+    }
+
     suspend fun episodes(libraryId: String, showTitle: String, season: Int): List<PopItem> = withContext(Dispatchers.IO) {
         val arr = requestArray("/api/tv/episodes?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}&season=$season")
+        parseItems(arr)
+    }
+
+    suspend fun episodes(libraryId: String, showTitle: String): List<PopItem> = withContext(Dispatchers.IO) {
+        val arr = requestArray("/api/tv/episodes?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}")
         parseItems(arr)
     }
 
@@ -397,6 +407,39 @@ class Api(private val session: Session) {
                 forced = o.optBoolean("forced"),
             )
         }
+    }
+
+    suspend fun playbackPlan(
+        itemId: Long,
+        startPositionMs: Long,
+        audioIndex: Int?,
+        subtitleIndex: Int?,
+        bandwidthKbps: Int?,
+        forceMode: String,
+        profile: JSONObject,
+    ): PlaybackPlan = withContext(Dispatchers.IO) {
+        val body = JSONObject()
+            .put("itemId", itemId)
+            .put("startPositionMs", startPositionMs)
+            .put("forceMode", forceMode)
+            .put("profile", profile)
+        if (audioIndex != null) body.put("audioIndex", audioIndex)
+        if (subtitleIndex != null) body.put("subtitleIndex", subtitleIndex)
+        if (bandwidthKbps != null) body.put("bandwidthKbps", bandwidthKbps)
+        jsonToPlaybackPlan(request("/api/playback/plan", "POST", body.toString()))
+    }
+
+    suspend fun playbackFailure(itemId: Long, plan: PlaybackPlan, errorCode: String, message: String): PlaybackPlan? = withContext(Dispatchers.IO) {
+        val body = JSONObject()
+            .put("itemId", itemId)
+            .put("planId", plan.planId)
+            .put("mode", plan.mode)
+            .put("client", "android-tv")
+            .put("errorCode", errorCode)
+            .put("message", message)
+        val json = request("/api/playback/failure", "POST", body.toString())
+        if (!json.optBoolean("retry")) return@withContext null
+        json.optJSONObject("plan")?.let(::jsonToPlaybackPlan)
     }
 
     suspend fun itemSidecars(itemId: Long): SidecarStatus = withContext(Dispatchers.IO) {
@@ -613,6 +656,23 @@ class Api(private val session: Session) {
 
     private fun parseItems(arr: JSONArray): List<PopItem> = (0 until arr.length()).map { i ->
         jsonToItem(arr.getJSONObject(i))
+    }
+
+    private fun jsonToPlaybackPlan(o: JSONObject): PlaybackPlan {
+        val selected = o.optJSONObject("selected") ?: JSONObject()
+        val reasons = o.optJSONArray("reasons") ?: JSONArray()
+        return PlaybackPlan(
+            planId = o.optString("planId"),
+            mode = o.optString("mode"),
+            playable = o.optBoolean("playable", true),
+            url = o.optString("url"),
+            sessionId = o.optString("sessionId"),
+            startPositionMs = o.optLong("startPositionMs"),
+            durationMs = o.optLong("durationMs"),
+            selectedAudioIndex = selected.optIntOrNull("audioIndex"),
+            selectedSubtitleIndex = selected.optIntOrNull("subtitleIndex"),
+            reasons = (0 until reasons.length()).map { reasons.optString(it) },
+        )
     }
 
     private fun requestItemsEnvelope(path: String): JSONArray {

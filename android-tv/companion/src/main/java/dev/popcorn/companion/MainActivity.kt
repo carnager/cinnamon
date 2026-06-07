@@ -2,6 +2,7 @@ package dev.popcorn.companion
 
 import android.content.Context
 import android.content.pm.ActivityInfo
+import android.net.Uri
 import android.os.Bundle
 import android.view.View
 import android.view.WindowInsets
@@ -119,7 +120,9 @@ import coil.compose.AsyncImage
 import com.google.zxing.client.android.Intents
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -321,6 +324,9 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     var phoneSubtitleIndex by remember { mutableStateOf<Int?>(null) }
     var phoneHlsSession by remember { mutableStateOf<String?>(null) }
     var phoneStreamBaseMs by remember { mutableStateOf(0L) }
+    var phonePlan by remember { mutableStateOf<PlaybackPlan?>(null) }
+    var phoneFallbackRetried by remember { mutableStateOf(false) }
+    val phonePlaybackProfile = remember(context) { buildPlaybackProfile(context) }
     val api = remember(session) { Api(session) }
     val localPlayer = remember(session) {
         val headers = if (session.token.isNotBlank()) mapOf("Authorization" to "Bearer ${session.token}") else emptyMap()
@@ -373,20 +379,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         }
     }
 
-    DisposableEffect(localPlayer) {
-        val listener = object : Player.Listener {
-            override fun onPlayerError(error: PlaybackException) {
-                onError(error.message ?: "Phone playback failed")
-            }
-        }
-        localPlayer.addListener(listener)
-        onDispose {
-            localPlayer.removeListener(listener)
-            localPlayer.release()
-        }
-    }
-
-    fun navigate(next: Page, stack: Boolean = true) {
+	fun navigate(next: Page, stack: Boolean = true) {
         if (stack) backStack = backStack + page
         page = next
     }
@@ -476,43 +469,125 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         }
         phoneHlsSession = null
         phoneStreamBaseMs = 0L
+        phonePlan = null
+        phoneFallbackRetried = false
         phoneState = PhonePlaybackState()
         if (playbackTarget == PlaybackTarget.Phone) playbackTarget = PlaybackTarget.Shield
     }
 
-    fun loadPhonePlayback(item: PopItem, audioIndex: Int?, subtitleIndex: Int?, bandwidthKbps: Int?, startMs: Long) {
+    fun absolutePlanUrl(plan: PlaybackPlan): String {
+        return if (plan.url.startsWith("http://") || plan.url.startsWith("https://")) plan.url else session.server + plan.url
+    }
+
+    fun phoneSubtitleUrl(itemId: Long, subtitleIndex: Int, startMs: Long): String {
+        val startSeconds = "%.3f".format(java.util.Locale.US, startMs.coerceAtLeast(0) / 1000.0)
+        return "${session.server}/api/items/$itemId/subtitles/$subtitleIndex.vtt?start=$startSeconds"
+    }
+
+    fun phoneMediaItem(item: PopItem, plan: PlaybackPlan): MediaItem {
+        val builder = MediaItem.Builder().setUri(Uri.parse(absolutePlanUrl(plan)))
+        val subtitleIndex = plan.selectedSubtitleIndex
+        if (subtitleIndex != null) {
+            val subtitleStartMs = if (plan.usesHls) plan.startPositionMs else 0L
+            builder.setSubtitleConfigurations(
+                listOf(
+                    MediaItem.SubtitleConfiguration.Builder(Uri.parse(phoneSubtitleUrl(item.id, subtitleIndex, subtitleStartMs)))
+                        .setMimeType(MimeTypes.TEXT_VTT)
+                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                        .build(),
+                ),
+            )
+        }
+        return builder.build()
+    }
+
+    fun applyPhonePlan(item: PopItem, plan: PlaybackPlan, bandwidthKbps: Int?, requestedStartMs: Long) {
+        if (!plan.playable || plan.url.isBlank()) return
         phoneHlsSession?.let { sessionId ->
             scope.launch { runCatching { api.stopHls(sessionId) } }
         }
+        val duration = item.durationMs.coerceAtLeast(0)
+        val target = requestedStartMs.coerceIn(0, duration.takeIf { it > 0 } ?: Long.MAX_VALUE)
+        phonePlan = plan
+        phoneHlsSession = plan.sessionId.ifBlank { null }
+        phoneStreamBaseMs = if (plan.usesHls) plan.startPositionMs.coerceAtLeast(0) else 0L
+        plan.selectedAudioIndex?.let { phoneAudioIndex = it }
+        phoneSubtitleIndex = plan.selectedSubtitleIndex
+        localPlayer.trackSelectionParameters = localPlayer.trackSelectionParameters.buildUpon()
+            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, plan.selectedSubtitleIndex == null)
+            .build()
+        phoneState = PhonePlaybackState(item = item, state = "loading", positionMs = target, durationMs = duration, bandwidthKbps = bandwidthKbps)
+        localPlayer.setMediaItem(phoneMediaItem(item, plan))
+        localPlayer.prepare()
+        if (!plan.usesHls && target > 0) localPlayer.seekTo(target)
+        localPlayer.playWhenReady = true
+    }
+
+    fun loadPhonePlayback(item: PopItem, audioIndex: Int?, subtitleIndex: Int?, bandwidthKbps: Int?, startMs: Long, forceMode: String = "auto") {
         phoneAudioIndex = audioIndex
         phoneSubtitleIndex = subtitleIndex
         selectedBandwidth = bandwidthKbps
         playbackTarget = PlaybackTarget.Phone
         val duration = item.durationMs.coerceAtLeast(0)
         val target = startMs.coerceIn(0, duration.takeIf { it > 0 } ?: Long.MAX_VALUE)
-        val url: String
-        if (bandwidthKbps == null) {
-            phoneHlsSession = null
-            phoneStreamBaseMs = 0L
-            url = streamUrl(session, item.id)
-        } else {
-            val hlsId = "phone_user_${hlsOwnerToken(session.username)}_${item.id}_${System.currentTimeMillis()}"
-            phoneHlsSession = hlsId
-            phoneStreamBaseMs = target
-            url = hlsUrl(session, item.id, hlsId, bandwidthKbps, target, audioIndex, subtitleIndex)
-        }
         phoneState = PhonePlaybackState(item = item, state = "loading", positionMs = target, durationMs = duration, bandwidthKbps = bandwidthKbps)
-        localPlayer.setMediaItem(MediaItem.fromUri(url))
-        localPlayer.prepare()
-        if (bandwidthKbps == null && target > 0) localPlayer.seekTo(target)
-        localPlayer.playWhenReady = true
+        scope.launch {
+            runCatching {
+                api.playbackPlan(
+                    itemId = item.id,
+                    startPositionMs = target,
+                    audioIndex = audioIndex,
+                    subtitleIndex = subtitleIndex,
+                    bandwidthKbps = bandwidthKbps,
+                    forceMode = forceMode,
+                    profile = phonePlaybackProfile,
+                )
+            }.onSuccess { plan ->
+                phoneFallbackRetried = false
+                applyPhonePlan(item, plan, bandwidthKbps, target)
+            }.onFailure { reportError(it, "Phone playback failed") }
+        }
+    }
+
+    DisposableEffect(localPlayer) {
+        val listener = object : Player.Listener {
+            override fun onPlayerError(error: PlaybackException) {
+                val item = phoneState.item
+                val failedPlan = phonePlan
+                if (item == null || failedPlan == null || phoneFallbackRetried) {
+                    onError(error.message ?: "Phone playback failed")
+                    return
+                }
+                phoneFallbackRetried = true
+                val position = phoneAbsolutePosition()
+                scope.launch {
+                    runCatching {
+                        api.playbackFailure(item.id, failedPlan, error.errorCodeName, error.message.orEmpty())
+                    }.onSuccess { fallback ->
+                        if (fallback != null) {
+                            applyPhonePlan(item, fallback, selectedBandwidth, position)
+                        } else {
+                            onError(error.message ?: "Phone playback failed")
+                        }
+                    }.onFailure {
+                        onError(it.message ?: "Phone playback failed")
+                    }
+                }
+            }
+        }
+        localPlayer.addListener(listener)
+        onDispose {
+            localPlayer.removeListener(listener)
+            localPlayer.release()
+        }
     }
 
     fun playLocally(item: PopItem, audioIndex: Int?, subtitleIndex: Int?) {
         scope.launch {
             val resume = runCatching { api.progress(item.id) }.getOrNull()
             val start = resume?.takeIf { !it.completed }?.positionMs ?: 0L
-            loadPhonePlayback(item, audioIndex, subtitleIndex, null, start)
+            loadPhonePlayback(item, audioIndex, subtitleIndex, null, start, "auto")
             navigate(Page.LocalPlayer(item, audioIndex, subtitleIndex, page))
         }
     }
@@ -521,10 +596,10 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         if (playbackTarget == PlaybackTarget.Phone && phoneState.item != null) {
             val item = phoneState.item ?: return
             val target = positionMs.coerceAtLeast(0)
-            if (phoneState.bandwidthKbps == null) {
+            if (phoneHlsSession == null) {
                 localPlayer.seekTo(target)
             } else {
-                loadPhonePlayback(item, phoneAudioIndex, phoneSubtitleIndex, phoneState.bandwidthKbps, target)
+                loadPhonePlayback(item, phoneAudioIndex, phoneSubtitleIndex, phoneState.bandwidthKbps, target, "auto")
             }
             phoneState = phoneState.copy(positionMs = target)
             savePhoneProgress()
@@ -952,13 +1027,13 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     selectedSubtitle = phoneSubtitleIndex,
                     selectedBandwidth = phoneState.bandwidthKbps,
                     onAudio = { audio ->
-                        loadPhonePlayback(current.item, audio, phoneSubtitleIndex, phoneState.bandwidthKbps ?: 8000, phoneAbsolutePosition())
+                        loadPhonePlayback(current.item, audio, phoneSubtitleIndex, phoneState.bandwidthKbps, phoneAbsolutePosition(), "auto")
                     },
                     onSubtitle = { subtitle ->
-                        loadPhonePlayback(current.item, phoneAudioIndex, subtitle, phoneState.bandwidthKbps ?: 8000, phoneAbsolutePosition())
+                        loadPhonePlayback(current.item, phoneAudioIndex, subtitle, phoneState.bandwidthKbps, phoneAbsolutePosition(), "auto")
                     },
                     onBandwidth = { bandwidth ->
-                        loadPhonePlayback(current.item, phoneAudioIndex, phoneSubtitleIndex, bandwidth, phoneAbsolutePosition())
+                        loadPhonePlayback(current.item, phoneAudioIndex, phoneSubtitleIndex, bandwidth, phoneAbsolutePosition(), if (bandwidth == null) "direct" else "auto")
                     },
                     onBack = ::goBack,
                     onStop = {

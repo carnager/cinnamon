@@ -86,6 +86,17 @@ import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
 
+private fun boundarySeekTarget(currentMs: Long, forward: Boolean): Long {
+    val step = 30_000L
+    return if (forward) {
+        ((currentMs / step) + 1L) * step
+    } else {
+        (((currentMs - 1L).coerceAtLeast(0L) / step) * step).coerceAtLeast(0L)
+    }
+}
+
+private fun boundarySeekDelta(currentMs: Long, forward: Boolean): Long = boundarySeekTarget(currentMs, forward) - currentMs
+
 @Composable
 fun MiniPlayer(session: Session, state: PlayerState, target: PlaybackTarget, onPlayPause: () -> Unit, onSeek: (Long) -> Unit, onClick: () -> Unit) {
     val active = state.title.isNotBlank()
@@ -117,13 +128,13 @@ fun MiniPlayer(session: Session, state: PlayerState, target: PlaybackTarget, onP
                 Text(if (active) state.title else "$targetLabel idle", color = if (active) TextColor else Muted, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text("$targetLabel · ${state.state.ifBlank { "idle" }} · ${formatTime(state.positionMs)} / ${formatTime(state.durationMs)}", color = Muted, fontSize = 12.sp, maxLines = 1)
             }
-            IconButton(onClick = { onSeek(-30000) }) {
+            IconButton(onClick = { onSeek(boundarySeekDelta(state.positionMs, forward = false)) }) {
                 Icon(Icons.Default.SkipPrevious, contentDescription = "Back", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = onPlayPause) {
                 Icon(if (state.state == "playing") Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play or pause", tint = MaterialTheme.colorScheme.onSurface)
             }
-            IconButton(onClick = { onSeek(30000) }) {
+            IconButton(onClick = { onSeek(boundarySeekDelta(state.positionMs, forward = true)) }) {
                 Icon(Icons.Default.SkipNext, contentDescription = "Forward", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
@@ -147,8 +158,11 @@ fun RemotePage(
     val duration = state.durationMs.coerceAtLeast(0)
     val position = state.positionMs.coerceIn(0, if (duration > 0) duration else Long.MAX_VALUE)
     var scrub by remember(state.title, duration) { mutableStateOf(position.toFloat()) }
+    var dragging by remember(state.title, duration) { mutableStateOf(false) }
     var showBandwidthDialog by remember { mutableStateOf(false) }
-    LaunchedEffect(position) { scrub = position.toFloat() }
+    LaunchedEffect(position) {
+        if (!dragging) scrub = position.toFloat()
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(Bg).statusBarsPadding().navigationBarsPadding().animateContentSize(tween(180)),
@@ -181,19 +195,25 @@ fun RemotePage(
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Slider(
                     value = scrub,
-                    onValueChange = { scrub = it },
-                    onValueChangeFinished = { onSeekTo(scrub.toLong()) },
+                    onValueChange = {
+                        dragging = true
+                        scrub = it
+                    },
+                    onValueChangeFinished = {
+                        dragging = false
+                        onSeekTo(scrub.toLong())
+                    },
                     valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
                 )
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(formatTime(position), color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text(formatTime(if (dragging) scrub.toLong() else position), color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     Text(formatTime(duration), color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
         item {
             Row(horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                IconButton(onClick = { onSeek(-30000) }, modifier = Modifier.size(64.dp)) {
+                IconButton(onClick = { onSeek(boundarySeekDelta(position, forward = false)) }, modifier = Modifier.size(64.dp)) {
                     Icon(Icons.Default.SkipPrevious, contentDescription = "Back 30 seconds", tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(38.dp))
                 }
                 Surface(
@@ -216,7 +236,7 @@ fun RemotePage(
                         Icon(if (state.state == "playing") Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play or pause. Long press to stop.", modifier = Modifier.size(44.dp))
                     }
                 }
-                IconButton(onClick = { onSeek(30000) }, modifier = Modifier.size(64.dp)) {
+                IconButton(onClick = { onSeek(boundarySeekDelta(position, forward = true)) }, modifier = Modifier.size(64.dp)) {
                     Icon(Icons.Default.SkipNext, contentDescription = "Forward 30 seconds", tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(38.dp))
                 }
             }
@@ -225,8 +245,8 @@ fun RemotePage(
             Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
                 PlayerMaterialIconButton("Jump", Icons.Default.SubdirectoryArrowRight, onJump)
                 PlayerMaterialIconButton(BandwidthOptions.firstOrNull { it.kbps == selectedBandwidth }?.label ?: "Quality", Icons.Default.Speed, { showBandwidthDialog = true })
-                PlayerMaterialIconButton("Back 30", Icons.Default.Replay30, { onSeek(-30000) })
-                PlayerMaterialIconButton("Fwd 30", Icons.Default.Forward30, { onSeek(30000) })
+                PlayerMaterialIconButton("Back 30", Icons.Default.Replay30, { onSeek(boundarySeekDelta(position, forward = false)) })
+                PlayerMaterialIconButton("Fwd 30", Icons.Default.Forward30, { onSeek(boundarySeekDelta(position, forward = true)) })
             }
         }
     }
@@ -387,7 +407,7 @@ fun LocalPlayerPage(
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = { revealControls(); onSeekTo(position - 30000) }) {
+                    IconButton(onClick = { revealControls(); onSeekTo(boundarySeekTarget(position, forward = false)) }) {
                         Icon(Icons.Default.Replay30, contentDescription = "Back 30 seconds", tint = TextColor, modifier = Modifier.size(34.dp))
                     }
                     Surface(
@@ -406,7 +426,7 @@ fun LocalPlayerPage(
                             Icon(if (player.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play or pause", modifier = Modifier.size(40.dp))
                         }
                     }
-                    IconButton(onClick = { revealControls(); onSeekTo(position + 30000) }) {
+                    IconButton(onClick = { revealControls(); onSeekTo(boundarySeekTarget(position, forward = true)) }) {
                         Icon(Icons.Default.Forward30, contentDescription = "Forward 30 seconds", tint = TextColor, modifier = Modifier.size(34.dp))
                     }
                 }

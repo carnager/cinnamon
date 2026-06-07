@@ -36,6 +36,21 @@ data class Session(val server: String, val token: String, val username: String =
 data class User(val id: Long, val username: String, val displayName: String)
 data class Library(val id: String, val name: String, val type: String)
 
+data class PlaybackPlan(
+    val planId: String,
+    val mode: String,
+    val playable: Boolean,
+    val url: String,
+    val sessionId: String,
+    val startPositionMs: Long,
+    val durationMs: Long,
+    val selectedAudioIndex: Int?,
+    val selectedSubtitleIndex: Int?,
+    val reasons: List<String>,
+) {
+    val usesHls: Boolean get() = mode != "direct"
+}
+
 data class AlphabetEntry(val letter: String, val offset: Int, val count: Int)
 
 data class SidecarStatus(
@@ -178,5 +193,5 @@ sealed interface Screen {
     data class Detail(val item: PopItem, val fromShow: ShowSummary?, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null) : Screen
     data class Actor(val actor: dev.popcorn.tv.Actor) : Screen
     data class Player(val item: PopItem, val audioIndex: Int?, val subtitleIndex: Int?, val startPositionMs: Long = 0L) : Screen
-    data class SidecarPlayer(val url: String, val returnScreen: Screen) : Screen
+    data class SidecarPlayer(val url: String, val title: String, val returnScreen: Screen) : Screen
 }

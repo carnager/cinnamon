@@ -1,5 +1,6 @@
 package dev.popcorn.tv
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -50,6 +51,7 @@ fun SearchView(
     var error by remember { mutableStateOf("") }
     val searchFocus = remember { FocusRequester() }
     val combinedResults: List<SearchResult> = showResults.map { SearchResult.Show(it) } + movieResults.map { SearchResult.Movie(it) }
+    BackHandler(onBack = onBack)
 
     LaunchedEffect(Unit) {
         delay(150)

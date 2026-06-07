@@ -68,6 +68,64 @@ func (a *App) transcode(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (a *App) subtitle(w http.ResponseWriter, r *http.Request) {
+	item, ok := a.lookupItem(w, r)
+	if !ok {
+		return
+	}
+	rawIndex := strings.TrimSuffix(strings.TrimSpace(r.PathValue("subtitle")), ".vtt")
+	index, err := strconv.Atoi(rawIndex)
+	if err != nil {
+		http.Error(w, "invalid subtitle index", http.StatusBadRequest)
+		return
+	}
+	streams, err := a.itemStreams(r.Context(), item)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var selected *media.MediaStream
+	for i := range streams {
+		if streams[i].Type == "subtitle" && streams[i].Index == index {
+			selected = &streams[i]
+			break
+		}
+	}
+	if selected == nil {
+		http.Error(w, "subtitle stream not found", http.StatusNotFound)
+		return
+	}
+	if !isTextSubtitleCodec(selected.Codec) {
+		http.Error(w, "subtitle stream is not text", http.StatusUnsupportedMediaType)
+		return
+	}
+	start := parseStart(r.URL.Query().Get("start"), item.DurationMS)
+	args := []string{"-hide_banner", "-loglevel", "error"}
+	if start > 0 {
+		args = append(args, "-ss", strconv.FormatFloat(start, 'f', 3, 64))
+	}
+	args = append(args,
+		"-i", item.Path,
+		"-map", fmt.Sprintf("0:%d", index),
+		"-c:s", "webvtt",
+		"-f", "webvtt",
+		"-",
+	)
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, a.cfg.FFmpegPath, args...)
+	out, err := cmd.Output()
+	if err != nil {
+		a.log.Warn("subtitle conversion failed", "item", item.ID, "subtitle", index, "start", start, "error", err)
+		http.Error(w, "subtitle conversion failed", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Popcorn-Start", strconv.FormatFloat(start, 'f', 3, 64))
+	_, _ = w.Write(out)
+}
+
 func (a *App) hlsPlaylist(w http.ResponseWriter, r *http.Request) {
 	user, ok := a.requireUser(w, r)
 	if !ok {
@@ -80,6 +138,23 @@ func (a *App) hlsPlaylist(w http.ResponseWriter, r *http.Request) {
 	sessionID := cleanSessionID(r.PathValue("session"))
 	if sessionID == "" {
 		http.Error(w, "invalid session", http.StatusBadRequest)
+		return
+	}
+	planID := strings.TrimSpace(r.URL.Query().Get("plan"))
+	if planID != "" {
+		plan, ok := a.lookupPlaybackPlan(planID)
+		if !ok || plan.ItemID != item.ID || plan.UserID != user.ID || !plan.Playable || plan.Mode == planModeDirect {
+			http.Error(w, "invalid playback plan", http.StatusBadRequest)
+			return
+		}
+		a.log.Info("hls playlist requested", "item", item.ID, "session", sessionID, "plan", planID, "mode", plan.Mode, "bandwidth", plan.BandwidthKbps, "startMs", plan.StartPositionMS)
+		sess, err := a.ensureHLSSessionForPlan(r.Context(), sessionID, user.ID, plan)
+		if err != nil {
+			a.log.Warn("hls session failed", "item", item.ID, "session", sessionID, "plan", planID, "error", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		a.serveHLSPlaylist(w, r, item.ID, sessionID, sess)
 		return
 	}
 	bandwidth := parseBandwidth(r.URL.Query().Get("bandwidth"))
@@ -98,17 +173,21 @@ func (a *App) hlsPlaylist(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	a.serveHLSPlaylist(w, r, item.ID, sessionID, sess)
+}
+
+func (a *App) serveHLSPlaylist(w http.ResponseWriter, r *http.Request, itemID int64, sessionID string, sess *hlsSession) {
 	playlist := filepath.Join(sess.dir, "index.m3u8")
 	if err := waitForFileOrDone(r.Context(), playlist, 8*time.Second, sess.done); err != nil {
-		a.log.Warn("hls playlist timeout", "item", item.ID, "session", sessionID, "error", err)
+		a.log.Warn("hls playlist timeout", "item", itemID, "session", sessionID, "error", err)
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
 		return
 	}
-	if err := rewritePlaylistSegments(playlist, fmt.Sprintf("/api/items/%d/hls/%s/", item.ID, sessionID)); err != nil {
-		a.log.Warn("hls playlist rewrite failed", "item", item.ID, "session", sessionID, "error", err)
+	if err := rewritePlaylistSegments(playlist, fmt.Sprintf("/api/items/%d/hls/%s/", itemID, sessionID)); err != nil {
+		a.log.Warn("hls playlist rewrite failed", "item", itemID, "session", sessionID, "error", err)
 	}
 	if info, err := os.Stat(playlist); err == nil {
-		a.log.Info("hls playlist served", "item", item.ID, "session", sessionID, "bytes", info.Size())
+		a.log.Info("hls playlist served", "item", itemID, "session", sessionID, "bytes", info.Size())
 	}
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store")
@@ -182,12 +261,22 @@ func (a *App) hlsStop(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ensureHLSSession(ctx context.Context, sessionID string, userID int64, item media.Item, bandwidth int, start float64, audio, subtitle *int) (*hlsSession, error) {
+	args := hlsArgs(a.cfg, item.Path, "", "", bandwidth, start, audio, subtitle)
+	return a.ensureHLSSessionWithArgs(ctx, sessionID, userID, hlsSessionOwner(sessionID), item.ID, start, bandwidth, args)
+}
+
+func (a *App) ensureHLSSessionForPlan(ctx context.Context, sessionID string, userID int64, plan PlaybackPlan) (*hlsSession, error) {
+	start := float64(plan.StartPositionMS) / 1000.0
+	args := hlsPlanArgs(a.cfg, plan.Item.Path, "", "", plan)
+	return a.ensureHLSSessionWithArgs(ctx, sessionID, userID, hlsSessionOwner(sessionID), plan.ItemID, start, plan.BandwidthKbps, args)
+}
+
+func (a *App) ensureHLSSessionWithArgs(ctx context.Context, sessionID string, userID int64, owner string, itemID int64, start float64, bandwidth int, args []string) (*hlsSession, error) {
 	a.hlsMu.Lock()
 	if sess := a.hlsSessions[sessionID]; sess != nil {
 		a.hlsMu.Unlock()
 		return sess, nil
 	}
-	owner := hlsSessionOwner(sessionID)
 	oldSessions := map[string]*hlsSession{}
 	for id, sess := range a.hlsSessions {
 		if (sess.userID == userID && sess.owner == owner) || time.Since(sess.started) > 6*time.Hour {
@@ -200,7 +289,7 @@ func (a *App) ensureHLSSession(ctx context.Context, sessionID string, userID int
 		a.hlsMu.Unlock()
 		return nil, err
 	}
-	args := hlsArgs(a.cfg, item.Path, filepath.Join(dir, "seg_%05d.m4s"), filepath.Join(dir, "index.m3u8"), bandwidth, start, audio, subtitle)
+	args = completeHLSOutputArgs(args, filepath.Join(dir, "seg_%05d.m4s"), filepath.Join(dir, "index.m3u8"))
 	cmd := exec.CommandContext(a.ctx, a.cfg.FFmpegPath, args...)
 	stderr, _ := cmd.StderrPipe()
 	if err := cmd.Start(); err != nil {
@@ -214,18 +303,18 @@ func (a *App) ensureHLSSession(ctx context.Context, sessionID string, userID int
 	for id, old := range oldSessions {
 		a.stopHLSSession(id, old)
 	}
-	a.log.Info("hls session started", "item", item.ID, "session", sessionID, "owner", owner, "user", userID, "start", start, "bandwidth", bandwidth, "args", strings.Join(args, " "))
+	a.log.Info("hls session started", "item", itemID, "session", sessionID, "owner", owner, "user", userID, "start", start, "bandwidth", bandwidth, "args", strings.Join(args, " "))
 	go func() {
 		defer close(sess.done)
 		b, _ := io.ReadAll(io.LimitReader(stderr, 128*1024))
 		if len(b) > 0 {
-			a.log.Info("hls ffmpeg stderr", "item", item.ID, "session", sessionID, "stderr", string(b))
+			a.log.Info("hls ffmpeg stderr", "item", itemID, "session", sessionID, "stderr", string(b))
 		}
 		err := cmd.Wait()
 		if err != nil {
-			a.log.Warn("hls ffmpeg exited", "item", item.ID, "session", sessionID, "error", err)
+			a.log.Warn("hls ffmpeg exited", "item", itemID, "session", sessionID, "error", err)
 		} else {
-			a.log.Info("hls ffmpeg finished", "item", item.ID, "session", sessionID)
+			a.log.Info("hls ffmpeg finished", "item", itemID, "session", sessionID)
 		}
 		_ = ctx
 	}()
@@ -418,6 +507,92 @@ func hlsArgs(cfg config.Config, input, segmentPattern, playlist string, bandwidt
 		playlist,
 	)
 	return args
+}
+
+func hlsPlanArgs(cfg config.Config, input, segmentPattern, playlist string, plan PlaybackPlan) []string {
+	start := float64(plan.StartPositionMS) / 1000.0
+	bandwidth := plan.BandwidthKbps
+	if bandwidth <= 0 {
+		bandwidth = 8000
+	}
+	videoRate, audioRate := transcodeRates(bandwidth)
+	if plan.Outputs.Audio.BitrateKbps > 0 {
+		audioRate = plan.Outputs.Audio.BitrateKbps
+	}
+	args := []string{"-hide_banner", "-loglevel", "warning"}
+	inputSeek, outputSeek := transcodeSeekArgs(start)
+	args = append(args, inputSeek...)
+	if plan.Outputs.Video.Codec != "copy" {
+		args = append(args, hwInputArgs(cfg.HWAccel)...)
+	}
+	args = append(args, "-i", input)
+	args = append(args, outputSeek...)
+	args = append(args, "-map", fmt.Sprintf("0:%d", plan.Selected.VideoIndex))
+	if plan.Outputs.Audio.Codec == "" || plan.Outputs.Audio.Codec == "none" {
+		args = append(args, "-an")
+	} else if plan.Selected.AudioIndex != nil {
+		args = append(args, "-map", fmt.Sprintf("0:%d?", *plan.Selected.AudioIndex))
+	} else {
+		args = append(args, "-map", "0:a:0?")
+	}
+	if plan.Outputs.Subtitle.Codec == "" || plan.Outputs.Subtitle.Codec == "none" || plan.Selected.SubtitleIndex == nil {
+		args = append(args, "-sn")
+	} else {
+		args = append(args, "-map", fmt.Sprintf("0:%d?", *plan.Selected.SubtitleIndex))
+	}
+	args = append(args, "-dn")
+	switch plan.Outputs.Video.Codec {
+	case "copy":
+		args = append(args, "-c:v", "copy")
+	default:
+		args = append(args, hwCodecArgs(cfg.HWAccel, cfg.HWDevice)...)
+		args = append(args,
+			"-b:v", fmt.Sprintf("%dk", videoRate),
+			"-maxrate", fmt.Sprintf("%dk", videoRate),
+			"-bufsize", fmt.Sprintf("%dk", videoRate*2),
+			"-force_key_frames", "expr:gte(t,n_forced*4)",
+		)
+	}
+	switch plan.Outputs.Audio.Codec {
+	case "", "none":
+	case "copy":
+		args = append(args, "-c:a", "copy")
+	default:
+		args = append(args, "-c:a", "aac", "-b:a", fmt.Sprintf("%dk", audioRate), "-ac", "2")
+	}
+	switch plan.Outputs.Subtitle.Codec {
+	case "", "none":
+	case "copy":
+		args = append(args, "-c:s", "copy")
+	default:
+		args = append(args, "-c:s", "webvtt")
+	}
+	args = append(args,
+		"-f", "hls",
+		"-hls_time", "4",
+		"-hls_init_time", "1",
+		"-hls_list_size", "0",
+		"-hls_flags", "independent_segments",
+		"-hls_segment_type", "fmp4",
+		"-hls_fmp4_init_filename", "init.mp4",
+		"-hls_segment_filename", segmentPattern,
+		playlist,
+	)
+	return args
+}
+
+func completeHLSOutputArgs(args []string, segmentPattern, playlist string) []string {
+	out := append([]string(nil), args...)
+	for i := 0; i < len(out)-1; i++ {
+		if out[i] == "-hls_segment_filename" {
+			out[i+1] = segmentPattern
+			break
+		}
+	}
+	if len(out) > 0 {
+		out[len(out)-1] = playlist
+	}
+	return out
 }
 
 func transcodeRates(bandwidth int) (videoRate int, audioRate int) {

@@ -27,8 +27,11 @@ echo "==> go test ./..."
 echo "==> build popcornd"
 (cd "$repo_root" && go build -trimpath -ldflags "-s -w -X popcorn/internal/version.Version=$version -X popcorn/internal/version.Commit=$commit -X popcorn/internal/version.BuildTime=$build_time" -o "$out_dir/popcornd" ./cmd/popcornd)
 
+echo "==> build popcorn-mpv"
+(cd "$repo_root" && go build -trimpath -ldflags "-s -w" -o "$out_dir/popcorn-mpv" ./cmd/popcorn-mpv)
+
 echo "==> build Android APKs"
-(cd "$repo_root/android-tv" && POPCORN_ANDROID_VERSION_CODE="$android_version_code" POPCORN_ANDROID_VERSION_NAME="$android_version_name" gradle :app:assembleRelease :companion:assembleRelease)
+(cd "$repo_root/android-tv" && POPCORN_ANDROID_VERSION_CODE="$android_version_code" POPCORN_ANDROID_VERSION_NAME="$android_version_name" ./gradlew :app:assembleRelease :companion:assembleRelease)
 
 cp "$repo_root/android-tv/app/build/outputs/apk/release/app-release.apk" "$out_dir/popcorn-tv-$version.apk"
 cp "$repo_root/android-tv/companion/build/outputs/apk/release/companion-release.apk" "$out_dir/popcorn-companion-$version.apk"
@@ -37,7 +40,7 @@ cp "$repo_root/packaging/popcornd.service" "$out_dir/popcornd.service"
 
 (
   cd "$out_dir"
-  sha256sum popcornd "popcorn-tv-$version.apk" "popcorn-companion-$version.apk" config.example.toml popcornd.service > SHA256SUMS
+  sha256sum popcornd popcorn-mpv "popcorn-tv-$version.apk" "popcorn-companion-$version.apk" config.example.toml popcornd.service > SHA256SUMS
 )
 
 echo "==> wrote:"

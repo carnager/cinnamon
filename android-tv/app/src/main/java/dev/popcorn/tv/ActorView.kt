@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -90,15 +91,18 @@ fun ActorView(
             detail != null -> {
                 val actorDetail = detail!!
                 item {
-                    ActorHero(actorDetail)
+                    ActorHero(session, actorDetail)
                 }
                 if (actorDetail.movies.isNotEmpty()) {
                     item {
                         Spacer(Modifier.height(30.dp))
                         ActorSectionHeader("Movies", actorDetail.movies.size)
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
                             itemsIndexed(actorDetail.movies) { _, item ->
-                                Box(Modifier.width(122.dp)) {
+                                Box(Modifier.width(130.dp).padding(horizontal = 4.dp)) {
                                     ItemCard(
                                         session = session,
                                         item = item,
@@ -116,9 +120,12 @@ fun ActorView(
                     item {
                         Spacer(Modifier.height(30.dp))
                         ActorSectionHeader("Shows", actorDetail.shows.size)
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
                             itemsIndexed(actorDetail.shows) { _, show ->
-                                Box(Modifier.width(122.dp)) {
+                                Box(Modifier.width(130.dp).padding(horizontal = 4.dp)) {
                                     ShowCard(
                                         session = session,
                                         show = show,
@@ -139,7 +146,8 @@ fun ActorView(
 }
 
 @Composable
-private fun ActorHero(detail: ActorDetail) {
+private fun ActorHero(session: Session?, detail: ActorDetail) {
+    val profileUrl = actorImageUrl(session, detail.profileUrl)
     Row(
         Modifier.widthIn(max = 980.dp),
         horizontalArrangement = Arrangement.spacedBy(28.dp),
@@ -153,15 +161,15 @@ private fun ActorHero(detail: ActorDetail) {
                 .border(2.dp, Line, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            if (detail.profileUrl.isNotBlank()) {
+            if (profileUrl.isNotBlank()) {
                 SizedAsyncImage(
-                    model = detail.profileUrl,
+                    model = profileUrl,
                     contentDescription = detail.actor.name,
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
                     widthPx = 344,
                     heightPx = 344,
-                    authToken = "",
+                    authToken = if (detail.profileUrl.startsWith("/")) session?.token.orEmpty() else "",
                 )
             } else {
                 Text(actorInitials(detail.actor.name), color = Accent, fontSize = 44.sp, fontWeight = FontWeight.Black)

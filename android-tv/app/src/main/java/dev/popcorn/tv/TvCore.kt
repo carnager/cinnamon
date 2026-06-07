@@ -17,7 +17,7 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-// ── Plex-inspired palette ──
+// ── Popcorn TV palette ──
 val Bg = Color(0xFF0D0D0F)
 val SurfaceColor = Color(0xFF18181C)
 val Surface2 = Color(0xFF222228)
@@ -25,8 +25,8 @@ val Surface3 = Color(0xFF2C2C34)
 val Line = Color(0xFF38384A)
 val TextColor = Color(0xFFF0F0F2)
 val Muted = Color(0xFF88889A)
-val Accent = Color(0xFFE5A00D)
-val AccentDim = Color(0xFFB8800A)
+val Accent = Color(0xFF4FD1A5)
+val AccentDim = Color(0xFF2A8B6E)
 val Gold = Color(0xFFE5A00D)
 val ErrorRed = Color(0xFFFF6B6B)
 val FocusGlow = Color(0xFFFFFFFF)
@@ -38,6 +38,28 @@ object PlayerOsdBridge {
     var handler: ((AndroidKeyEvent) -> Boolean)? = null
 
     fun dispatch(event: AndroidKeyEvent): Boolean = handler?.invoke(event) == true
+}
+
+object BrowseBackBridge {
+    var handler: ((AndroidKeyEvent) -> Boolean)? = null
+    private var consumeNextBackUp = false
+
+    fun consumeNextBackUp() {
+        consumeNextBackUp = true
+    }
+
+    fun dispatch(event: AndroidKeyEvent): Boolean {
+        if (handler?.invoke(event) == true) return true
+        if (
+            consumeNextBackUp &&
+            event.keyCode == AndroidKeyEvent.KEYCODE_BACK &&
+            event.action == AndroidKeyEvent.ACTION_UP
+        ) {
+            consumeNextBackUp = false
+            return true
+        }
+        return false
+    }
 }
 
 fun isActivationKey(key: Key): Boolean {
@@ -81,6 +103,14 @@ fun imageUrl(session: Session?, itemId: Long, kind: String, version: Long = 0): 
     return "${session.server}/api/items/$itemId/image/$kind$suffix"
 }
 
+fun actorImageUrl(session: Session?, thumb: String): String {
+    val value = thumb.trim()
+    if (value.isBlank()) return ""
+    if (value.startsWith("http://") || value.startsWith("https://")) return value
+    if (session != null && value.startsWith("/")) return "${session.server}$value"
+    return ""
+}
+
 fun shieldDeviceName(model: String = Build.MODEL): String {
     val cleaned = model
         .trim()
@@ -122,7 +152,7 @@ fun themeUrl(session: Session?, libraryId: String, showTitle: String): String {
 }
 
 fun youtubeTrailerSearchUrl(title: String, year: Int): String {
-    val query = listOf(title, year.takeIf { it > 0 }?.toString(), "trailer")
+    val query = listOf(title, year.takeIf { it > 0 }?.toString(), "german", "trailer")
         .filterNotNull()
         .joinToString(" ")
     return "https://www.youtube.com/results?search_query=${urlEncode(query)}"

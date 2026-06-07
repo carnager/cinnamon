@@ -70,6 +70,7 @@ fun <T> PosterGrid(
     alphabetEntries: List<AlphabetEntry> = emptyList(),
     onAlphabet: ((AlphabetEntry) -> Unit)? = null,
     alphabetFocusRequester: FocusRequester? = null,
+    selectedAlphabetLetter: String? = null,
     restoreFocus: (() -> Boolean)? = null,
     content: @Composable (T, Boolean, Int, Boolean, Boolean, FocusRequester) -> Unit,
 ) {
@@ -130,6 +131,7 @@ fun <T> PosterGrid(
                 gridState = gridState,
                 onAlphabet = onAlphabet,
                 focusRequester = alphabetFocusRequester,
+                requestedFocusLetter = selectedAlphabetLetter,
                 restoreFocus = restoreFocus,
                 modifier = Modifier.align(Alignment.CenterEnd).padding(end = 10.dp),
             )
@@ -138,8 +140,16 @@ fun <T> PosterGrid(
 }
 
 private fun alphabetLetter(title: String): String {
-    val ch = title.trim().firstOrNull() ?: return "#"
+    val ch = title.withoutLeadingArticle().firstOrNull() ?: return "#"
     return if (ch.isLetter()) ch.uppercaseChar().toString() else "#"
+}
+
+private fun String.withoutLeadingArticle(): String {
+    val trimmed = trim()
+    val lowered = trimmed.lowercase()
+    val articles = listOf("the ", "a ", "an ", "der ", "die ", "das ", "ein ", "eine ")
+    val article = articles.firstOrNull { lowered.startsWith(it) } ?: return trimmed
+    return trimmed.drop(article.length).trimStart()
 }
 
 @Composable
@@ -148,38 +158,32 @@ private fun AlphabetRail(
     gridState: LazyGridState,
     onAlphabet: ((AlphabetEntry) -> Unit)?,
     focusRequester: FocusRequester? = null,
+    requestedFocusLetter: String? = null,
     restoreFocus: (() -> Boolean)? = null,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
     val letters = listOf("#") + ('A'..'Z').map { it.toString() }
     val firstEnabledLetter = letters.firstOrNull { index[it] != null }
+    val focusLetter = requestedFocusLetter?.takeIf { index[it] != null } ?: firstEnabledLetter
     Column(
         modifier
+            .width(36.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(Color.Black.copy(alpha = .48f))
             .border(1.dp, Color.White.copy(alpha = .14f), RoundedCornerShape(10.dp))
-            .padding(vertical = 5.dp),
+            .padding(vertical = 3.dp, horizontal = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         letters.forEach { letter ->
             var focused by remember { mutableStateOf(false) }
             val target = index[letter]
-            Text(
-                letter,
-                color = when {
-                    target == null -> Muted.copy(alpha = .3f)
-                    focused -> Color.Black
-                    else -> TextColor
-                },
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Black,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            Box(
                 modifier = Modifier
-                    .width(26.dp)
-                    .height(17.dp)
-                    .then(if (letter == firstEnabledLetter && focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-                    .clip(RoundedCornerShape(5.dp))
+                    .fillMaxWidth()
+                    .height(16.dp)
+                    .then(if (letter == focusLetter && focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+                    .clip(RoundedCornerShape(6.dp))
                     .background(if (focused && target != null) Accent else Color.Transparent)
                     .onFocusChanged { focused = it.isFocused }
                     .focusable(enabled = target != null)
@@ -204,9 +208,22 @@ private fun AlphabetRail(
                                 scope.launch { gridState.scrollToItem(target.offset) }
                             }
                         }
-                    }
-                    .padding(top = 1.dp),
-            )
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    letter,
+                    color = when {
+                        target == null -> Muted.copy(alpha = .3f)
+                        focused -> Color.Black
+                        else -> TextColor
+                    },
+                    fontSize = 9.sp,
+                    lineHeight = 9.sp,
+                    fontWeight = FontWeight.Black,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+            }
         }
     }
 }
@@ -271,6 +288,15 @@ fun ItemCard(
             fmtDuration(item.durationMs).ifBlank { null },
         ).joinToString(" \u00b7 ")
         if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 10.sp)
+        if (item.kind == "movie" && item.genres.isNotBlank()) {
+            Text(
+                item.genres.split(",", "/", "|").map { it.trim() }.filter { it.isNotBlank() }.take(2).joinToString(", "),
+                color = Accent.copy(alpha = .78f),
+                fontSize = 9.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 
@@ -550,6 +576,8 @@ fun CardShell(
     onLeftEdge: (() -> Boolean)? = null,
     onRightEdge: (() -> Boolean)? = null,
     onUp: (() -> Boolean)? = null,
+    onDown: (() -> Boolean)? = null,
+    focusScale: Float = 1.06f,
     onClick: () -> Unit,
     onLongClick: ((FocusRequester) -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
@@ -561,7 +589,7 @@ fun CardShell(
     val scope = rememberCoroutineScope()
 
     val scale by animateFloatAsState(
-        targetValue = if (focused) 1.06f else 1f,
+        targetValue = if (focused) focusScale else 1f,
         animationSpec = tween(durationMillis = 150),
         label = "cardScale",
     )
@@ -591,6 +619,7 @@ fun CardShell(
                     it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && onLeftEdge != null -> onLeftEdge()
                     it.type == KeyEventType.KeyDown && it.key == Key.DirectionRight && onRightEdge != null -> onRightEdge()
                     it.type == KeyEventType.KeyDown && it.key == Key.DirectionUp && onUp != null -> onUp()
+                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionDown && onDown != null -> onDown()
                     isActivationKey(it.key) && it.type == KeyEventType.KeyDown -> {
                         if (onLongClick != null) {
                             if (longPressJob == null) {

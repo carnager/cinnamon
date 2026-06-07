@@ -6,7 +6,10 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,7 +17,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,10 +32,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.launch
 import java.io.File
@@ -126,6 +138,157 @@ fun UpdateView(session: Session?, onBack: () -> Unit) {
                 CircularProgressIndicator(color = Accent, strokeWidth = 2.dp)
             }
         }
+    }
+}
+
+@Composable
+fun UpdateApplyDialog(session: Session?, onDismiss: () -> Unit, onUpdateStarted: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val applyFocus = remember { FocusRequester() }
+    var update by remember { mutableStateOf<AppUpdateInfo?>(null) }
+    var checking by remember { mutableStateOf(true) }
+    var downloading by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf("") }
+
+    fun checkForUpdate() {
+        val active = session ?: return
+        scope.launch {
+            checking = true
+            status = ""
+            runCatching { Api(active).tvUpdate(BuildConfig.VERSION_CODE) }
+                .onSuccess {
+                    update = it
+                    status = when {
+                        !it.configured -> "The server updater is not configured."
+                        it.error.isNotBlank() -> it.error
+                        !it.available -> "This TV app is already up to date."
+                        else -> ""
+                    }
+                }
+                .onFailure { status = it.message ?: "Update check failed" }
+            checking = false
+        }
+    }
+
+    fun applyUpdate() {
+        val active = session ?: return
+        val info = update ?: return
+        if (!info.available || info.apkUrl.isBlank() || downloading) return
+        scope.launch {
+            downloading = true
+            status = "Downloading ${info.versionName}..."
+            runCatching {
+                val apk = File(context.cacheDir, "updates/popcorn-tv-${info.versionCode}.apk")
+                Api(active).downloadTvUpdate(info, apk)
+            }.onSuccess { apk ->
+                status = installApk(context, apk)
+                onUpdateStarted()
+            }.onFailure {
+                status = it.message ?: "Download failed"
+            }
+            downloading = false
+        }
+    }
+
+    LaunchedEffect(session) {
+        checkForUpdate()
+    }
+
+    LaunchedEffect(update?.available, checking) {
+        if (!checking && update?.available == true) {
+            applyFocus.requestFocus()
+        }
+    }
+
+    Dialog(onDismissRequest = { if (!downloading) onDismiss() }) {
+        Column(
+            Modifier
+                .widthIn(min = 420.dp, max = 560.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Surface2.copy(alpha = .98f))
+                .border(1.dp, Color.White.copy(alpha = .18f), RoundedCornerShape(14.dp))
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text("Apply update?", color = TextColor, fontSize = 24.sp, fontWeight = FontWeight.Black)
+            Text("Installed ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", color = Muted, fontSize = 13.sp)
+
+            when {
+                checking -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+                    Text("Checking server update...", color = TextColor, fontSize = 15.sp)
+                }
+                update?.available == true -> {
+                    val info = update!!
+                    Text("Server ${info.versionName} (${info.versionCode})", color = TextColor, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    if (info.sizeBytes > 0) {
+                        Text(formatBytes(info.sizeBytes), color = Muted, fontSize = 13.sp)
+                    }
+                    if (info.notes.isNotBlank()) {
+                        Text(info.notes, color = TextColor.copy(alpha = .78f), fontSize = 13.sp, lineHeight = 18.sp, maxLines = 4)
+                    }
+                }
+            }
+
+            if (status.isNotBlank()) {
+                val isError = status.contains("failed", true) || status.contains("mismatch", true) || status.contains("not configured", true) || status.contains("not readable", true)
+                Text(status, color = if (isError) ErrorRed else Muted, fontSize = 13.sp, lineHeight = 18.sp)
+            }
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (downloading) {
+                    CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(14.dp))
+                }
+                UpdateDialogButton("No", primary = false, enabled = !downloading, onClick = onDismiss)
+                Spacer(Modifier.width(10.dp))
+                UpdateDialogButton(
+                    "Apply",
+                    primary = true,
+                    enabled = update?.available == true && !downloading,
+                    focusRequester = applyFocus,
+                    onClick = ::applyUpdate,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun UpdateDialogButton(
+    label: String,
+    primary: Boolean,
+    enabled: Boolean = true,
+    focusRequester: FocusRequester? = null,
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val bg = when {
+        !enabled -> Surface3.copy(alpha = .45f)
+        primary && focused -> Accent
+        primary -> AccentDim
+        focused -> Surface3
+        else -> Surface2
+    }
+    Box(
+        Modifier
+            .width(112.dp)
+            .height(42.dp)
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .clip(RoundedCornerShape(8.dp))
+            .background(bg)
+            .border(2.dp, if (focused) FocusGlow else Color.White.copy(alpha = .10f), RoundedCornerShape(8.dp))
+            .onFocusChanged { focused = it.isFocused }
+            .focusable(enabled = enabled)
+            .tvActivate { if (enabled) onClick() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = if (primary && enabled) Color.Black else TextColor, fontSize = 14.sp, fontWeight = FontWeight.Bold)
     }
 }
 

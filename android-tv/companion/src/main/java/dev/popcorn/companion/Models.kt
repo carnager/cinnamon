@@ -29,6 +29,20 @@ data class PhonePlaybackState(
     val bandwidthKbps: Int? = null,
 )
 
+data class PlaybackPlan(
+    val planId: String,
+    val mode: String,
+    val playable: Boolean,
+    val url: String,
+    val sessionId: String,
+    val startPositionMs: Long,
+    val durationMs: Long,
+    val selectedAudioIndex: Int?,
+    val selectedSubtitleIndex: Int?,
+) {
+    val usesHls: Boolean get() = mode != "direct"
+}
+
 fun PlayerState.isActivePlayback(): Boolean {
     val normalized = state.lowercase()
     return itemId > 0 && normalized != "idle" && normalized != "stopped"

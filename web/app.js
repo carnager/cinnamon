@@ -8,6 +8,7 @@ const loginError = document.querySelector("#loginError");
 const userPanel = document.querySelector("#userPanel");
 const view = document.querySelector("#view");
 const libraryNav = document.querySelector("#libraryNav");
+const topbarFilters = document.querySelector("#topbarFilters");
 const search = document.querySelector("#search");
 const player = document.querySelector("#player");
 const theater = document.querySelector("#theater");
@@ -49,6 +50,8 @@ let watchlistItemIds = new Set();
 let watchlistShowKeys = new Set();
 let currentGenre = "";
 let currentSort = "";
+let currentSeenStatus = "";
+let currentMinRating = 0;
 let currentSeason = null;
 let libraryGenres = [];
 let pageHasNext = false;
@@ -319,7 +322,7 @@ function renderNav() {
   const home = document.createElement("button");
   home.type = "button";
   home.className = activeView === "home" ? "nav-item active" : "nav-item";
-  home.textContent = "Home";
+  home.append(navIcon("home"), el("span", "nav-label", "Home"));
   home.addEventListener("click", () => {
     search.value = "";
     currentPage = 1;
@@ -333,7 +336,7 @@ function renderNav() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = activeView === "library" && library.id === activeLibraryId ? "nav-item active" : "nav-item";
-    button.textContent = library.name;
+    button.append(navIcon(library.type === "tv" ? "tv" : "movies"), el("span", "nav-label", library.name));
     button.addEventListener("click", () => {
       search.value = "";
       activeView = "library";
@@ -343,16 +346,30 @@ function renderNav() {
       currentSeason = null;
       currentGenre = "";
       currentSort = "";
+      currentSeenStatus = "";
+      currentMinRating = 0;
       renderNav();
       loadLibraryPage().catch(console.error);
     });
     libraryNav.append(button);
   }
 
+  const searchButton = document.createElement("button");
+  searchButton.type = "button";
+  searchButton.className = activeView === "search" ? "nav-item active" : "nav-item";
+  searchButton.append(navIcon("search"), el("span", "nav-label", "Search"));
+  searchButton.addEventListener("click", () => {
+    activeView = "search";
+    renderNav();
+    search.focus();
+    if (search.value.trim()) renderSearch().catch(console.error);
+  });
+  libraryNav.append(searchButton);
+
   const watchlist = document.createElement("button");
   watchlist.type = "button";
   watchlist.className = activeView === "watchlist" ? "nav-item active" : "nav-item";
-  watchlist.textContent = "Watchlist";
+  watchlist.append(navIcon("watchlist"), el("span", "nav-label", "Watchlist"));
   watchlist.addEventListener("click", () => {
     search.value = "";
     activeView = "watchlist";
@@ -361,6 +378,148 @@ function renderNav() {
     renderWatchlist().catch(console.error);
   });
   libraryNav.append(watchlist);
+
+  const settings = document.createElement("button");
+  settings.type = "button";
+  settings.className = activeView === "settings" ? "nav-item active" : "nav-item";
+  settings.append(navIcon("settings"), el("span", "nav-label", "Settings"));
+  settings.addEventListener("click", () => {
+    search.value = "";
+    activeView = "settings";
+    currentPage = 1;
+    renderNav();
+    renderSettings().catch(console.error);
+  });
+  libraryNav.append(settings);
+  renderTopbarControls();
+}
+
+function navIcon(kind) {
+  const icons = {
+    home: "⌂",
+    movies: "▣",
+    tv: "▤",
+    search: "⌕",
+    watchlist: "♡",
+    settings: "⚙",
+  };
+  return el("span", "nav-icon", icons[kind] || "•");
+}
+
+function renderTopbarControls() {
+  topbarFilters.innerHTML = "";
+  if (activeView !== "library" || search.value.trim()) {
+    topbarFilters.classList.add("empty");
+    return;
+  }
+  const library = activeLibrary();
+  if (!library) {
+    topbarFilters.classList.add("empty");
+    return;
+  }
+  topbarFilters.classList.remove("empty");
+  topbarFilters.append(
+    topbarSelect("Sort", currentSort, [
+      ["", "Title"],
+      ["mtime", "File date"],
+      ["rating", "Rating"],
+    ], (value) => {
+      currentSort = value;
+      currentPage = 1;
+      loadLibraryPage().catch(console.error);
+    }),
+    topbarSelect("Seen", currentSeenStatus, [
+      ["", "All"],
+      ["unseen", "Unseen"],
+      ["seen", "Seen"],
+    ], (value) => {
+      currentSeenStatus = value;
+      currentPage = 1;
+      loadLibraryPage().catch(console.error);
+    }),
+    topbarSelect("Rating", String(currentMinRating || ""), [
+      ["", "All"],
+      ["6", "6+"],
+      ["7", "7+"],
+      ["8", "8+"],
+      ["9", "9+"],
+    ], (value) => {
+      currentMinRating = Number(value || 0);
+      currentPage = 1;
+      loadLibraryPage().catch(console.error);
+    }),
+    topbarSelect("Genre", currentGenre, [["", "All"], ...libraryGenres.map((genre) => [genre, genre])], (value) => {
+      currentGenre = value;
+      currentPage = 1;
+      loadLibraryPage().catch(console.error);
+    }),
+  );
+}
+
+function topbarSelect(label, value, options, onChange) {
+  const field = el("div", "topbar-filter");
+  const trigger = el("button", "topbar-filter-trigger");
+  trigger.type = "button";
+  const current = options.find(([optionValue]) => String(optionValue) === String(value));
+  trigger.append(
+    el("span", "topbar-filter-label", label),
+    el("strong", "topbar-filter-value", current?.[1] || "All"),
+    el("span", "topbar-filter-caret", "▾"),
+  );
+  const menu = el("div", "topbar-filter-menu");
+  trigger.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const willOpen = !field.classList.contains("open");
+    closeTopbarMenus();
+    field.classList.toggle("open", willOpen);
+  });
+  trigger.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      closeTopbarMenus();
+      field.classList.add("open");
+      menu.querySelector("button")?.focus();
+    }
+    if (event.key === "Escape") {
+      field.classList.remove("open");
+      trigger.focus();
+    }
+  });
+  menu.addEventListener("click", (event) => event.stopPropagation());
+  menu.addEventListener("keydown", (event) => {
+    const buttons = [...menu.querySelectorAll("button")];
+    const index = buttons.indexOf(document.activeElement);
+    if (event.key === "Escape") {
+      event.preventDefault();
+      field.classList.remove("open");
+      trigger.focus();
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      buttons[Math.min(buttons.length - 1, index + 1)]?.focus();
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      buttons[Math.max(0, index - 1)]?.focus();
+    }
+  });
+  for (const [optionValue, optionLabel] of options) {
+    const active = String(optionValue) === String(value);
+    const button = el("button", active ? "topbar-filter-option active" : "topbar-filter-option");
+    button.type = "button";
+    button.append(el("span", "topbar-filter-check", active ? "✓" : ""), el("span", null, optionLabel));
+    button.addEventListener("click", () => {
+      field.classList.remove("open");
+      onChange(optionValue);
+    });
+    menu.append(button);
+  }
+  field.append(trigger, menu);
+  return field;
+}
+
+function closeTopbarMenus() {
+  topbarFilters.querySelectorAll(".topbar-filter.open").forEach((menu) => {
+    menu.classList.remove("open");
+  });
 }
 
 function makeBreadcrumb(crumbs) {
@@ -379,10 +538,12 @@ function makeBreadcrumb(crumbs) {
   return nav;
 }
 
-async function fetchItemsPage(libraryId, { limit = perPage, offset = 0, sort = "", genre = "" } = {}) {
+async function fetchItemsPage(libraryId, { limit = perPage, offset = 0, sort = "", genre = "", seen = "", minRating = 0 } = {}) {
   const params = new URLSearchParams({ libraryId, limit: String(limit), offset: String(offset) });
   if (sort) params.set("sort", sort);
   if (genre) params.set("genre", genre);
+  if (seen) params.set("seen", seen);
+  if (minRating) params.set("minRating", String(minRating));
   return api(`/api/items?${params}`);
 }
 
@@ -390,10 +551,12 @@ async function fetchItem(itemId) {
   return api(`/api/items/${encodeURIComponent(String(itemId))}`);
 }
 
-async function fetchShowsPage(libraryId, { limit = perPage, offset = 0, sort = "", genre = "" } = {}) {
+async function fetchShowsPage(libraryId, { limit = perPage, offset = 0, sort = "", genre = "", seen = "", minRating = 0 } = {}) {
   const params = new URLSearchParams({ libraryId, limit: String(limit), offset: String(offset) });
   if (sort) params.set("sort", sort);
   if (genre) params.set("genre", genre);
+  if (seen) params.set("seen", seen);
+  if (minRating) params.set("minRating", String(minRating));
   return api(`/api/tv/shows?${params}`);
 }
 
@@ -451,7 +614,8 @@ function render(skipHistory) {
   const library = activeLibrary();
   currentShow = null;
   currentSeason = null;
-  if (!skipHistory) pushState({ view: "library", libraryId: library?.id, page: currentPage, genre: currentGenre, sort: currentSort });
+  renderTopbarControls();
+  if (!skipHistory) pushState({ view: "library", libraryId: library?.id, page: currentPage, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating });
 
   if (!library) {
     frag.append(el("div", "empty", "No libraries configured"));
@@ -466,9 +630,6 @@ function render(skipHistory) {
     el("span", null, library.type === "tv" ? `${libraryItems.length} shows on this page` : `${libraryItems.length} movies on this page`),
   );
   frag.append(header);
-
-  const genres = libraryGenresBar(library);
-  if (genres) frag.append(genres);
 
   if (!libraryItems.length) {
     frag.append(el("div", "empty", "No media found"));
@@ -717,6 +878,8 @@ async function loadHome(skipHistory) {
   currentSeason = null;
   currentGenre = "";
   currentSort = "";
+  currentSeenStatus = "";
+  currentMinRating = 0;
   search.value = "";
   renderNav();
   setLoading();
@@ -763,8 +926,8 @@ async function loadLibraryPage(skipHistory) {
   const [genres, page] = await Promise.all([
     fetchLibraryGenres(library.id),
     library.type === "tv"
-      ? fetchShowsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort })
-      : fetchItemsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort }),
+      ? fetchShowsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating })
+      : fetchItemsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating }),
   ]);
   libraryGenres = genres || [];
   libraryItems = page || [];
@@ -778,6 +941,8 @@ async function load() {
   if (route.q) search.value = route.q;
   if (route.page) currentPage = route.page;
   if (route.genre) currentGenre = route.genre;
+  if (route.seen) currentSeenStatus = route.seen;
+  if (route.minRating) currentMinRating = Number(route.minRating || 0);
   if (route.libraryId && libraries.some((library) => library.id === route.libraryId)) {
     activeLibraryId = route.libraryId;
   } else if (!activeLibraryId && libraries.length) {
@@ -825,6 +990,8 @@ async function navigate(state, replaceURL = false) {
   currentPage = state.page || 1;
   currentGenre = state.genre || "";
   currentSort = state.sort || "";
+  currentSeenStatus = state.seen || "";
+  currentMinRating = Number(state.minRating || 0);
   if (state.libraryId && libraries.some((library) => library.id === state.libraryId)) {
     activeLibraryId = state.libraryId;
   }
@@ -886,6 +1053,8 @@ function routeFromLocation() {
     page: Math.max(1, Number(params.get("page") || "1")),
     genre: params.get("genre") || "",
     sort: params.get("sort") || "",
+    seen: params.get("seen") || "",
+    minRating: Number(params.get("minRating") || "0"),
     q: params.get("q") || "",
   };
   if (parts[0] === "search") {
@@ -935,6 +1104,8 @@ function urlForState(state) {
   if (state.view === "library" && state.page && state.page > 1) params.set("page", String(state.page));
   if (state.view === "library" && state.genre) params.set("genre", state.genre);
   if (state.view === "library" && state.sort) params.set("sort", state.sort);
+  if (state.view === "library" && state.seen) params.set("seen", state.seen);
+  if (state.view === "library" && state.minRating) params.set("minRating", String(state.minRating));
   if (state.view === "detail" && state.showTitle) params.set("show", state.showTitle);
   if (state.view === "detail" && state.season !== undefined && state.season !== null) params.set("season", String(state.season));
   if (state.q) params.set("q", state.q);
@@ -1024,6 +1195,12 @@ fullscreenBtn.addEventListener("click", () => {
 
 document.addEventListener("fullscreenchange", () => {
   fullscreenBtn.textContent = document.fullscreenElement ? "Exit FS" : "Fullscreen";
+});
+
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".topbar-filter")) {
+    closeTopbarMenus();
+  }
 });
 
 document.addEventListener("keydown", (e) => {

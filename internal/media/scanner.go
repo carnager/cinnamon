@@ -2,13 +2,11 @@ package media
 
 import (
 	"context"
-	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -28,7 +26,24 @@ var videoExts = map[string]struct{}{
 
 var episodePattern = regexp.MustCompile(`(?i)(?:^|[\s._-])s(\d{1,2})e(\d{1,3})(?:[\s._-]|$)`)
 
-const metadataBackfillNFOActors = "nfo-metadata-actors-v1"
+const metadataBackfillNFOActors = "nfo-metadata-actors-v2"
+
+var ErrScanAlreadyRunning = errors.New("scan already running")
+
+var scanRunning atomic.Bool
+
+func ScanInProgress() bool {
+	return scanRunning.Load()
+}
+
+func TryStartScan() (func(), bool) {
+	if !scanRunning.CompareAndSwap(false, true) {
+		return nil, false
+	}
+	return func() {
+		scanRunning.Store(false)
+	}, true
+}
 
 type Scanner struct {
 	cfg   config.Config
@@ -41,6 +56,20 @@ func NewScanner(cfg config.Config, store *Store, log *slog.Logger) *Scanner {
 }
 
 func (s *Scanner) Scan(ctx context.Context) error {
+	release, ok := TryStartScan()
+	if !ok {
+		return ErrScanAlreadyRunning
+	}
+	defer release()
+	return s.scan(ctx)
+}
+
+func (s *Scanner) ScanWithLease(ctx context.Context, release func()) error {
+	defer release()
+	return s.scan(ctx)
+}
+
+func (s *Scanner) scan(ctx context.Context) error {
 	if len(s.cfg.Libraries) == 0 {
 		return nil
 	}
@@ -53,6 +82,15 @@ func (s *Scanner) Scan(ctx context.Context) error {
 }
 
 func (s *Scanner) ScanPaths(ctx context.Context, lib config.Library, paths []string) error {
+	release, ok := TryStartScan()
+	if !ok {
+		return ErrScanAlreadyRunning
+	}
+	defer release()
+	return s.scanPaths(ctx, lib, paths)
+}
+
+func (s *Scanner) scanPaths(ctx context.Context, lib config.Library, paths []string) error {
 	if len(paths) == 0 {
 		return nil
 	}
@@ -452,10 +490,12 @@ func (s *Scanner) buildItem(ctx context.Context, lib config.Library, path string
 	posterPath, backdropPath := artworkPaths(lib, path)
 	posterMTime := fileMTimeUnix(posterPath)
 	backdropMTime := fileMTimeUnix(backdropPath)
-	itemActors := actorsFromNFO(meta.Actors)
+	actorDirs := itemActorDirs(lib, path)
+	itemActors := actorsFromNFO(meta.Actors, actorDirs...)
 	var showMetadata *ShowMetadata
 	var seasonMetadata *SeasonMetadata
 	if lib.Type == "tv" && showTitle != "" {
+		showActorDirs := tvActorDirs(lib.Path, path)
 		showMetadata = &ShowMetadata{
 			LibraryID:     lib.ID,
 			Title:         showTitle,
@@ -468,7 +508,7 @@ func (s *Scanner) buildItem(ctx context.Context, lib config.Library, path string
 			Genres:        strings.Join(showMeta.Genres, ", "),
 			Rating:        showMeta.Rating,
 			Premiered:     firstNonEmpty(showMeta.Premiered, showMeta.Released),
-			Actors:        actorsFromNFO(showMeta.Actors),
+			Actors:        actorsFromNFO(showMeta.Actors, showActorDirs...),
 		}
 		seasonPoster := seasonImagePath(path, seasonNumber)
 		seasonMetadata = &SeasonMetadata{
@@ -483,22 +523,39 @@ func (s *Scanner) buildItem(ctx context.Context, lib config.Library, path string
 			Overview:        firstNonEmpty(seasonMeta.Plot, seasonMeta.Outline),
 			Rating:          seasonMeta.Rating,
 			Premiered:       firstNonEmpty(seasonMeta.Premiered, seasonMeta.Released),
-			Actors:          actorsFromNFO(seasonMeta.Actors),
+			Actors:          actorsFromNFO(seasonMeta.Actors, showActorDirs...),
 		}
 	}
-	probed := probeResult{
-		DurationMS: existing.DurationMS,
-		VideoCodec: existing.VideoCodec,
-		AudioCodec: existing.AudioCodec,
-		Width:      existing.Width,
-		Height:     existing.Height,
+	probed := MediaProbe{DurationMS: existing.DurationMS, BitRate: existing.BitRate}
+	if existing.VideoCodec != "" || existing.AudioCodec != "" || existing.Width > 0 || existing.Height > 0 {
+		if existing.VideoCodec != "" {
+			probed.Streams = append(probed.Streams, MediaStream{Index: 0, Type: "video", Codec: existing.VideoCodec, Width: existing.Width, Height: existing.Height})
+		}
+		if existing.AudioCodec != "" {
+			probed.Streams = append(probed.Streams, MediaStream{Index: 1, Type: "audio", Codec: existing.AudioCodec})
+		}
 	}
-	if existing.Path == "" || existing.SizeBytes != info.Size() || existing.MTimeUnix != info.ModTime().Unix() || existing.DurationMS == 0 {
-		probed = probe(ctx, s.cfg.FFprobePath, path)
-		if probed.DurationMS == 0 && probed.VideoCodec == "" && probed.AudioCodec == "" {
+	streamCount := 0
+	if existing.ID > 0 {
+		if count, err := s.store.MediaStreamCount(ctx, existing.ID); err == nil {
+			streamCount = count
+		}
+	}
+	needsProbe := existing.Path == "" || existing.SizeBytes != info.Size() || existing.MTimeUnix != info.ModTime().Unix() || existing.DurationMS == 0 || streamCount == 0
+	var streamsToStore []MediaStream
+	streamsKnown := false
+	if needsProbe {
+		nextProbe := ProbeMedia(ctx, s.cfg.FFprobePath, path)
+		if nextProbe.DurationMS > 0 || nextProbe.BitRate > 0 || len(nextProbe.Streams) > 0 {
+			probed = nextProbe
+			streamsToStore = nextProbe.Streams
+			streamsKnown = true
+		} else {
 			s.log.Debug("scan probe returned no media details", "library", lib.ID, "path", path)
 		}
 	}
+	videoStream, _ := PrimaryVideoStream(probed.Streams)
+	audioStream, _ := PrimaryAudioStream(probed.Streams)
 	return Item{
 		LibraryID:         lib.ID,
 		Path:              path,
@@ -509,13 +566,14 @@ func (s *Scanner) buildItem(ctx context.Context, lib config.Library, path string
 		Year:              meta.Year,
 		DurationMS:        probed.DurationMS,
 		Container:         strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), "."),
-		VideoCodec:        probed.VideoCodec,
-		AudioCodec:        probed.AudioCodec,
+		VideoCodec:        videoStream.Codec,
+		AudioCodec:        audioStream.Codec,
 		IMDbID:            meta.imdbID(),
 		TMDbID:            meta.tmdbID(),
 		TVDbID:            meta.tvdbID(),
-		Width:             probed.Width,
-		Height:            probed.Height,
+		Width:             videoStream.Width,
+		Height:            videoStream.Height,
+		BitRate:           probed.BitRate,
 		SizeBytes:         info.Size(),
 		MTimeUnix:         info.ModTime().Unix(),
 		NFOPath:           nfo,
@@ -540,6 +598,8 @@ func (s *Scanner) buildItem(ctx context.Context, lib config.Library, path string
 		EpisodeNumber:     episodeNumber,
 		EpisodeTitle:      episodeTitle,
 		Actors:            itemActors,
+		Streams:           streamsToStore,
+		StreamsKnown:      streamsKnown,
 		ShowMetadata:      showMetadata,
 		SeasonMetadata:    seasonMetadata,
 	}
@@ -624,6 +684,25 @@ func TVShowArtworkPaths(root, video string) (string, string) {
 
 func SeasonArtworkPath(video string, seasonNumber int) string {
 	return seasonImagePath(video, seasonNumber)
+}
+
+func ClearLogoArtworkPath(root string, item Item) string {
+	dirs := []string{filepath.Dir(item.Path)}
+	if item.Kind == "episode" && root != "" {
+		dirs = append([]string{showDir(root, item.Path)}, dirs...)
+	}
+	names := []string{
+		"clearlogoart.png", "clearlogoart.jpg", "clearlogoart.jpeg", "clearlogoart.webp",
+		"clearlogo.png", "clearlogo.jpg", "clearlogo.jpeg", "clearlogo.webp",
+		"logo.png", "logo.jpg", "logo.jpeg", "logo.webp",
+		"clearart.png", "clearart.jpg", "clearart.jpeg", "clearart.webp",
+	}
+	for _, dir := range dirs {
+		if path := findNamed(dir, names); path != "" {
+			return path
+		}
+	}
+	return ""
 }
 
 func seasonImagePath(video string, seasonNumber int) string {
@@ -877,7 +956,7 @@ func cleanStrings(values []string) []string {
 	return out
 }
 
-func actorsFromNFO(in []nfoActor) []Actor {
+func actorsFromNFO(in []nfoActor, actorDirs ...string) []Actor {
 	out := make([]Actor, 0, len(in))
 	for i, actor := range in {
 		name := strings.TrimSpace(actor.Name)
@@ -888,14 +967,102 @@ func actorsFromNFO(in []nfoActor) []Actor {
 		if order == 0 {
 			order = i + 1
 		}
+		thumb := strings.TrimSpace(actor.Thumb)
+		if thumb == "" {
+			thumb = actorThumbPath(name, actorDirs)
+		}
 		out = append(out, Actor{
 			Name:  name,
 			Role:  strings.TrimSpace(actor.Role),
-			Thumb: strings.TrimSpace(actor.Thumb),
+			Thumb: thumb,
 			Order: order,
 		})
 	}
 	return out
+}
+
+func itemActorDirs(lib config.Library, path string) []string {
+	if lib.Type == "tv" {
+		return append(tvActorDirs(lib.Path, path), filepath.Join(filepath.Dir(path), ".actors"))
+	}
+	return []string{filepath.Join(filepath.Dir(path), ".actors")}
+}
+
+func tvActorDirs(root, path string) []string {
+	return []string{filepath.Join(showDir(root, path), ".actors")}
+}
+
+func actorThumbPath(name string, actorDirs []string) string {
+	candidates := actorImageCandidates(name)
+	for _, dir := range actorDirs {
+		if dir == "" {
+			continue
+		}
+		for _, candidate := range candidates {
+			path := filepath.Join(dir, candidate)
+			if info, err := os.Stat(path); err == nil && !info.IsDir() {
+				return path
+			}
+		}
+		if path := actorThumbPathCaseInsensitive(dir, candidates); path != "" {
+			return path
+		}
+	}
+	return ""
+}
+
+func actorImageCandidates(name string) []string {
+	baseNames := []string{name, sanitizeActorImageName(name)}
+	exts := []string{".jpg", ".jpeg", ".png", ".webp"}
+	out := make([]string, 0, len(baseNames)*len(exts))
+	seen := map[string]struct{}{}
+	for _, base := range baseNames {
+		base = strings.TrimSpace(base)
+		if base == "" {
+			continue
+		}
+		for _, ext := range exts {
+			candidate := base + ext
+			key := strings.ToLower(candidate)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, candidate)
+		}
+	}
+	return out
+}
+
+func sanitizeActorImageName(name string) string {
+	return strings.TrimSpace(strings.Map(func(r rune) rune {
+		switch r {
+		case '/', '\\', ':', '*', '?', '"', '<', '>', '|':
+			return '_'
+		default:
+			return r
+		}
+	}, name))
+}
+
+func actorThumbPathCaseInsensitive(dir string, candidates []string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	wanted := map[string]struct{}{}
+	for _, candidate := range candidates {
+		wanted[strings.ToLower(candidate)] = struct{}{}
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if _, ok := wanted[strings.ToLower(entry.Name())]; ok {
+			return filepath.Join(dir, entry.Name())
+		}
+	}
+	return ""
 }
 
 func bestRating(simple float64, ratings []nfoRating) float64 {
@@ -1069,57 +1236,6 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-type probeResult struct {
-	DurationMS int64
-	VideoCodec string
-	AudioCodec string
-	Width      int
-	Height     int
-}
-
-func probe(ctx context.Context, ffprobe, path string) probeResult {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, ffprobe, "-v", "error", "-show_format", "-show_streams", "-of", "json", path)
-	out, err := cmd.Output()
-	if err != nil {
-		return probeResult{}
-	}
-	var raw struct {
-		Format struct {
-			Duration string `json:"duration"`
-		} `json:"format"`
-		Streams []struct {
-			CodecType string `json:"codec_type"`
-			CodecName string `json:"codec_name"`
-			Width     int    `json:"width"`
-			Height    int    `json:"height"`
-		} `json:"streams"`
-	}
-	if err := json.Unmarshal(out, &raw); err != nil {
-		return probeResult{}
-	}
-	var res probeResult
-	if f, err := strconv.ParseFloat(raw.Format.Duration, 64); err == nil {
-		res.DurationMS = int64(f * 1000)
-	}
-	for _, st := range raw.Streams {
-		switch st.CodecType {
-		case "video":
-			if res.VideoCodec == "" {
-				res.VideoCodec = st.CodecName
-				res.Width = st.Width
-				res.Height = st.Height
-			}
-		case "audio":
-			if res.AudioCodec == "" {
-				res.AudioCodec = st.CodecName
-			}
-		}
-	}
-	return res
 }
 
 func findSidecar(video string, names []string) string {

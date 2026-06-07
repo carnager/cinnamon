@@ -143,6 +143,38 @@ func TestStoreFiltersShowsByGenreRatingAndMTime(t *testing.T) {
 	}
 }
 
+func TestListGenresIncludesShowMetadataGenres(t *testing.T) {
+	store, ctx := newTestStore(t)
+	show := episodeItem("The Expanse", 1, 1)
+	show.Genres = "Episode Drama"
+	show.ShowMetadata = &ShowMetadata{
+		LibraryID: "tv",
+		Title:     "The Expanse",
+		Genres:    "Science Fiction, Space Opera",
+	}
+	upsertTestItem(t, ctx, store, show)
+
+	genres, err := store.ListGenres(ctx, "tv")
+	if err != nil {
+		t.Fatalf("list genres: %v", err)
+	}
+	want := map[string]bool{
+		"Episode Drama":   false,
+		"Science Fiction": false,
+		"Space Opera":     false,
+	}
+	for _, genre := range genres {
+		if _, ok := want[genre]; ok {
+			want[genre] = true
+		}
+	}
+	for genre, found := range want {
+		if !found {
+			t.Fatalf("genre %q missing from %#v", genre, genres)
+		}
+	}
+}
+
 func TestAlphabetIndexKeepsBracketedTitlesUnderHash(t *testing.T) {
 	store, ctx := newTestStore(t)
 	upsertTestItem(t, ctx, store, Item{

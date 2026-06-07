@@ -5,11 +5,13 @@
 Build a release bundle from the repo root:
 
 ```sh
-JAVA_HOME=/usr/lib/jvm/java-21-openjdk scripts/release
+scripts/release
 ```
 
-Use Java 21 for Android builds. Java 26 currently trips Android's JDK image
-transform during APK builds.
+Android builds use the checked-in Gradle wrapper at `android-tv/gradlew`.
+The release and check scripts automatically select `/usr/lib/jvm/java-21-openjdk`
+when `JAVA_HOME` is unset. Keep using Java 21 for Android builds; Java 26
+currently trips Android's JDK image transform during APK builds.
 
 The script writes everything to:
 
@@ -27,7 +29,7 @@ Override them only when needed:
 ```sh
 POPCORN_ANDROID_VERSION_CODE=29676778 \
 POPCORN_ANDROID_VERSION_NAME=v0.1.0-39-g6ce8f7d-dirty \
-JAVA_HOME=/usr/lib/jvm/java-21-openjdk scripts/release
+scripts/release
 ```
 
 ## Release File Names

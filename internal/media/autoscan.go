@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -179,7 +180,9 @@ func (a *AutoScanner) scanFull(ctx context.Context, reason string) {
 	a.log.Info("auto scan full scan started", "reason", reason)
 	scanCtx, cancel := context.WithTimeout(ctx, a.cfg.ScanTimeout)
 	defer cancel()
-	if err := a.scanner.Scan(scanCtx); err != nil && scanCtx.Err() == nil {
+	if err := a.scanner.Scan(scanCtx); errors.Is(err, ErrScanAlreadyRunning) {
+		a.log.Info("auto scan full scan skipped", "reason", reason, "message", err.Error())
+	} else if err != nil && scanCtx.Err() == nil {
 		a.log.Warn("auto scan full scan failed", "reason", reason, "error", err)
 	}
 }
@@ -199,7 +202,9 @@ func (a *AutoScanner) scanPending(ctx context.Context, pending map[string]map[st
 		scanCtx, cancel := context.WithTimeout(ctx, a.cfg.ScanTimeout)
 		err := a.scanner.ScanPaths(scanCtx, lib, paths)
 		cancel()
-		if err != nil && scanCtx.Err() == nil {
+		if errors.Is(err, ErrScanAlreadyRunning) {
+			a.log.Info("auto scan incremental scan skipped", "library", lib.ID, "paths", len(paths), "message", err.Error())
+		} else if err != nil && scanCtx.Err() == nil {
 			a.log.Warn("auto scan incremental scan failed", "library", lib.ID, "paths", len(paths), "error", err)
 		}
 	}

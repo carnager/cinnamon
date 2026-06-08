@@ -37,7 +37,12 @@ func (a *App) transcode(w http.ResponseWriter, r *http.Request) {
 	audio := parseOptionalInt(r.URL.Query().Get("audio"))
 	requestedSubtitle := parseOptionalInt(r.URL.Query().Get("subtitle"))
 	subtitle := a.textSubtitleStream(r.Context(), item, requestedSubtitle, "transcode")
-	args := transcodeArgs(a.cfg, item.Path, bandwidth, start, audio, subtitle)
+	path := media.ResolveExistingPath(item.Path)
+	if path == "" {
+		http.Error(w, "media unavailable", http.StatusNotFound)
+		return
+	}
+	args := transcodeArgs(a.cfg, path, bandwidth, start, audio, subtitle)
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Popcorn-Start", strconv.FormatFloat(start, 'f', 3, 64))
@@ -104,8 +109,13 @@ func (a *App) subtitle(w http.ResponseWriter, r *http.Request) {
 	if start > 0 {
 		args = append(args, "-ss", strconv.FormatFloat(start, 'f', 3, 64))
 	}
+	path := media.ResolveExistingPath(item.Path)
+	if path == "" {
+		http.Error(w, "media unavailable", http.StatusNotFound)
+		return
+	}
 	args = append(args,
-		"-i", item.Path,
+		"-i", path,
 		"-map", fmt.Sprintf("0:%d", index),
 		"-c:s", "webvtt",
 		"-f", "webvtt",
@@ -261,13 +271,21 @@ func (a *App) hlsStop(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) ensureHLSSession(ctx context.Context, sessionID string, userID int64, item media.Item, bandwidth int, start float64, audio, subtitle *int) (*hlsSession, error) {
-	args := hlsArgs(a.cfg, item.Path, "", "", bandwidth, start, audio, subtitle)
+	path := media.ResolveExistingPath(item.Path)
+	if path == "" {
+		return nil, fmt.Errorf("media unavailable")
+	}
+	args := hlsArgs(a.cfg, path, "", "", bandwidth, start, audio, subtitle)
 	return a.ensureHLSSessionWithArgs(ctx, sessionID, userID, hlsSessionOwner(sessionID), item.ID, start, bandwidth, args)
 }
 
 func (a *App) ensureHLSSessionForPlan(ctx context.Context, sessionID string, userID int64, plan PlaybackPlan) (*hlsSession, error) {
 	start := float64(plan.StartPositionMS) / 1000.0
-	args := hlsPlanArgs(a.cfg, plan.Item.Path, "", "", plan)
+	path := media.ResolveExistingPath(plan.Item.Path)
+	if path == "" {
+		return nil, fmt.Errorf("media unavailable")
+	}
+	args := hlsPlanArgs(a.cfg, path, "", "", plan)
 	return a.ensureHLSSessionWithArgs(ctx, sessionID, userID, hlsSessionOwner(sessionID), plan.ItemID, start, plan.BandwidthKbps, args)
 }
 
@@ -402,7 +420,12 @@ func (a *App) textSubtitleStream(ctx context.Context, item media.Item, subtitle 
 	if subtitle == nil {
 		return nil
 	}
-	streams, err := probeStreams(ctx, a.cfg.FFprobePath, item.Path)
+	path := media.ResolveExistingPath(item.Path)
+	if path == "" {
+		a.log.Warn("subtitle probe failed", "item", item.ID, "subtitle", *subtitle, "target", target, "error", "media unavailable")
+		return nil
+	}
+	streams, err := probeStreams(ctx, a.cfg.FFprobePath, path)
 	if err != nil {
 		a.log.Warn("subtitle probe failed", "item", item.ID, "subtitle", *subtitle, "target", target, "error", err)
 		return nil

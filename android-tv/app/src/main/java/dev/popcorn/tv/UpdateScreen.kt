@@ -1,9 +1,12 @@
 package dev.popcorn.tv
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -60,7 +63,7 @@ fun UpdateView(session: Session?, onBack: () -> Unit) {
         scope.launch {
             checking = true
             status = ""
-            runCatching { Api(active).tvUpdate(BuildConfig.VERSION_CODE) }
+            runCatching { Api(active).tvUpdate(appVersionCode(context)) }
                 .onSuccess {
                     update = it
                     status = when {
@@ -109,7 +112,7 @@ fun UpdateView(session: Session?, onBack: () -> Unit) {
             FocusButton("Back", primary = false, onClick = onBack)
         }
         Spacer(Modifier.height(24.dp))
-        Text("Installed ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", color = Muted, fontSize = 14.sp)
+        Text("Installed ${appVersionName(context)} (${appVersionCode(context)})", color = Muted, fontSize = 14.sp)
         Spacer(Modifier.height(18.dp))
         val info = update
         if (checking) {
@@ -156,7 +159,7 @@ fun UpdateApplyDialog(session: Session?, onDismiss: () -> Unit, onUpdateStarted:
         scope.launch {
             checking = true
             status = ""
-            runCatching { Api(active).tvUpdate(BuildConfig.VERSION_CODE) }
+            runCatching { Api(active).tvUpdate(appVersionCode(context)) }
                 .onSuccess {
                     update = it
                     status = when {
@@ -212,7 +215,7 @@ fun UpdateApplyDialog(session: Session?, onDismiss: () -> Unit, onUpdateStarted:
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text("Apply update?", color = TextColor, fontSize = 24.sp, fontWeight = FontWeight.Black)
-            Text("Installed ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", color = Muted, fontSize = 13.sp)
+            Text("Installed ${appVersionName(context)} (${appVersionCode(context)})", color = Muted, fontSize = 13.sp)
 
             when {
                 checking -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -293,20 +296,23 @@ private fun UpdateDialogButton(
 }
 
 private fun installApk(context: Context, apk: File): String {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
-        val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+	if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !context.packageManager.canRequestPackageInstalls()) {
+		val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
+			.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
         return "Allow Popcorn to install unknown apps, then press Install again."
     }
 
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", apk)
-    val intent = Intent(Intent.ACTION_VIEW)
-        .setDataAndType(uri, "application/vnd.android.package-archive")
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    context.startActivity(intent)
-    return "Opening Android installer."
+	val intent = Intent(Intent.ACTION_VIEW)
+		.setDataAndType(uri, "application/vnd.android.package-archive")
+		.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+		.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+	context.startActivity(intent)
+	Handler(Looper.getMainLooper()).postDelayed({
+		(context as? Activity)?.finishAndRemoveTask()
+	}, 600)
+	return "Opening Android installer. Reopen Popcorn after installation."
 }
 
 private fun formatBytes(bytes: Long): String {

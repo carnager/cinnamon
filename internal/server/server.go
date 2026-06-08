@@ -331,13 +331,6 @@ func (a *App) actorDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	info := a.actorInfo(r.Context(), actor)
-	apiActor := a.actorForResponse(actor)
-	profileURL := ""
-	if strings.TrimSpace(apiActor.Thumb) != "" {
-		profileURL = strings.TrimSpace(apiActor.Thumb)
-	} else {
-		profileURL = tmdbProfileURL(info.ProfilePath)
-	}
 	movies, err := a.store.ListItemsByActor(r.Context(), actor.Name, "", "movie", "recent", 60, 0)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -347,6 +340,15 @@ func (a *App) actorDetail(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	apiActor := a.actorForResponse(actor)
+	profileURL := a.actorProfileURLFromCredits(r.Context(), actor.Name, movies, shows)
+	if profileURL != "" {
+		apiActor.Thumb = profileURL
+	} else if strings.TrimSpace(apiActor.Thumb) != "" {
+		profileURL = strings.TrimSpace(apiActor.Thumb)
+	} else {
+		profileURL = tmdbProfileURL(info.ProfilePath)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"actor":      apiActor,
@@ -363,16 +365,19 @@ func (a *App) actorImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
-	actor, err := a.store.ActorByName(r.Context(), name)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			http.NotFound(w, r)
+	path := a.localActorThumbFromRequest(r.Context(), r, name)
+	if path == "" {
+		actor, err := a.store.ActorByName(r.Context(), name)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				http.NotFound(w, r)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		path = localActorThumbPath(actor.Thumb)
 	}
-	path := localActorThumbPath(actor.Thumb)
 	if path == "" {
 		http.NotFound(w, r)
 		return
@@ -413,7 +418,7 @@ func (a *App) tvShowActors(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, a.actorsForResponse(actors))
+	writeJSON(w, http.StatusOK, a.actorsForShowResponse(r.Context(), libraryID, showTitle, actors))
 }
 
 func (a *App) tvSeasonActors(w http.ResponseWriter, r *http.Request) {
@@ -429,7 +434,7 @@ func (a *App) tvSeasonActors(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, a.actorsForResponse(actors))
+	writeJSON(w, http.StatusOK, a.actorsForShowResponse(r.Context(), libraryID, showTitle, actors))
 }
 
 func queryFloat(r *http.Request, key string) float64 {
@@ -470,7 +475,7 @@ func (a *App) item(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	item.Actors = a.enrichedItemActors(r.Context(), item)
-	item.Actors = a.actorsForResponse(item.Actors)
+	item.Actors = a.actorsForItemResponse(item, item.Actors)
 	writeJSON(w, http.StatusOK, item)
 }
 
@@ -495,7 +500,11 @@ func (a *App) itemStreams(ctx context.Context, item media.Item) ([]media.MediaSt
 	if len(streams) > 0 {
 		return streams, nil
 	}
-	probe := media.ProbeMedia(ctx, a.cfg.FFprobePath, item.Path)
+	path := media.ResolveExistingPath(item.Path)
+	if path == "" {
+		return legacyItemStreams(item), nil
+	}
+	probe := media.ProbeMedia(ctx, a.cfg.FFprobePath, path)
 	for i := range probe.Streams {
 		probe.Streams[i].ItemID = item.ID
 	}
@@ -548,13 +557,22 @@ func (a *App) stream(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	f, err := os.Open(item.Path)
+	path := media.ResolveExistingPath(item.Path)
+	if path == "" {
+		http.Error(w, "media unavailable", http.StatusNotFound)
+		return
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		http.Error(w, "media unavailable", http.StatusNotFound)
 		return
 	}
 	defer f.Close()
-	http.ServeContent(w, r, filepath.Base(item.Path), time.Unix(item.MTimeUnix, 0), f)
+	modTime := time.Unix(item.MTimeUnix, 0)
+	if info, err := f.Stat(); err == nil {
+		modTime = info.ModTime()
+	}
+	http.ServeContent(w, r, filepath.Base(path), modTime, f)
 }
 
 func (a *App) image(w http.ResponseWriter, r *http.Request) {
@@ -577,6 +595,11 @@ func (a *App) image(w http.ResponseWriter, r *http.Request) {
 	case "clearlogo":
 		path = media.ClearLogoArtworkPath(a.libraryRoot(item.LibraryID), item)
 	}
+	if path == "" {
+		http.NotFound(w, r)
+		return
+	}
+	path = media.ResolveExistingPath(path)
 	if path == "" {
 		http.NotFound(w, r)
 		return
@@ -656,17 +679,113 @@ func (a *App) actorsForResponse(actors []media.Actor) []media.Actor {
 	return out
 }
 
+func (a *App) actorsForItemResponse(item media.Item, actors []media.Actor) []media.Actor {
+	out := make([]media.Actor, len(actors))
+	for i, actor := range actors {
+		if thumb := a.localActorThumbForItem(item, actor.Name); thumb != "" {
+			actor.Thumb = a.actorImageURL(actor.Name, thumb, map[string]string{
+				"itemId": strconv.FormatInt(item.ID, 10),
+			})
+		} else {
+			actor = a.actorForResponse(actor)
+		}
+		out[i] = actor
+	}
+	return out
+}
+
+func (a *App) actorsForShowResponse(ctx context.Context, libraryID, showTitle string, actors []media.Actor) []media.Actor {
+	sample, err := a.store.ShowSampleItem(ctx, libraryID, showTitle)
+	if err != nil {
+		return a.actorsForResponse(actors)
+	}
+	out := make([]media.Actor, len(actors))
+	for i, actor := range actors {
+		if thumb := a.localActorThumbForShow(sample, actor.Name); thumb != "" {
+			actor.Thumb = a.actorImageURL(actor.Name, thumb, map[string]string{
+				"libraryId": libraryID,
+				"showTitle": showTitle,
+			})
+		} else {
+			actor = a.actorForResponse(actor)
+		}
+		out[i] = actor
+	}
+	return out
+}
+
 func (a *App) actorForResponse(actor media.Actor) media.Actor {
 	if localActorThumbPath(actor.Thumb) == "" {
 		return actor
 	}
+	actor.Thumb = a.actorImageURL(actor.Name, actor.Thumb, nil)
+	return actor
+}
+
+func (a *App) actorImageURL(name, thumb string, extra map[string]string) string {
 	values := url.Values{}
-	values.Set("name", actor.Name)
-	if info, err := os.Stat(actor.Thumb); err == nil {
+	values.Set("name", name)
+	for key, value := range extra {
+		if strings.TrimSpace(value) != "" {
+			values.Set(key, value)
+		}
+	}
+	if info, err := os.Stat(thumb); err == nil {
 		values.Set("v", strconv.FormatInt(info.ModTime().Unix(), 10))
 	}
-	actor.Thumb = "/api/actors/image?" + values.Encode()
-	return actor
+	return "/api/actors/image?" + values.Encode()
+}
+
+func (a *App) actorProfileURLFromCredits(ctx context.Context, name string, movies []media.Item, shows []media.ShowSummary) string {
+	for _, item := range movies {
+		if thumb := a.localActorThumbForItem(item, name); thumb != "" {
+			return a.actorImageURL(name, thumb, map[string]string{
+				"itemId": strconv.FormatInt(item.ID, 10),
+			})
+		}
+	}
+	for _, show := range shows {
+		sample, err := a.store.ShowSampleItem(ctx, show.LibraryID, show.Title)
+		if err != nil {
+			continue
+		}
+		if thumb := a.localActorThumbForShow(sample, name); thumb != "" {
+			return a.actorImageURL(name, thumb, map[string]string{
+				"libraryId": show.LibraryID,
+				"showTitle": show.Title,
+			})
+		}
+	}
+	return ""
+}
+
+func (a *App) localActorThumbFromRequest(ctx context.Context, r *http.Request, name string) string {
+	if itemID, err := strconv.ParseInt(r.URL.Query().Get("itemId"), 10, 64); err == nil && itemID > 0 {
+		if item, err := a.store.GetItem(ctx, itemID); err == nil {
+			return a.localActorThumbForItem(item, name)
+		}
+	}
+	libraryID := strings.TrimSpace(r.URL.Query().Get("libraryId"))
+	showTitle := strings.TrimSpace(r.URL.Query().Get("showTitle"))
+	if libraryID != "" && showTitle != "" {
+		if item, err := a.store.ShowSampleItem(ctx, libraryID, showTitle); err == nil {
+			return a.localActorThumbForShow(item, name)
+		}
+	}
+	return ""
+}
+
+func (a *App) localActorThumbForItem(item media.Item, name string) string {
+	lib := config.Library{ID: item.LibraryID, Type: "movies", Path: a.libraryRoot(item.LibraryID)}
+	if item.Kind == "episode" {
+		lib.Type = "tv"
+	}
+	return media.FindActorThumb(name, media.ActorDirsForItem(lib, item.Path)...)
+}
+
+func (a *App) localActorThumbForShow(item media.Item, name string) string {
+	root := a.libraryRoot(item.LibraryID)
+	return media.FindActorThumb(name, media.ActorDirsForShow(root, item.Path)...)
 }
 
 func localActorThumbPath(thumb string) string {

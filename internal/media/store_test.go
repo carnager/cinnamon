@@ -58,6 +58,105 @@ func TestStoreSearchesOriginalTitles(t *testing.T) {
 	}
 }
 
+func TestUpsertEpisodeRenameKeepsStableEpisodeIdentity(t *testing.T) {
+	store, ctx := newTestStore(t)
+	oldItem := upsertTestItem(t, ctx, store, Item{
+		LibraryID:     "tv",
+		Kind:          "episode",
+		Title:         "From S04E07 GERMAN DL 720p WEB h264-SAUERKRAUT",
+		SortTitle:     "from s04e07 german dl 720p web h264 sauerkraut",
+		Path:          "/media/tv/FROM/Season 4/From.S04E07.GERMAN.DL.720p.WEB.h264-SAUERKRAUT.mkv",
+		ShowTitle:     "FROM",
+		SeasonNumber:  4,
+		EpisodeNumber: 7,
+		EpisodeTitle:  "Episode 7",
+	})
+	userID := insertTestUser(t, store, "rename-progress")
+	if _, err := store.SaveProgress(ctx, userID, oldItem.ID, 123_000, 3_000_000, false); err != nil {
+		t.Fatalf("save old progress: %v", err)
+	}
+
+	if err := store.UpsertItem(ctx, Item{
+		LibraryID:     "tv",
+		Kind:          "episode",
+		Title:         "FROM - S04E07 - Die besten Pläne",
+		SortTitle:     "from s04e07 die besten plane",
+		Path:          "/media/tv/FROM/Season 4/FROM - S04E07 - Die besten Plaene.mkv",
+		ShowTitle:     "FROM",
+		SeasonNumber:  4,
+		EpisodeNumber: 7,
+		EpisodeTitle:  "Die besten Pläne",
+		MTimeUnix:     2,
+		DurationMS:    3_000_000,
+		SizeBytes:     200,
+	}); err != nil {
+		t.Fatalf("upsert renamed episode: %v", err)
+	}
+
+	episodes, err := store.ListEpisodes(ctx, "tv", "FROM", 4)
+	if err != nil {
+		t.Fatalf("list episodes: %v", err)
+	}
+	if len(episodes) != 1 {
+		t.Fatalf("episodes = %#v, want only renamed episode", episodes)
+	}
+	if episodes[0].ID != oldItem.ID {
+		t.Fatalf("episode id = %d, want stable old id %d", episodes[0].ID, oldItem.ID)
+	}
+	if episodes[0].Path != "/media/tv/FROM/Season 4/FROM - S04E07 - Die besten Plaene.mkv" {
+		t.Fatalf("episode path = %q, want clean renamed path", episodes[0].Path)
+	}
+	progress, err := store.Progress(ctx, userID, oldItem.ID)
+	if err != nil {
+		t.Fatalf("progress after rename: %v", err)
+	}
+	if progress.PositionMS != 123_000 {
+		t.Fatalf("progress = %#v, want preserved progress", progress)
+	}
+}
+
+func TestUpsertMovieRenameKeepsStableExternalIDIdentity(t *testing.T) {
+	store, ctx := newTestStore(t)
+	oldItem := upsertTestItem(t, ctx, store, Item{
+		LibraryID: "movies",
+		Kind:      "movie",
+		Title:     "The Abyss 1989 1080p BluRay",
+		SortTitle: "abyss 1989 1080p bluray",
+		Path:      "/media/movies/The.Abyss.1989.1080p.BluRay.mkv",
+		IMDbID:    "tt0096754",
+		TMDbID:    "2756",
+	})
+
+	if err := store.UpsertItem(ctx, Item{
+		LibraryID:  "movies",
+		Kind:       "movie",
+		Title:      "Abyss - Abgrund des Todes",
+		SortTitle:  "abyss abgrund des todes",
+		Path:       "/media/movies/Abyss - Abgrund des Todes/Abyss - Abgrund des Todes.mkv",
+		IMDbID:     "tt0096754",
+		TMDbID:     "2756",
+		MTimeUnix:  2,
+		DurationMS: 10_000,
+		SizeBytes:  200,
+	}); err != nil {
+		t.Fatalf("upsert renamed movie: %v", err)
+	}
+
+	items, err := store.ListItems(ctx, "movies", "Abyss", "", "title", 0, 10, 0)
+	if err != nil {
+		t.Fatalf("list movies: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items = %#v, want one renamed movie", items)
+	}
+	if items[0].ID != oldItem.ID {
+		t.Fatalf("movie id = %d, want stable old id %d", items[0].ID, oldItem.ID)
+	}
+	if items[0].Path != "/media/movies/Abyss - Abgrund des Todes/Abyss - Abgrund des Todes.mkv" {
+		t.Fatalf("movie path = %q, want clean renamed path", items[0].Path)
+	}
+}
+
 func TestStoreFiltersItemsByGenreRatingAndMTime(t *testing.T) {
 	store, ctx := newTestStore(t)
 	oldLow := upsertTestItem(t, ctx, store, Item{

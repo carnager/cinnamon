@@ -44,6 +44,11 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+    }
 }
 
 data class WatchMenuState(
@@ -184,7 +189,7 @@ fun PopcornApp() {
 
     fun refreshUpdateAvailable(activeSession: Session) {
         scope.launch {
-            updateAvailable = runCatching { Api(activeSession).tvUpdate(BuildConfig.VERSION_CODE).available }.getOrDefault(false)
+            updateAvailable = runCatching { Api(activeSession).tvUpdate(appVersionCode(context)).available }.getOrDefault(false)
         }
     }
 
@@ -513,7 +518,7 @@ fun PopcornApp() {
     LaunchedEffect(session) {
         val active = session ?: return@LaunchedEffect
         while (true) {
-            updateAvailable = runCatching { Api(active).tvUpdate(BuildConfig.VERSION_CODE).available }.getOrDefault(false)
+            updateAvailable = runCatching { Api(active).tvUpdate(appVersionCode(context)).available }.getOrDefault(false)
             delay(5 * 60 * 1000)
         }
     }
@@ -538,7 +543,7 @@ fun PopcornApp() {
                 session = updated
             }
             libraries = api.libraries()
-            updateAvailable = runCatching { api.tvUpdate(BuildConfig.VERSION_CODE).available }.getOrDefault(false)
+            updateAvailable = runCatching { api.tvUpdate(appVersionCode(context)).available }.getOrDefault(false)
             AppCache.writeLibraries(context, active, libraries)
             refreshProgress(active)
             refreshWatchlist(active)
@@ -878,13 +883,13 @@ fun PopcornApp() {
                 lastPlayerReturnScreen = current
                 screen = Screen.Player(current.item, audioIndex, subtitleIndex, startPositionMs)
             },
-	            onTrailer = { localTrailer ->
-	                if (localTrailer) {
-	                    val title = if (current.item.kind == "episode") current.item.episodeTitle.ifBlank { current.item.title } else current.item.title
-	                    screen = Screen.SidecarPlayer(trailerUrl(session, current.item.id), "$title Trailer", current)
-	                } else {
-	                    openExternalTrailer(current.item)
-	                }
+                onTrailer = { localTrailer ->
+                    if (localTrailer) {
+                        val title = if (current.item.kind == "episode") current.item.episodeTitle.ifBlank { current.item.title } else current.item.title
+                        screen = Screen.SidecarPlayer(trailerUrl(session, current.item.id), "$title Trailer", current)
+                    } else {
+                        openExternalTrailer(current.item)
+                    }
             },
             onWatchedChange = { watched ->
                 session?.let { setItemWatched(it, current.item, watched) }
@@ -940,12 +945,12 @@ fun PopcornApp() {
                 if (pendingPlayerCommand?.id == id) pendingPlayerCommand = null
             },
         )
-	        is Screen.SidecarPlayer -> SidecarPlayerScreen(
-	            url = current.url,
-	            title = current.title,
-	            session = session,
-	            onBack = { screen = current.returnScreen },
-	        )
+            is Screen.SidecarPlayer -> SidecarPlayerScreen(
+                url = current.url,
+                title = current.title,
+                session = session,
+                onBack = { screen = current.returnScreen },
+            )
     }
     watchMenu?.let { menu ->
         WatchActionOverlay(

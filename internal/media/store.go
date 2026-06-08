@@ -62,6 +62,9 @@ func (s *Store) UpsertItem(ctx context.Context, item Item) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := reconcileItemIdentityTx(ctx, tx, item); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO media_items (
 	library_id, path, kind, title, sort_title, original_title, year, duration_ms, container,
@@ -147,6 +150,176 @@ ON CONFLICT(path) DO UPDATE SET
 		}
 	}
 	return tx.Commit()
+}
+
+func reconcileItemIdentityTx(ctx context.Context, tx *sql.Tx, item Item) error {
+	if strings.TrimSpace(item.Path) == "" || strings.TrimSpace(item.LibraryID) == "" {
+		return nil
+	}
+	if item.Kind == "episode" && strings.TrimSpace(item.ShowTitle) != "" && item.SeasonNumber > 0 && item.EpisodeNumber > 0 {
+		return reconcileEpisodeIdentityTx(ctx, tx, item)
+	}
+	if item.Kind == "movie" && hasStableMovieID(item) {
+		return reconcileMovieIdentityTx(ctx, tx, item)
+	}
+	return reconcilePathCaseTx(ctx, tx, item)
+}
+
+func hasStableMovieID(item Item) bool {
+	return strings.TrimSpace(item.IMDbID) != "" || strings.TrimSpace(item.TMDbID) != "" || strings.TrimSpace(item.TVDbID) != ""
+}
+
+func reconcileMovieIdentityTx(ctx context.Context, tx *sql.Tx, item Item) error {
+	rows, err := tx.QueryContext(ctx, `
+SELECT id, path
+FROM media_items
+WHERE library_id = ?
+AND kind = 'movie'
+AND (
+	(? != '' AND imdb_id = ?)
+	OR (? != '' AND tmdb_id = ?)
+	OR (? != '' AND tvdb_id = ?)
+)
+ORDER BY id`, item.LibraryID, strings.TrimSpace(item.IMDbID), strings.TrimSpace(item.IMDbID), strings.TrimSpace(item.TMDbID), strings.TrimSpace(item.TMDbID), strings.TrimSpace(item.TVDbID), strings.TrimSpace(item.TVDbID))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type candidate struct {
+		id   int64
+		path string
+	}
+	candidates := []candidate{}
+	for rows.Next() {
+		var c candidate
+		if err := rows.Scan(&c.id, &c.path); err != nil {
+			return err
+		}
+		candidates = append(candidates, c)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(candidates) == 0 {
+		return reconcilePathCaseTx(ctx, tx, item)
+	}
+	keep := candidates[0]
+	for _, c := range candidates[1:] {
+		if err := mergeDuplicateItemTx(ctx, tx, keep.id, c.id); err != nil {
+			return err
+		}
+	}
+	if keep.path != item.Path {
+		if _, err := tx.ExecContext(ctx, `UPDATE media_items SET path = ? WHERE id = ?`, item.Path, keep.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func reconcilePathCaseTx(ctx context.Context, tx *sql.Tx, item Item) error {
+	var id int64
+	var path string
+	err := tx.QueryRowContext(ctx, `
+SELECT id, path
+FROM media_items
+WHERE library_id = ? AND lower(path) = lower(?)
+ORDER BY id
+LIMIT 1`, item.LibraryID, item.Path).Scan(&id, &path)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if path == item.Path {
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE media_items SET path = ? WHERE id = ?`, item.Path, id)
+	return err
+}
+
+func reconcileEpisodeIdentityTx(ctx context.Context, tx *sql.Tx, item Item) error {
+	rows, err := tx.QueryContext(ctx, `
+SELECT id, path
+FROM media_items
+WHERE library_id = ?
+AND kind = 'episode'
+AND show_title = ?
+AND COALESCE(season_number, 0) = ?
+AND COALESCE(episode_number, 0) = ?
+ORDER BY id`, item.LibraryID, item.ShowTitle, item.SeasonNumber, item.EpisodeNumber)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type candidate struct {
+		id   int64
+		path string
+	}
+	candidates := []candidate{}
+	for rows.Next() {
+		var c candidate
+		if err := rows.Scan(&c.id, &c.path); err != nil {
+			return err
+		}
+		candidates = append(candidates, c)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(candidates) == 0 {
+		return reconcilePathCaseTx(ctx, tx, item)
+	}
+	keep := candidates[0]
+	for _, c := range candidates[1:] {
+		if err := mergeDuplicateItemTx(ctx, tx, keep.id, c.id); err != nil {
+			return err
+		}
+	}
+	if keep.path != item.Path {
+		if _, err := tx.ExecContext(ctx, `UPDATE media_items SET path = ? WHERE id = ?`, item.Path, keep.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func mergeDuplicateItemTx(ctx context.Context, tx *sql.Tx, keepID, duplicateID int64) error {
+	if keepID == duplicateID {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE playback_progress
+SET item_id = ?
+WHERE item_id = ?
+AND NOT EXISTS (
+	SELECT 1 FROM playback_progress keep
+	WHERE keep.user_id = playback_progress.user_id AND keep.item_id = ?
+)`, keepID, duplicateID, keepID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM playback_progress WHERE item_id = ?`, duplicateID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE user_watchlist
+SET item_id = ?
+WHERE item_id = ?
+AND NOT EXISTS (
+	SELECT 1 FROM user_watchlist keep
+	WHERE keep.user_id = user_watchlist.user_id AND keep.watch_key = user_watchlist.watch_key
+)`, keepID, duplicateID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM external_ratings_cache WHERE item_id = ? AND EXISTS(SELECT 1 FROM external_ratings_cache WHERE item_id = ?)`, duplicateID, keepID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE external_ratings_cache SET item_id = ? WHERE item_id = ?`, keepID, duplicateID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `DELETE FROM media_items WHERE id = ?`, duplicateID)
+	return err
 }
 
 func replaceMediaStreamsTx(ctx context.Context, tx *sql.Tx, itemID int64, streams []MediaStream) error {
@@ -682,14 +855,16 @@ COALESCE(container, ''), COALESCE(video_codec, ''), COALESCE(audio_codec, ''), C
 COALESCE(height, 0), COALESCE(bit_rate, 0), size_bytes, mtime_unix, COALESCE(nfo_path, ''), COALESCE(nfo_mtime_unix, 0), COALESCE(poster_path, ''), COALESCE(poster_mtime_unix, 0), COALESCE(backdrop_path, ''), COALESCE(backdrop_mtime_unix, 0),
 COALESCE(overview, ''), COALESCE(tagline, ''), COALESCE(official_rating, ''), COALESCE(genres, ''), COALESCE(tags, ''),
 COALESCE(studios, ''), COALESCE(directors, ''), COALESCE(writers, ''), COALESCE(countries, ''), COALESCE(rating, 0), COALESCE(premiered, ''),
-COALESCE(show_title, ''), COALESCE(season_number, 0), COALESCE(episode_number, 0), COALESCE(episode_title, '')`
+COALESCE(show_title, ''), COALESCE(season_number, 0), COALESCE(episode_number, 0), COALESCE(episode_title, ''),
+EXISTS(SELECT 1 FROM media_streams ms WHERE ms.item_id = id LIMIT 1)`
 
 const itemSelectMI = `SELECT mi.id, mi.library_id, mi.path, mi.kind, mi.title, mi.sort_title, COALESCE(mi.original_title, ''), COALESCE(mi.year, 0), COALESCE(mi.duration_ms, 0),
 COALESCE(mi.container, ''), COALESCE(mi.video_codec, ''), COALESCE(mi.audio_codec, ''), COALESCE(mi.imdb_id, ''), COALESCE(mi.tmdb_id, ''), COALESCE(mi.tvdb_id, ''), COALESCE(mi.width, 0),
 COALESCE(mi.height, 0), COALESCE(mi.bit_rate, 0), mi.size_bytes, mi.mtime_unix, COALESCE(mi.nfo_path, ''), COALESCE(mi.nfo_mtime_unix, 0), COALESCE(mi.poster_path, ''), COALESCE(mi.poster_mtime_unix, 0), COALESCE(mi.backdrop_path, ''), COALESCE(mi.backdrop_mtime_unix, 0),
 COALESCE(mi.overview, ''), COALESCE(mi.tagline, ''), COALESCE(mi.official_rating, ''), COALESCE(mi.genres, ''), COALESCE(mi.tags, ''),
 COALESCE(mi.studios, ''), COALESCE(mi.directors, ''), COALESCE(mi.writers, ''), COALESCE(mi.countries, ''), COALESCE(mi.rating, 0), COALESCE(mi.premiered, ''),
-COALESCE(mi.show_title, ''), COALESCE(mi.season_number, 0), COALESCE(mi.episode_number, 0), COALESCE(mi.episode_title, '')`
+COALESCE(mi.show_title, ''), COALESCE(mi.season_number, 0), COALESCE(mi.episode_number, 0), COALESCE(mi.episode_title, ''),
+EXISTS(SELECT 1 FROM media_streams ms WHERE ms.item_id = mi.id LIMIT 1)`
 
 func (s *Store) GetItem(ctx context.Context, id int64) (Item, error) {
 	row := s.db.QueryRowContext(ctx, itemSelect+` FROM media_items WHERE id = ?`, id)
@@ -733,6 +908,15 @@ func (s *Store) LibrarySnapshot(ctx context.Context, libraryID string) (map[stri
 		out[item.Path] = item
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) ShowSampleItem(ctx context.Context, libraryID, showTitle string) (Item, error) {
+	row := s.db.QueryRowContext(ctx, itemSelect+`
+FROM media_items
+WHERE library_id = ? AND show_title = ? AND kind = 'episode'
+ORDER BY season_number, episode_number, id
+LIMIT 1`, libraryID, showTitle)
+	return scanItem(row)
 }
 
 func (s *Store) MetadataBackfillNeeded(ctx context.Context, libraryID, name string) (bool, error) {
@@ -1238,13 +1422,18 @@ LIMIT ? OFFSET ?`, q, q, limit, offset)
 
 func (s *Store) ActorByName(ctx context.Context, name string) (Actor, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT name,
-	COALESCE(MAX(NULLIF(role, '')), '') AS role,
-	COALESCE(MAX(NULLIF(thumb, '')), '') AS thumb,
-	MIN(sort_order) AS sort_order
+SELECT name, role, thumb, sort_order
 FROM media_actors
 WHERE name = ?
-GROUP BY name`, name)
+ORDER BY
+	CASE
+		WHEN TRIM(COALESCE(thumb, '')) != '' AND thumb NOT LIKE 'http://%' AND thumb NOT LIKE 'https://%' AND thumb NOT LIKE '/api/%' THEN 0
+		WHEN TRIM(COALESCE(thumb, '')) != '' THEN 1
+		ELSE 2
+	END,
+	sort_order,
+	id
+LIMIT 1`, name)
 	var actor Actor
 	if err := row.Scan(&actor.Name, &actor.Role, &actor.Thumb, &actor.Order); err != nil {
 		return Actor{}, err
@@ -1345,6 +1534,7 @@ type rowScanner interface {
 
 func scanItem(row rowScanner) (Item, error) {
 	var item Item
+	var streamsKnown bool
 	err := row.Scan(&item.ID, &item.LibraryID, &item.Path, &item.Kind, &item.Title, &item.SortTitle,
 		&item.OriginalTitle, &item.Year, &item.DurationMS, &item.Container, &item.VideoCodec, &item.AudioCodec,
 		&item.IMDbID, &item.TMDbID, &item.TVDbID, &item.Width, &item.Height, &item.BitRate, &item.SizeBytes, &item.MTimeUnix, &item.NFOPath,
@@ -1352,7 +1542,8 @@ func scanItem(row rowScanner) (Item, error) {
 		&item.Overview, &item.Tagline, &item.OfficialRating, &item.Genres, &item.Tags,
 		&item.Studios, &item.Directors, &item.Writers, &item.Countries,
 		&item.Rating, &item.Premiered, &item.ShowTitle, &item.SeasonNumber,
-		&item.EpisodeNumber, &item.EpisodeTitle)
+		&item.EpisodeNumber, &item.EpisodeTitle, &streamsKnown)
+	item.StreamsKnown = streamsKnown
 	return item, err
 }
 

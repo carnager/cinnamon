@@ -93,11 +93,11 @@ private fun mimeToCodec(mime: String): String = when (mime.lowercase()) {
     else -> ""
 }
 
-private fun appVersionCode(context: Context): Int {
+fun appVersionCode(context: Context): Int {
     val info = context.packageManager.getPackageInfo(context.packageName, 0)
     return if (Build.VERSION.SDK_INT >= 28) info.longVersionCode.toInt() else @Suppress("DEPRECATION") info.versionCode
 }
 
-private fun appVersionName(context: Context): String {
+fun appVersionName(context: Context): String {
     return context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
 }

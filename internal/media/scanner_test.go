@@ -266,6 +266,19 @@ func TestBuildItemUsesPlainEpisodeSidecarImage(t *testing.T) {
 	}
 }
 
+func TestResolveExistingPathHandlesCaseOnlyRename(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "Season 4")
+	mustMkdirAll(t, dir)
+	path := filepath.Join(dir, "FROM - S04E06 - Das Herz ist ein einsamer Jaeger.jpg")
+	mustWrite(t, path, "image")
+
+	stale := filepath.Join(dir, "FROM - S04E06 - Das Herz ist ein Einsamer Jaeger.jpg")
+	if got := ResolveExistingPath(stale); got != path {
+		t.Fatalf("ResolveExistingPath(%q) = %q, want %q", stale, got, path)
+	}
+}
+
 func TestScanPathsRefreshesChangedSidecarOnly(t *testing.T) {
 	store, ctx := newTestStore(t)
 	root := t.TempDir()
@@ -316,6 +329,24 @@ func TestScanPathsRefreshesChangedSidecarOnly(t *testing.T) {
 	}
 	if item.NFOMTimeUnix != fileMTimeUnix(nfo) {
 		t.Fatalf("nfo mtime = %d, want %d", item.NFOMTimeUnix, fileMTimeUnix(nfo))
+	}
+}
+
+func TestAutoScanIgnoresActorImageChanges(t *testing.T) {
+	path := filepath.Join("Movies", "Abyss", ".actors", "Ed_Harris.jpg")
+	if !isIgnoredScanPath(path) {
+		t.Fatalf("isIgnoredScanPath(%q) = false, want true", path)
+	}
+}
+
+func TestAutoScanCoalescesMetadataEventsToFolder(t *testing.T) {
+	nfo := filepath.Join("Movies", "Hoppers", "Hoppers.nfo")
+	if got := scanPathForEvent(nfo); got != filepath.Dir(nfo) {
+		t.Fatalf("scanPathForEvent(nfo) = %q, want parent %q", got, filepath.Dir(nfo))
+	}
+	video := filepath.Join("Movies", "Hoppers", "Hoppers.mkv")
+	if got := scanPathForEvent(video); got != video {
+		t.Fatalf("scanPathForEvent(video) = %q, want exact video path", got)
 	}
 }
 

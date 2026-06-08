@@ -236,16 +236,21 @@ func (s *Scanner) addScanFile(ctx context.Context, lib config.Library, path stri
 	}
 	stats.mediaFound.Add(1)
 	existing := snapshot[abs]
-	if existing.Path != "" &&
-		existing.SizeBytes == info.Size() &&
-		existing.MTimeUnix == info.ModTime().Unix() &&
-		existing.NFOMTimeUnix == expectedNFOMTime(lib, abs) &&
-		existing.PosterMTimeUnix == expectedPosterMTime(lib, abs) &&
-		existing.BackdropMTimeUnix == expectedBackdropMTime(lib, abs) {
+	if !scanFileChanged(lib, abs, info, existing) {
 		return nil
 	}
 	jobs[abs] = scanJob{path: abs, info: info}
 	return nil
+}
+
+func scanFileChanged(lib config.Library, path string, info os.FileInfo, existing Item) bool {
+	return existing.Path == "" ||
+		existing.SizeBytes != info.Size() ||
+		existing.MTimeUnix != info.ModTime().Unix() ||
+		existing.NFOMTimeUnix != expectedNFOMTime(lib, path) ||
+		existing.PosterMTimeUnix != expectedPosterMTime(lib, path) ||
+		existing.BackdropMTimeUnix != expectedBackdropMTime(lib, path) ||
+		!existing.StreamsKnown
 }
 
 func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
@@ -366,6 +371,9 @@ func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
 		seenMu.Lock()
 		seen[abs] = struct{}{}
 		seenMu.Unlock()
+		if !scanFileChanged(lib, abs, info, snapshot[abs]) {
+			return nil
+		}
 		select {
 		case jobs <- scanJob{path: abs, info: info}:
 			return nil
@@ -967,9 +975,9 @@ func actorsFromNFO(in []nfoActor, actorDirs ...string) []Actor {
 		if order == 0 {
 			order = i + 1
 		}
-		thumb := strings.TrimSpace(actor.Thumb)
+		thumb := actorThumbPath(name, actorDirs)
 		if thumb == "" {
-			thumb = actorThumbPath(name, actorDirs)
+			thumb = strings.TrimSpace(actor.Thumb)
 		}
 		out = append(out, Actor{
 			Name:  name,
@@ -988,8 +996,20 @@ func itemActorDirs(lib config.Library, path string) []string {
 	return []string{filepath.Join(filepath.Dir(path), ".actors")}
 }
 
+func ActorDirsForItem(lib config.Library, path string) []string {
+	return itemActorDirs(lib, path)
+}
+
 func tvActorDirs(root, path string) []string {
 	return []string{filepath.Join(showDir(root, path), ".actors")}
+}
+
+func ActorDirsForShow(root, path string) []string {
+	return tvActorDirs(root, path)
+}
+
+func FindActorThumb(name string, actorDirs ...string) string {
+	return actorThumbPath(name, actorDirs)
 }
 
 func actorThumbPath(name string, actorDirs []string) string {
@@ -1012,7 +1032,8 @@ func actorThumbPath(name string, actorDirs []string) string {
 }
 
 func actorImageCandidates(name string) []string {
-	baseNames := []string{name, sanitizeActorImageName(name)}
+	sanitized := sanitizeActorImageName(name)
+	baseNames := []string{name, sanitized, strings.ReplaceAll(sanitized, " ", "_")}
 	exts := []string{".jpg", ".jpeg", ".png", ".webp"}
 	out := make([]string, 0, len(baseNames)*len(exts))
 	seen := map[string]struct{}{}
@@ -1263,6 +1284,53 @@ func findNamed(dir string, names []string) string {
 			abs, _ := filepath.Abs(candidate)
 			return abs
 		}
+	}
+	return ""
+}
+
+func ResolveExistingPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		return path
+	}
+	cleaned := filepath.Clean(path)
+	volume := filepath.VolumeName(cleaned)
+	rest := strings.TrimPrefix(cleaned, volume)
+	absolute := strings.HasPrefix(rest, string(filepath.Separator))
+	parts := strings.Split(strings.Trim(rest, string(filepath.Separator)), string(filepath.Separator))
+	current := volume
+	if absolute {
+		current += string(filepath.Separator)
+	}
+	for _, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		next := filepath.Join(current, part)
+		if _, err := os.Stat(next); err == nil {
+			current = next
+			continue
+		}
+		entries, err := os.ReadDir(current)
+		if err != nil {
+			return ""
+		}
+		found := ""
+		for _, entry := range entries {
+			if strings.EqualFold(entry.Name(), part) {
+				found = entry.Name()
+				break
+			}
+		}
+		if found == "" {
+			return ""
+		}
+		current = filepath.Join(current, found)
+	}
+	if info, err := os.Stat(current); err == nil && !info.IsDir() {
+		return current
 	}
 	return ""
 }

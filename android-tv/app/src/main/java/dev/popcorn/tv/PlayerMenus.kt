@@ -58,10 +58,14 @@ fun showNativeOriginalTrackMenu(
 ) {
     val choices = mutableListOf<NativeChoice>()
     if (allowOff) {
-        choices.add(NativeChoice("Off", selectedIndex == null) { onSelected(null) })
+        choices.add(NativeChoice("Off", selectedIndex == null) {
+            onSelected(null)
+        })
     }
     tracks.forEach { track ->
-        choices.add(NativeChoice(track.label(), track.index == selectedIndex) { onSelected(track.index) })
+        choices.add(NativeChoice(track.label(), track.index == selectedIndex) {
+            onSelected(track.index)
+        })
     }
     showNativeChoiceMenu(
         playerView = playerView,
@@ -246,8 +250,10 @@ private fun showNativeChoiceMenu(
         setBackgroundColor(0x99000000.toInt())
         setOnKeyListener { _, keyCode, event ->
             when {
-                event.action == AndroidKeyEvent.ACTION_UP && keyCode == AndroidKeyEvent.KEYCODE_BACK -> {
-                    closeNativeTrackMenu(playerView, returnFocus, onClosed = onClosed)
+                keyCode == AndroidKeyEvent.KEYCODE_BACK -> {
+                    if (event.action == AndroidKeyEvent.ACTION_UP) {
+                        closeNativeTrackMenu(playerView, returnFocus, onClosed = onClosed)
+                    }
                     true
                 }
                 event.action == AndroidKeyEvent.ACTION_DOWN && isNativeMenuDpadKey(keyCode) -> true
@@ -305,6 +311,7 @@ private fun showNativeChoiceMenu(
                         if (event.action == AndroidKeyEvent.ACTION_UP) closeNativeTrackMenu(playerView, returnFocus, onClosed = onClosed)
                         true
                     }
+                    event.action == AndroidKeyEvent.ACTION_DOWN && (keyCode == AndroidKeyEvent.KEYCODE_DPAD_CENTER || keyCode == AndroidKeyEvent.KEYCODE_ENTER || keyCode == AndroidKeyEvent.KEYCODE_NUMPAD_ENTER) -> true
                     event.action == AndroidKeyEvent.ACTION_DOWN && keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP -> {
                         val target = rows.getOrNull((rowIndex - 1).coerceAtLeast(0)) ?: view
                         target.requestFocus()

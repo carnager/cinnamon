@@ -166,12 +166,20 @@ func (a *AutoScanner) handleWatchEvent(watcher *fsnotify.Watcher, pending map[st
 	if pending[lib.ID] == nil {
 		pending[lib.ID] = map[string]struct{}{}
 	}
-	abs, err := filepath.Abs(event.Name)
+	scanPath := scanPathForEvent(event.Name)
+	abs, err := filepath.Abs(scanPath)
 	if err != nil {
-		abs = filepath.Clean(event.Name)
+		abs = filepath.Clean(scanPath)
 	}
 	pending[lib.ID][abs] = struct{}{}
-	a.log.Debug("auto scan queued path", "library", lib.ID, "op", event.Op.String(), "path", abs)
+	a.log.Debug("auto scan queued path", "library", lib.ID, "op", event.Op.String(), "eventPath", event.Name, "scanPath", abs)
+}
+
+func scanPathForEvent(path string) string {
+	if isMetadataOrArtwork(path) {
+		return filepath.Dir(path)
+	}
+	return path
 }
 
 func (a *AutoScanner) scanFull(ctx context.Context, reason string) {
@@ -264,6 +272,9 @@ func matchingLibrary(libraries []config.Library, path string) (config.Library, b
 }
 
 func isIgnoredScanPath(path string) bool {
+	if pathHasComponent(path, ".actors") {
+		return true
+	}
 	base := filepath.Base(path)
 	if strings.HasPrefix(base, ".") {
 		return true
@@ -274,4 +285,13 @@ func isIgnoredScanPath(path string) bool {
 	default:
 		return false
 	}
+}
+
+func pathHasComponent(path, component string) bool {
+	for _, part := range strings.Split(filepath.Clean(path), string(filepath.Separator)) {
+		if part == component {
+			return true
+		}
+	}
+	return false
 }

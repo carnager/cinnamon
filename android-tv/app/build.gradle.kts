@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -6,6 +8,12 @@ plugins {
 
 val popcornAndroidVersionCode = providers.environmentVariable("POPCORN_ANDROID_VERSION_CODE").map(String::toInt).getOrElse(1)
 val popcornAndroidVersionName = providers.environmentVariable("POPCORN_ANDROID_VERSION_NAME").getOrElse("0.1.0")
+val releaseSigningProperties = loadReleaseSigningProperties()
+val releaseSigningRequested = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
+val releaseSigningComplete = releaseSigningProperties.complete
+if (releaseSigningRequested && !releaseSigningComplete) {
+    throw GradleException(releaseSigningProperties.errorMessage)
+}
 
 android {
     namespace = "dev.popcorn.tv"
@@ -22,9 +30,20 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            if (releaseSigningComplete) {
+                storeFile = file(releaseSigningProperties.storeFile!!)
+                storePassword = releaseSigningProperties.storePassword
+                keyAlias = releaseSigningProperties.keyAlias
+                keyPassword = releaseSigningProperties.keyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (releaseSigningComplete) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
             isDebuggable = false
@@ -68,4 +87,36 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
+}
+
+data class AndroidReleaseSigning(
+    val storeFile: String?,
+    val storePassword: String?,
+    val keyAlias: String?,
+    val keyPassword: String?,
+    val propertiesPath: String,
+) {
+    val complete: Boolean
+        get() = !storeFile.isNullOrBlank() && !storePassword.isNullOrBlank() && !keyAlias.isNullOrBlank() && !keyPassword.isNullOrBlank()
+
+    val errorMessage: String
+        get() = "Android release signing is not configured. Set POPCORN_ANDROID_STORE_FILE, POPCORN_ANDROID_STORE_PASSWORD, POPCORN_ANDROID_KEY_ALIAS, and POPCORN_ANDROID_KEY_PASSWORD, or create $propertiesPath."
+}
+
+fun loadReleaseSigningProperties(): AndroidReleaseSigning {
+    val defaultPath = "${System.getProperty("user.home")}/.local/android/release-keys/popcorn.properties"
+    val propertiesPath = providers.environmentVariable("POPCORN_ANDROID_SIGNING_PROPERTIES").orNull ?: defaultPath
+    val props = Properties()
+    val propsFile = file(propertiesPath)
+    if (propsFile.isFile) {
+        propsFile.inputStream().use { props.load(it) }
+    }
+    fun value(name: String): String? = providers.environmentVariable(name).orNull ?: props.getProperty(name)
+    return AndroidReleaseSigning(
+        storeFile = value("POPCORN_ANDROID_STORE_FILE"),
+        storePassword = value("POPCORN_ANDROID_STORE_PASSWORD"),
+        keyAlias = value("POPCORN_ANDROID_KEY_ALIAS"),
+        keyPassword = value("POPCORN_ANDROID_KEY_PASSWORD"),
+        propertiesPath = propertiesPath,
+    )
 }

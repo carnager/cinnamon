@@ -1,0 +1,30 @@
+listen = ":8097"
+logLevel = "info"
+databasePath = "/var/lib/popcorn/popcorn.db"
+ffmpegPath = "ffmpeg"
+ffprobePath = "ffprobe"
+hwAccel = "auto"
+hwDevice = "/dev/dri/renderD128"
+traktClientId = ""
+traktClientSecret = ""
+tmdbApiKey = ""
+tmdbReadAccessToken = ""
+omdbApiKey = ""
+scanOnStart = false
+autoScan = false
+autoScanDebounce = "3s"
+autoScanInterval = "6h"
+autoScanWatchDepth = 0
+scanTimeout = "30m"
+
+[[libraries]]
+id = "movies"
+name = "Movies"
+type = "movies"
+path = "/srv/media/movies"
+
+[[libraries]]
+id = "tv"
+name = "TV Shows"
+type = "tv"
+path = "/srv/media/tv"

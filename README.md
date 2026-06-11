@@ -2,7 +2,7 @@
 
 Popcorn is a small media daemon focused on a clean API, fast local scans, direct playback, ffmpeg transcoding, and first-party web, TV, phone, and desktop clients.
 
-## Run
+## Quick Start
 
 ```sh
 cp config.example.toml config.toml
@@ -11,6 +11,11 @@ go run ./cmd/popcornd -config config.toml
 ```
 
 Open `http://localhost:8097`.
+
+On the first run with an empty database, Popcorn creates the bootstrap admin user
+from `POPCORN_ADMIN_USER` or `admin`. Set `POPCORN_ADMIN_PASSWORD` to choose the
+initial password; otherwise `popcornd` generates one and prints it once in the
+startup log.
 
 For scanner diagnostics, run with debug logging:
 
@@ -34,28 +39,77 @@ POPCORN_LIBRARY=/media/movies POPCORN_LISTEN=:8097 go run ./cmd/popcornd
 
 For a single TV library through env vars, add `POPCORN_LIBRARY_TYPE=tv`.
 
+## Desktop Launcher
+
+The desktop launcher is `popcorn-mpv`. It uses mpv for playback and rofi or fzf
+for selection:
+
+```sh
+go run ./cmd/popcorn-mpv -server http://localhost:8097
+```
+
+After installing release binaries, use rofi directly:
+
+```sh
+popcorn-mpv -selector rofi
+```
+
+The launcher stores its login token in
+`$XDG_CONFIG_HOME/popcorn/mpv.toml`, or `~/.config/popcorn/mpv.toml`.
+
+## Arch Linux Package
+
+From a checkout:
+
+```sh
+cd packaging/arch
+makepkg -si
+sudoedit /etc/popcorn/config.toml
+sudo systemctl enable --now popcornd
+popcorn-mpv -selector rofi
+```
+
+The package builds `popcornd` and `popcorn-mpv`, and installs
+systemd/sysusers/tmpfiles integration.
+
 ## Development
 
-Run the server tests and build both Android release APKs with:
+Run the server tests and build both Android debug APKs with:
 
 ```sh
 ./scripts/check
 ```
 
-Set `POPCORN_CHECK_ANDROID=0` to run only Go tests, or `POPCORN_CHECK_GO=0` to build only the Android apps.
+Set `POPCORN_CHECK_ANDROID=0` to run only Go tests, or
+`POPCORN_CHECK_GO=0` to build only the Android apps. To make the check script
+build release APKs, run:
 
-Create a versioned release bundle with:
+```sh
+POPCORN_CHECK_ANDROID_TASKS=':app:assembleRelease :companion:assembleRelease' ./scripts/check
+```
+
+Create a full versioned release bundle with:
 
 ```sh
 ./scripts/release
 ```
 
-The bundle is written to `dist/<git-version>/` and contains `popcornd`, the TV APK, the companion APK, example config, systemd unit, and SHA-256 checksums. The script prints the TV and companion APK paths at the end; upload those manually from the web admin App Updates screen, or set `POPCORN_RELEASE_UPLOAD=1`, `POPCORN_UPLOAD_SERVER`, `POPCORN_UPLOAD_USER`, and `POPCORN_UPLOAD_PASSWORD` to publish both APKs through the admin upload API.
+For a server/desktop-only bundle that does not require Android tooling:
 
-On the first run with an empty database, Popcorn creates the bootstrap admin user
-from `POPCORN_ADMIN_USER` or `admin`. Set `POPCORN_ADMIN_PASSWORD` to choose the
-initial password; otherwise `popcornd` generates one and prints it once in the
-startup log.
+```sh
+./scripts/release --server-only
+```
+
+Full Android releases require release signing credentials. By default the build
+reads `~/.local/android/release-keys/popcorn.properties`; see
+[DEPLOYMENT.md](DEPLOYMENT.md) for the required `POPCORN_ANDROID_*` fields.
+
+The bundle is written to `dist/<git-version>/` and contains `popcornd`,
+`popcorn-mpv`, packaging files, example configs, systemd files, and SHA-256
+checksums. A full release also contains the TV and companion APKs.
+Upload APKs manually from the web admin App Updates screen, or set
+`POPCORN_RELEASE_UPLOAD=1`, `POPCORN_UPLOAD_SERVER`, `POPCORN_UPLOAD_USER`, and
+`POPCORN_UPLOAD_PASSWORD` to publish both APKs through the admin upload API.
 
 ## API
 
@@ -130,7 +184,10 @@ path = "/media/tv"
 
 TV libraries scan videos as episodes. Popcorn reads `showtitle`, `season`, `episode`, and episode `title` from episode `.nfo` files, falls back to `tvshow.nfo` for the show title, and then falls back to the first folder below the library root.
 
-Scans are incremental. Popcorn still walks the library so deletes are noticed, but it reuses stored ffprobe data for unchanged files and probes new or changed files in parallel.
+Scans are manual and incremental. Use the admin-only Update Libraries action in
+the web or TV client after adding or renaming media. Popcorn still walks the
+library so deletes are noticed, but it reuses stored ffprobe data for unchanged
+files and probes new or changed files in parallel.
 
 ## Seeking
 

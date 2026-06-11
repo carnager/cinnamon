@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	hashIterations = 120000
-	saltBytes      = 16
-	keyBytes       = 32
+	hashIterations       = 120000
+	saltBytes            = 16
+	keyBytes             = 32
+	sessionTouchInterval = 5 * time.Minute
 )
 
 var (
@@ -221,16 +222,41 @@ func (s *Store) UserByToken(ctx context.Context, token string) (User, error) {
 		return User{}, sql.ErrNoRows
 	}
 	row := s.db.QueryRowContext(ctx, `
-SELECT u.id, u.username, u.display_name, u.is_admin, u.disabled, u.created_at
+SELECT u.id, u.username, u.display_name, u.is_admin, u.disabled, u.created_at, s.last_seen_at
 FROM auth_sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.token = ? AND s.expires_at > ? AND u.disabled = 0`, token, time.Now().UTC().Format(time.RFC3339))
-	user, err := scanUser(row)
-	if err != nil {
+	var user User
+	var isAdmin, disabled int
+	var lastSeen string
+	if err := row.Scan(&user.ID, &user.Username, &user.DisplayName, &isAdmin, &disabled, &user.CreatedAt, &lastSeen); err != nil {
 		return User{}, err
 	}
-	_, _ = s.db.ExecContext(ctx, `UPDATE auth_sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE token = ?`, token)
+	user.IsAdmin = isAdmin != 0
+	user.Disabled = disabled != 0
+	if shouldTouchSession(lastSeen, time.Now().UTC()) {
+		_, _ = s.db.ExecContext(ctx, `UPDATE auth_sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE token = ?`, token)
+	}
 	return user, nil
+}
+
+func shouldTouchSession(lastSeen string, now time.Time) bool {
+	seenAt, err := parseSessionTime(lastSeen)
+	if err != nil {
+		return true
+	}
+	return now.Sub(seenAt) >= sessionTouchInterval
+}
+
+func parseSessionTime(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05"} {
+		t, err := time.Parse(layout, value)
+		if err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("invalid session timestamp")
 }
 
 func (s *Store) DeleteSession(ctx context.Context, token string) error {

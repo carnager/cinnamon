@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -193,11 +194,11 @@ func (a *App) serveHLSPlaylist(w http.ResponseWriter, r *http.Request, itemID in
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
 		return
 	}
-	if err := rewritePlaylistSegments(playlist, fmt.Sprintf("/api/items/%d/hls/%s/", itemID, sessionID)); err != nil {
+	if err := rewritePlaylistSegments(playlist, fmt.Sprintf("/api/items/%d/hls/%s/", itemID, sessionID), hlsPlaylistAuthQuery(r)); err != nil {
 		a.log.Warn("hls playlist rewrite failed", "item", itemID, "session", sessionID, "error", err)
 	}
 	if info, err := os.Stat(playlist); err == nil {
-		a.log.Info("hls playlist served", "item", itemID, "session", sessionID, "bytes", info.Size())
+		a.log.Debug("hls playlist served", "item", itemID, "session", sessionID, "bytes", info.Size())
 	}
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store")
@@ -233,14 +234,14 @@ func (a *App) hlsSegment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if info, err := os.Stat(path); err == nil {
-		a.log.Info("hls segment served", "session", sessionID, "segment", segment, "bytes", info.Size())
+		a.log.Debug("hls segment served", "session", sessionID, "segment", segment, "bytes", info.Size())
 	}
 	if strings.HasSuffix(segment, ".m4s") {
 		w.Header().Set("Content-Type", "video/iso.segment")
 	} else {
 		w.Header().Set("Content-Type", "video/mp4")
 	}
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
 	http.ServeFile(w, r, path)
 }
 
@@ -341,13 +342,28 @@ func (a *App) ensureHLSSessionWithArgs(ctx context.Context, sessionID string, us
 
 func hlsSessionOwner(sessionID string) string {
 	parts := strings.Split(sessionID, "_")
-	if len(parts) >= 3 && (parts[0] == "android" || parts[0] == "phone") && (parts[1] == "dev" || parts[1] == "user") {
-		return strings.Join(parts[:3], "_")
+	if len(parts) >= 4 && isDigits(parts[len(parts)-2]) && isDigits(parts[len(parts)-3]) {
+		return strings.Join(parts[:len(parts)-3], "_")
+	}
+	if len(parts) >= 3 && isDigits(parts[len(parts)-1]) && isDigits(parts[len(parts)-2]) {
+		return strings.Join(parts[:len(parts)-2], "_")
 	}
 	if len(parts) > 0 && parts[0] != "" {
 		return parts[0]
 	}
 	return sessionID
+}
+
+func isDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) stopHLSSession(id string, sess *hlsSession) {
@@ -667,6 +683,8 @@ func waitForFile(ctx context.Context, path string, timeout time.Duration) error 
 
 func waitForFileOrDone(ctx context.Context, path string, timeout time.Duration, done <-chan struct{}) error {
 	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		info, err := os.Stat(path)
 		if err == nil && info.Size() > 0 {
@@ -680,12 +698,23 @@ func waitForFileOrDone(ctx context.Context, path string, timeout time.Duration, 
 			return ctx.Err()
 		case <-done:
 			return fmt.Errorf("transcoder exited before %s was written", filepath.Base(path))
-		case <-time.After(100 * time.Millisecond):
+		case <-ticker.C:
 		}
 	}
 }
 
-func rewritePlaylistSegments(path, prefix string) error {
+func hlsPlaylistAuthQuery(r *http.Request) string {
+	token := strings.TrimSpace(r.URL.Query().Get("api_key"))
+	if token == "" {
+		token = queryTokenCaseInsensitive(r, "api_key")
+	}
+	if token == "" {
+		return ""
+	}
+	return "api_key=" + url.QueryEscape(token)
+}
+
+func rewritePlaylistSegments(path, prefix, authQuery string) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -693,20 +722,63 @@ func rewritePlaylistSegments(path, prefix string) error {
 	lines := strings.Split(string(b), "\n")
 	changed := false
 	for i, line := range lines {
-		if strings.HasPrefix(line, `#EXT-X-MAP:URI="`) && strings.Contains(line, `init.mp4`) && !strings.Contains(line, prefix) {
-			lines[i] = strings.Replace(line, `URI="init.mp4"`, `URI="`+prefix+`init.mp4"`, 1)
+		if rewritten, ok := rewritePlaylistMapLine(line, prefix, authQuery); ok {
+			if rewritten != line {
+				lines[i] = rewritten
+				changed = true
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "seg_") {
+			lines[i] = appendPlaylistAuth(prefix+line, authQuery)
 			changed = true
 			continue
 		}
-		if strings.HasPrefix(line, "seg_") && !strings.HasPrefix(line, prefix) {
-			lines[i] = prefix + line
-			changed = true
+		if strings.HasPrefix(line, prefix) {
+			rewritten := appendPlaylistAuth(line, authQuery)
+			if rewritten != line {
+				lines[i] = rewritten
+				changed = true
+			}
 		}
 	}
 	if !changed {
 		return nil
 	}
 	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
+}
+
+func rewritePlaylistMapLine(line, prefix, authQuery string) (string, bool) {
+	const marker = `URI="`
+	start := strings.Index(line, marker)
+	if !strings.HasPrefix(line, "#EXT-X-MAP:") || start < 0 {
+		return line, false
+	}
+	valueStart := start + len(marker)
+	valueEnd := strings.Index(line[valueStart:], `"`)
+	if valueEnd < 0 {
+		return line, false
+	}
+	valueEnd += valueStart
+	uri := line[valueStart:valueEnd]
+	if !strings.Contains(uri, "init.mp4") {
+		return line, false
+	}
+	if !strings.HasPrefix(uri, prefix) && !strings.HasPrefix(uri, "http://") && !strings.HasPrefix(uri, "https://") {
+		uri = prefix + uri
+	}
+	uri = appendPlaylistAuth(uri, authQuery)
+	return line[:valueStart] + uri + line[valueEnd:], true
+}
+
+func appendPlaylistAuth(uri, authQuery string) string {
+	if authQuery == "" || strings.Contains(strings.ToLower(uri), "api_key=") {
+		return uri
+	}
+	if strings.Contains(uri, "?") {
+		return uri + "&" + authQuery
+	}
+	return uri + "?" + authQuery
 }
 
 type streamInfo struct {

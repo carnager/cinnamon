@@ -217,6 +217,9 @@ func (a *App) traktImportWatched(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if summary.ItemsMarked > 0 {
+		a.invalidateResponseCache()
+	}
 	writeJSON(w, http.StatusOK, summary)
 }
 
@@ -246,6 +249,9 @@ func (a *App) traktImportExport(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if summary.ItemsMarked > 0 {
+		a.invalidateResponseCache()
 	}
 	writeJSON(w, http.StatusOK, summary)
 }
@@ -308,6 +314,9 @@ func (a *App) traktImportExportUpload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if summary.ItemsMarked > 0 {
+		a.invalidateResponseCache()
 	}
 	writeJSON(w, http.StatusOK, summary)
 }
@@ -560,6 +569,9 @@ func (a *App) traktImportWatchlist(w http.ResponseWriter, r *http.Request) {
 		summary.ShowsMatched++
 		summary.ShowsMarked++
 		summary.Matched = appendSample(summary.Matched, fmt.Sprintf("%s (%d) -> %s [%s]", traktShow.Show.Title, traktShow.Show.Year, show.Title, method))
+	}
+	if summary.ItemsMarked > 0 || summary.ShowsMarked > 0 {
+		a.invalidateResponseCache()
 	}
 	writeJSON(w, http.StatusOK, summary)
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"popcorn/internal/media"
 )
@@ -18,12 +19,9 @@ func (a *App) progressList(w http.ResponseWriter, r *http.Request) {
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	progress, err := a.store.ListProgress(r.Context(), user.ID, limit, offset)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, progress)
+	a.writeCachedJSON(w, r, cacheKey(r, "progress", user.ID), 15*time.Second, func() (any, error) {
+		return a.store.ListProgress(r.Context(), user.ID, limit, offset)
+	})
 }
 
 func (a *App) progressShows(w http.ResponseWriter, r *http.Request) {
@@ -31,12 +29,9 @@ func (a *App) progressShows(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	progress, err := a.store.ListShowProgress(r.Context(), user.ID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, progress)
+	a.writeCachedJSON(w, r, cacheKey(r, "progressShows", user.ID), 15*time.Second, func() (any, error) {
+		return a.store.ListShowProgress(r.Context(), user.ID)
+	})
 }
 
 func (a *App) progressGet(w http.ResponseWriter, r *http.Request) {
@@ -84,6 +79,7 @@ func (a *App) progressSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+	a.invalidateResponseCache()
 	durationMS := in.DurationMS
 	if durationMS == 0 {
 		durationMS = item.DurationMS
@@ -118,6 +114,7 @@ func (a *App) progressDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	a.invalidateResponseCache()
 	go a.traktSyncHistoryItems(user.ID, []media.Item{item}, true)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -148,6 +145,7 @@ func (a *App) progressShowSave(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	a.invalidateResponseCache()
 	go a.traktSyncHistoryItems(user.ID, episodes, false)
 	writeJSON(w, http.StatusOK, map[string]any{"libraryId": libraryID, "showTitle": showTitle, "itemsMarked": len(episodes)})
 }
@@ -174,6 +172,7 @@ func (a *App) progressShowDelete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	a.invalidateResponseCache()
 	go a.traktSyncHistoryItems(user.ID, episodes, true)
 	writeJSON(w, http.StatusOK, map[string]any{"libraryId": libraryID, "showTitle": showTitle, "itemsUnmarked": len(episodes)})
 }
@@ -220,6 +219,7 @@ func (a *App) progressSeasonSet(w http.ResponseWriter, r *http.Request, complete
 			return
 		}
 	}
+	a.invalidateResponseCache()
 	go a.traktSyncHistoryItems(user.ID, episodes, !completed)
 	key := "itemsMarked"
 	if !completed {

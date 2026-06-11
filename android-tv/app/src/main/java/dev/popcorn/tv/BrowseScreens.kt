@@ -3,8 +3,6 @@ package dev.popcorn.tv
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -49,7 +47,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -249,31 +246,15 @@ fun AppChrome(
 
 @Composable
 fun SideNavigation(libraries: List<Library>, selected: String, onHome: () -> Unit, onLibrary: (Library) -> Unit, onWatchlist: () -> Unit, onSearch: () -> Unit, firstFocusRequester: FocusRequester, onExit: (() -> Boolean)? = null, expansionSuppressed: Boolean = false, onFocusChange: (Boolean) -> Unit = {}) {
-    var expanded by remember { mutableStateOf(false) }
-    var hasFocus by remember { mutableStateOf(false) }
-    val expansionAllowed by rememberUpdatedState(!expansionSuppressed)
-    val width by animateDpAsState(if (expanded) 190.dp else 66.dp, label = "nav-width")
     val movieLibrary = libraries.firstOrNull { it.type == "movies" || it.type == "movie" }
     val tvLibrary = libraries.firstOrNull { it.type == "tv" }
-    LaunchedEffect(hasFocus, expansionAllowed) {
-        if (hasFocus && expansionAllowed) {
-            delay(140)
-            if (expansionAllowed) expanded = true
-        } else {
-            expanded = false
-        }
-    }
-    LaunchedEffect(expansionSuppressed) {
-        if (expansionSuppressed) expanded = false
-    }
     Column(
         Modifier
-            .width(width)
+            .width(66.dp)
             .fillMaxSize()
             .background(Color.Black.copy(alpha = .52f))
             .border(1.dp, Color.White.copy(alpha = .10f))
             .onFocusChanged {
-                hasFocus = it.hasFocus
                 onFocusChange(it.hasFocus)
             }
             .padding(horizontal = 10.dp, vertical = 18.dp),
@@ -281,20 +262,20 @@ fun SideNavigation(libraries: List<Library>, selected: String, onHome: () -> Uni
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text("P", color = Accent, fontSize = 24.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(bottom = 18.dp))
-        SideNavigationItem(icon = Icons.Filled.Home, label = "Home", expanded = expanded, selected = selected == "home", focusRequester = firstFocusRequester, onRight = onExit, onClick = onHome)
+        SideNavigationItem(icon = Icons.Filled.Home, label = "Home", selected = selected == "home", focusRequester = firstFocusRequester, onRight = onExit, onClick = onHome)
         if (movieLibrary != null) {
-            SideNavigationItem(icon = Icons.Filled.Movie, label = movieLibrary.name, expanded = expanded, selected = selected == movieLibrary.id, onRight = onExit, onClick = { onLibrary(movieLibrary) })
+            SideNavigationItem(icon = Icons.Filled.Movie, label = movieLibrary.name, selected = selected == movieLibrary.id, onRight = onExit, onClick = { onLibrary(movieLibrary) })
         }
         if (tvLibrary != null) {
-            SideNavigationItem(icon = Icons.Filled.LiveTv, label = tvLibrary.name, expanded = expanded, selected = selected == tvLibrary.id, onRight = onExit, onClick = { onLibrary(tvLibrary) })
+            SideNavigationItem(icon = Icons.Filled.LiveTv, label = tvLibrary.name, selected = selected == tvLibrary.id, onRight = onExit, onClick = { onLibrary(tvLibrary) })
         }
-        SideNavigationItem(icon = Icons.Filled.Bookmark, label = "Watchlist", expanded = expanded, selected = selected == "watchlist", onRight = onExit, onClick = onWatchlist)
-        SideNavigationItem(icon = Icons.Filled.Search, label = "Search", expanded = expanded, selected = selected == "search", onRight = onExit, onClick = onSearch)
+        SideNavigationItem(icon = Icons.Filled.Bookmark, label = "Watchlist", selected = selected == "watchlist", onRight = onExit, onClick = onWatchlist)
+        SideNavigationItem(icon = Icons.Filled.Search, label = "Search", selected = selected == "search", onRight = onExit, onClick = onSearch)
     }
 }
 
 @Composable
-fun SideNavigationItem(icon: ImageVector, label: String, expanded: Boolean, selected: Boolean, focusRequester: FocusRequester? = null, onRight: (() -> Boolean)? = null, onClick: () -> Unit) {
+fun SideNavigationItem(icon: ImageVector, label: String, selected: Boolean, focusRequester: FocusRequester? = null, onRight: (() -> Boolean)? = null, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val background = when {
         focused && selected -> Accent.copy(alpha = .94f)
@@ -323,7 +304,7 @@ fun SideNavigationItem(icon: ImageVector, label: String, expanded: Boolean, sele
             .tvActivate(onClick)
             .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.Center,
     ) {
         Icon(
             imageVector = icon,
@@ -331,9 +312,6 @@ fun SideNavigationItem(icon: ImageVector, label: String, expanded: Boolean, sele
             tint = contentColor,
             modifier = Modifier.size(24.dp).width(28.dp),
         )
-        if (expanded) {
-            Text(label, color = contentColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
     }
 }
 
@@ -942,10 +920,12 @@ private fun UserMenuButton(session: Session?, showUpdate: Boolean, onUpdates: ()
         Pill(text = session?.username?.ifBlank { "User" } ?: "User", selected = open, onClick = { open = true })
         if (open) {
             val options = buildList {
-                add(FilterOption("Scan libraries", false) {
-                    onScan()
-                    open = false
-                })
+                if (session?.isAdmin == true) {
+                    add(FilterOption("Update libraries", false) {
+                        onScan()
+                        open = false
+                    })
+                }
                 if (showUpdate) {
                     add(FilterOption("Update app", false) {
                         onUpdates()
@@ -1234,6 +1214,61 @@ fun CuratedLanding(
 }
 
 private const val HomeShelfLimit = 10
+
+@Composable
+fun ItemShelfView(
+    session: Session?,
+    title: String,
+    items: List<PopItem>,
+    completedItems: Set<Long>,
+    watchlistItems: Set<Long>,
+    onBack: () -> Unit,
+    onItem: (PopItem) -> Unit,
+    onItemMenu: (PopItem, FocusRequester?) -> Unit,
+) {
+    var initialFocusPending by remember(items.firstOrNull()?.id) { mutableStateOf(true) }
+    Column(Modifier.fillMaxSize().background(Bg)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = .46f))
+                .padding(horizontal = 28.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Pill("Back", selected = false, onClick = onBack)
+            Text(title, color = Accent, fontSize = 18.sp, fontWeight = FontWeight.Black)
+            Text("${items.size} items", color = Muted, fontSize = 12.sp)
+        }
+        if (items.isEmpty()) {
+            EmptyState("No items")
+            return@Column
+        }
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(122.dp),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 32.dp, vertical = 18.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+            gridItemsIndexed(items, key = { _, item -> item.id }) { index, item ->
+                val requester = remember { FocusRequester() }
+                val focusNow = initialFocusPending && index == 0
+                ItemCard(
+                    session = session,
+                    item = item,
+                    watched = completedItems.contains(item.id),
+                    watchlisted = watchlistItems.contains(item.id),
+                    autoFocus = focusNow,
+                    focusRequester = requester,
+                    onFocus = { if (focusNow) initialFocusPending = false },
+                    onClick = { onItem(item) },
+                    onLongClick = { onItemMenu(item, requester) },
+                )
+            }
+        }
+    }
+}
 
 @Composable
 fun MovieLanding(session: Session?, title: String, items: List<PopItem>, onItem: (PopItem) -> Unit) {

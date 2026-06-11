@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"popcorn/internal/media"
 )
@@ -13,12 +14,9 @@ func (a *App) watchlistGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	watchlist, err := a.store.ListWatchlist(r.Context(), user.ID, limit)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, watchlist)
+	a.writeCachedJSON(w, r, cacheKey(r, "watchlist", user.ID), 15*time.Second, func() (any, error) {
+		return a.store.ListWatchlist(r.Context(), user.ID, limit)
+	})
 }
 
 func (a *App) watchlistItemSave(w http.ResponseWriter, r *http.Request) {
@@ -34,6 +32,7 @@ func (a *App) watchlistItemSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	a.invalidateResponseCache()
 	go a.traktSyncWatchlistItems(user.ID, []media.Item{item}, false)
 	writeJSON(w, http.StatusOK, map[string]any{"itemId": item.ID, "watchlisted": true})
 }
@@ -51,6 +50,7 @@ func (a *App) watchlistItemDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	a.invalidateResponseCache()
 	go a.traktSyncWatchlistItems(user.ID, []media.Item{item}, true)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -68,6 +68,7 @@ func (a *App) watchlistShowSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	a.invalidateResponseCache()
 	go a.traktSyncWatchlistShows(user.ID, []media.ShowSummary{show}, false)
 	writeJSON(w, http.StatusOK, map[string]any{"libraryId": show.LibraryID, "showTitle": show.Title, "watchlisted": true})
 }
@@ -85,6 +86,7 @@ func (a *App) watchlistShowDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	a.invalidateResponseCache()
 	go a.traktSyncWatchlistShows(user.ID, []media.ShowSummary{show}, true)
 	writeJSON(w, http.StatusOK, map[string]any{"libraryId": show.LibraryID, "showTitle": show.Title, "watchlisted": false})
 }

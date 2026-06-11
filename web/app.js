@@ -55,6 +55,9 @@ let currentMinRating = 0;
 let currentSeason = null;
 let libraryGenres = [];
 let pageHasNext = false;
+let scanPollTimer = 0;
+let lastScanSignature = "";
+let scanRefreshInFlight = false;
 let homeData = {
   movies: [],
   shows: [],
@@ -86,12 +89,14 @@ function setAuthenticated(user, token) {
   authScreen.classList.add("hidden");
   appShell.classList.remove("hidden");
   renderUserPanel();
+  startScanStatusPolling();
 }
 
 function setUnauthenticated(message = "") {
   currentUser = null;
   authToken = "";
   localStorage.removeItem("popcornToken");
+  stopScanStatusPolling();
   appShell.classList.add("hidden");
   authScreen.classList.remove("hidden");
   loginError.textContent = message;
@@ -114,12 +119,14 @@ function renderUserPanel() {
     el("span", "user-menu-caret", "▾"),
   );
   const actions = el("div", "user-menu-popover");
-  const scan = el("button", "side-btn", "Scan Libraries");
-  scan.type = "button";
-  scan.addEventListener("click", () => {
-    scanLibraries(scan).catch(console.error);
-  });
-  actions.append(scan);
+  if (currentUser?.isAdmin) {
+    const scan = el("button", "side-btn", "Update Libraries");
+    scan.type = "button";
+    scan.addEventListener("click", () => {
+      scanLibraries(scan).catch(console.error);
+    });
+    actions.append(scan);
+  }
   const settings = el("button", "side-btn", "Settings");
   settings.type = "button";
   settings.addEventListener("click", () => {
@@ -142,17 +149,102 @@ async function scanLibraries(button) {
   const oldLabel = button?.textContent || "";
   if (button) {
     button.disabled = true;
-    button.textContent = "Scanning...";
+    button.textContent = "Updating...";
   }
   try {
     await api("/api/scan", { method: "POST" });
-    setTimeout(() => loadCurrentView().catch(console.error), 1500);
+    await waitForLibraryUpdate();
+    await refreshCurrentRoute();
   } finally {
     if (button) {
       button.disabled = false;
       button.textContent = oldLabel;
     }
   }
+}
+
+function scanSignature(statuses) {
+  return (statuses || [])
+    .filter((status) => status?.finishedAt)
+    .map((status) => [
+      status.libraryId || "",
+      status.finishedAt || "",
+      status.status || "",
+      status.mediaFound || 0,
+      status.itemsImported || 0,
+      status.errors || 0,
+    ].join(":"))
+    .sort()
+    .join("|");
+}
+
+function scanRunning(statuses) {
+  return (statuses || []).some((status) => status?.status === "running");
+}
+
+async function scanStatus() {
+  return api("/api/scan").catch(() => []);
+}
+
+function startScanStatusPolling() {
+  if (scanPollTimer) return;
+  scanStatus().then((statuses) => {
+    lastScanSignature = scanSignature(statuses);
+  }).catch(() => {});
+  scanPollTimer = window.setInterval(() => {
+    refreshAfterCompletedScan().catch(console.error);
+  }, 10000);
+}
+
+function stopScanStatusPolling() {
+  if (scanPollTimer) {
+    clearInterval(scanPollTimer);
+    scanPollTimer = 0;
+  }
+  lastScanSignature = "";
+  scanRefreshInFlight = false;
+}
+
+async function refreshAfterCompletedScan() {
+  if (!authToken || scanRefreshInFlight) return;
+  const statuses = await scanStatus();
+  if (scanRunning(statuses)) return;
+  const signature = scanSignature(statuses);
+  if (!signature) return;
+  if (!lastScanSignature) {
+    lastScanSignature = signature;
+    return;
+  }
+  if (signature === lastScanSignature) return;
+  lastScanSignature = signature;
+  scanRefreshInFlight = true;
+  try {
+    await refreshCurrentRoute();
+  } finally {
+    scanRefreshInFlight = false;
+  }
+}
+
+async function waitForLibraryUpdate() {
+  const started = Date.now();
+  let sawRunning = false;
+  const previous = lastScanSignature;
+  while (Date.now() - started < 30 * 60 * 1000) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const statuses = await scanStatus();
+    const running = scanRunning(statuses);
+    sawRunning = sawRunning || running;
+    const signature = scanSignature(statuses);
+    if (signature && signature !== previous && !running) {
+      lastScanSignature = signature;
+      return statuses;
+    }
+    if (sawRunning && !running) {
+      if (signature) lastScanSignature = signature;
+      return statuses;
+    }
+  }
+  return [];
 }
 
 function closeUserMenu() {
@@ -589,6 +681,15 @@ async function loadCurrentView(skipHistory = false) {
     await renderSettings(skipHistory);
   } else {
     await loadLibraryPage(skipHistory);
+  }
+}
+
+async function refreshCurrentRoute() {
+  const state = history.state || routeFromLocation();
+  if (state?.view) {
+    await navigate(state, true);
+  } else {
+    await loadCurrentView(true);
   }
 }
 

@@ -32,8 +32,8 @@ val BandwidthOptions = listOf(
     BandwidthOption("15 mbit", 15000),
 )
 
-data class Session(val server: String, val token: String, val username: String = "")
-data class User(val id: Long, val username: String, val displayName: String)
+data class Session(val server: String, val token: String, val username: String = "", val isAdmin: Boolean = false)
+data class User(val id: Long, val username: String, val displayName: String, val isAdmin: Boolean)
 data class Library(val id: String, val name: String, val type: String)
 
 data class PlaybackPlan(
@@ -56,6 +56,14 @@ data class AlphabetEntry(val letter: String, val offset: Int, val count: Int)
 data class SidecarStatus(
     val trailer: Boolean = false,
     val theme: Boolean = false,
+)
+data class ScanStatus(
+    val libraryId: String,
+    val status: String,
+    val finishedAt: String,
+    val mediaFound: Long,
+    val itemsImported: Long,
+    val errors: Long,
 )
 
 data class ShowSummary(
@@ -89,6 +97,19 @@ data class SeasonSummary(
 data class PlaybackProgress(val itemId: Long, val positionMs: Long, val durationMs: Long, val completed: Boolean)
 data class ShowProgress(val libraryId: String, val showTitle: String, val episodeCount: Int, val completedCount: Int, val completed: Boolean)
 data class Watchlist(val items: List<PopItem>, val shows: List<ShowSummary>)
+data class HomePayload(
+    val user: User,
+    val libraries: List<Library>,
+    val homeMovies: List<PopItem>,
+    val homeShows: List<ShowSummary>,
+    val recentMovies: List<PopItem>,
+    val recentShows: List<ShowSummary>,
+    val continueMovies: List<PopItem>,
+    val continueEpisodes: List<PopItem>,
+    val progress: List<PlaybackProgress>,
+    val showProgress: List<ShowProgress>,
+    val watchlist: Watchlist,
+)
 data class RemoteCommand(val id: Long, val type: String, val payload: JSONObject)
 data class PlayerRemoteCommand(val id: Long, val type: String, val payload: JSONObject)
 data class QRLoginStart(val code: String, val expiresAt: String)
@@ -187,6 +208,7 @@ sealed interface Screen {
     data object Watchlist : Screen
     data object Updates : Screen
     data class LibraryPage(val library: Library) : Screen
+    data class ItemShelf(val title: String, val items: List<PopItem>) : Screen
     data object Search : Screen
     data class Show(val show: ShowSummary, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null) : Screen
     data class Season(val show: ShowSummary, val season: SeasonSummary, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null) : Screen

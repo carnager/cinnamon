@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"popcorn/internal/auth"
@@ -43,7 +45,21 @@ type App struct {
 	failHints   map[string]time.Time
 	loginMu     sync.Mutex
 	loginFails  map[string]loginAttempt
+	cache       responseCache
+	cacheGen    atomic.Uint64
 }
+
+type responseCache struct {
+	mu      sync.Mutex
+	entries map[string]cachedResponse
+}
+
+type cachedResponse struct {
+	body      []byte
+	expiresAt time.Time
+}
+
+type authUserContextKey struct{}
 
 type loginAttempt struct {
 	Failures     int
@@ -64,6 +80,7 @@ func New(opts Options) *App {
 		plans:       map[string]PlaybackPlan{},
 		failHints:   map[string]time.Time{},
 		loginFails:  map[string]loginAttempt{},
+		cache:       responseCache{entries: map[string]cachedResponse{}},
 	}
 }
 
@@ -89,6 +106,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /api/app/tv/upload", a.uploadTVApp)
 	mux.HandleFunc("POST /api/app/companion/upload", a.uploadCompanionApp)
 	mux.HandleFunc("GET /api/libraries", a.libraries)
+	mux.HandleFunc("GET /api/home", a.home)
 	mux.HandleFunc("POST /api/scan", a.scan)
 	mux.HandleFunc("GET /api/scan", a.scanStatus)
 	mux.HandleFunc("GET /api/items", a.items)
@@ -143,6 +161,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/devices/{id}/commands", a.remoteGetCommands)
 	mux.HandleFunc("PUT /api/devices/{id}/state", a.remotePutState)
 	mux.HandleFunc("GET /api/devices/{id}/state", a.remoteGetState)
+	mux.HandleFunc("POST /api/client/log", a.clientLog)
 	mux.HandleFunc("GET /api/items/{id}/streams", a.streams)
 	mux.HandleFunc("POST /api/playback/plan", a.playbackPlan)
 	mux.HandleFunc("POST /api/playback/failure", a.playbackFailure)
@@ -156,11 +175,11 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/items/{id}/hls/{session}/{segment}", a.hlsSegment)
 	mux.HandleFunc("DELETE /api/hls/{session}", a.hlsStop)
 	mux.HandleFunc("GET /api/items/{id}/image/{kind}", a.image)
-	mux.Handle("GET /web", noCache(popcornWebFiles("/web")))
-	mux.Handle("GET /web/", noCache(popcornWebFiles("/web")))
-	mux.Handle("GET /popcorn", noCache(popcornWebFiles("/popcorn")))
-	mux.Handle("GET /popcorn/", noCache(popcornWebFiles("/popcorn")))
-	mux.Handle("/", noCache(popcornWebFiles("")))
+	mux.Handle("GET /web", popcornWebFiles("/web"))
+	mux.Handle("GET /web/", popcornWebFiles("/web"))
+	mux.Handle("GET /popcorn", popcornWebFiles("/popcorn"))
+	mux.Handle("GET /popcorn/", popcornWebFiles("/popcorn"))
+	mux.Handle("/", popcornWebFiles(""))
 	return logging(a.log, a.authGate(mux))
 }
 
@@ -171,9 +190,11 @@ func (a *App) authGate(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if _, ok := a.requireUser(w, r); !ok {
+		user, ok := a.requireUser(w, r)
+		if !ok {
 			return
 		}
+		r = r.WithContext(context.WithValue(r.Context(), authUserContextKey{}, user))
 		next.ServeHTTP(w, r)
 	})
 }
@@ -213,17 +234,22 @@ func (a *App) libraries(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) scan(w http.ResponseWriter, r *http.Request) {
+	if _, ok := a.requireAdmin(w, r); !ok {
+		return
+	}
 	release, ok := media.TryStartScan()
 	if !ok {
 		http.Error(w, "scan already running", http.StatusConflict)
 		return
 	}
+	a.invalidateResponseCache()
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.ScanTimeout)
 		defer cancel()
 		if err := media.NewScanner(a.cfg, a.store, a.log).ScanWithLease(ctx, release); err != nil {
-			a.log.Error("scan failed", "error", err)
+			a.log.Error("library update failed", "error", err)
 		}
+		a.invalidateResponseCache()
 	}()
 	w.WriteHeader(http.StatusAccepted)
 }
@@ -245,58 +271,50 @@ func (a *App) items(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	minRating, _ := strconv.ParseFloat(r.URL.Query().Get("minRating"), 64)
-	items, err := a.store.ListItemsForUser(r.Context(), r.URL.Query().Get("libraryId"), r.URL.Query().Get("q"), r.URL.Query().Get("genre"), r.URL.Query().Get("sort"), r.URL.Query().Get("seen"), user.ID, minRating, limit, offset)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, items)
+	a.writeCachedJSON(w, r, cacheKey(r, "items", user.ID), 20*time.Second, func() (any, error) {
+		return a.store.ListItemsForUser(r.Context(), r.URL.Query().Get("libraryId"), r.URL.Query().Get("q"), r.URL.Query().Get("genre"), r.URL.Query().Get("sort"), r.URL.Query().Get("seen"), user.ID, minRating, limit, offset)
+	})
 }
 
 func (a *App) genres(w http.ResponseWriter, r *http.Request) {
-	genres, err := a.store.ListGenres(r.Context(), r.URL.Query().Get("libraryId"))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, genres)
+	a.writeCachedJSON(w, r, cacheKey(r, "genres"), 1*time.Minute, func() (any, error) {
+		return a.store.ListGenres(r.Context(), r.URL.Query().Get("libraryId"))
+	})
 }
 
 func (a *App) alphabet(w http.ResponseWriter, r *http.Request) {
-	entries, err := a.store.AlphabetIndex(r.Context(), media.AlphabetOptions{
-		LibraryID: r.URL.Query().Get("libraryId"),
-		Kind:      r.URL.Query().Get("kind"),
-		Genre:     r.URL.Query().Get("genre"),
+	a.writeCachedJSON(w, r, cacheKey(r, "alphabet"), 1*time.Minute, func() (any, error) {
+		return a.store.AlphabetIndex(r.Context(), media.AlphabetOptions{
+			LibraryID: r.URL.Query().Get("libraryId"),
+			Kind:      r.URL.Query().Get("kind"),
+			Genre:     r.URL.Query().Get("genre"),
+		})
 	})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, entries)
 }
 
 func (a *App) search(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	items, err := a.store.SearchItems(r.Context(), media.SearchOptions{
-		Query:     r.URL.Query().Get("q"),
-		LibraryID: r.URL.Query().Get("libraryId"),
-		Kind:      r.URL.Query().Get("kind"),
-		Genre:     r.URL.Query().Get("genre"),
-		Sort:      r.URL.Query().Get("sort"),
-		MinRating: queryFloat(r, "minRating"),
-		Limit:     limit,
-		Offset:    offset,
-	})
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"query":  r.URL.Query().Get("q"),
-		"items":  items,
-		"limit":  limit,
-		"offset": offset,
+	a.writeCachedJSON(w, r, cacheKey(r, "search"), 20*time.Second, func() (any, error) {
+		items, err := a.store.SearchItems(r.Context(), media.SearchOptions{
+			Query:     r.URL.Query().Get("q"),
+			LibraryID: r.URL.Query().Get("libraryId"),
+			Kind:      r.URL.Query().Get("kind"),
+			Genre:     r.URL.Query().Get("genre"),
+			Sort:      r.URL.Query().Get("sort"),
+			MinRating: queryFloat(r, "minRating"),
+			Limit:     limit,
+			Offset:    offset,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"query":  r.URL.Query().Get("q"),
+			"items":  items,
+			"limit":  limit,
+			"offset": offset,
+		}, nil
 	})
 }
 
@@ -307,12 +325,9 @@ func (a *App) tvShows(w http.ResponseWriter, r *http.Request) {
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	shows, err := a.store.ListShowsForUser(r.Context(), r.URL.Query().Get("libraryId"), r.URL.Query().Get("q"), r.URL.Query().Get("genre"), r.URL.Query().Get("sort"), r.URL.Query().Get("seen"), user.ID, queryFloat(r, "minRating"), limit, offset)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, shows)
+	a.writeCachedJSON(w, r, cacheKey(r, "tvShows", user.ID), 20*time.Second, func() (any, error) {
+		return a.store.ListShowsForUser(r.Context(), r.URL.Query().Get("libraryId"), r.URL.Query().Get("q"), r.URL.Query().Get("genre"), r.URL.Query().Get("sort"), r.URL.Query().Get("seen"), user.ID, queryFloat(r, "minRating"), limit, offset)
+	})
 }
 
 func (a *App) actorDetail(w http.ResponseWriter, r *http.Request) {
@@ -330,32 +345,32 @@ func (a *App) actorDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	info := a.actorInfo(r.Context(), actor)
-	movies, err := a.store.ListItemsByActor(r.Context(), actor.Name, "", "movie", "recent", 60, 0)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	shows, err := a.store.ListShowsByActor(r.Context(), actor.Name, "", "recent", 60, 0)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	apiActor := a.actorForResponse(actor)
-	profileURL := a.actorProfileURLFromCredits(r.Context(), actor.Name, movies, shows)
-	if profileURL != "" {
-		apiActor.Thumb = profileURL
-	} else if strings.TrimSpace(apiActor.Thumb) != "" {
-		profileURL = strings.TrimSpace(apiActor.Thumb)
-	} else {
-		profileURL = tmdbProfileURL(info.ProfilePath)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"actor":      apiActor,
-		"info":       info,
-		"profileUrl": profileURL,
-		"movies":     movies,
-		"shows":      shows,
+	a.writeCachedJSON(w, r, cacheKey(r, "actor", actor.Name), 1*time.Minute, func() (any, error) {
+		info := a.actorInfo(r.Context(), actor)
+		movies, err := a.store.ListItemsByActor(r.Context(), actor.Name, "", "movie", "recent", 60, 0)
+		if err != nil {
+			return nil, err
+		}
+		shows, err := a.store.ListShowsByActor(r.Context(), actor.Name, "", "recent", 60, 0)
+		if err != nil {
+			return nil, err
+		}
+		apiActor := a.actorForResponse(actor)
+		profileURL := a.actorProfileURLFromCredits(r.Context(), actor.Name, movies, shows)
+		if profileURL != "" {
+			apiActor.Thumb = profileURL
+		} else if strings.TrimSpace(apiActor.Thumb) != "" {
+			profileURL = strings.TrimSpace(apiActor.Thumb)
+		} else {
+			profileURL = tmdbProfileURL(info.ProfilePath)
+		}
+		return map[string]any{
+			"actor":      apiActor,
+			"info":       info,
+			"profileUrl": profileURL,
+			"movies":     movies,
+			"shows":      shows,
+		}, nil
 	})
 }
 
@@ -398,12 +413,9 @@ func (a *App) tvSeasons(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "libraryId and showTitle are required", http.StatusBadRequest)
 		return
 	}
-	seasons, err := a.store.ListSeasons(r.Context(), libraryID, showTitle)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, seasons)
+	a.writeCachedJSON(w, r, cacheKey(r, "tvSeasons"), 30*time.Second, func() (any, error) {
+		return a.store.ListSeasons(r.Context(), libraryID, showTitle)
+	})
 }
 
 func (a *App) tvShowActors(w http.ResponseWriter, r *http.Request) {
@@ -413,12 +425,13 @@ func (a *App) tvShowActors(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "libraryId and showTitle are required", http.StatusBadRequest)
 		return
 	}
-	actors, err := a.store.ListShowActors(r.Context(), libraryID, showTitle)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, a.actorsForShowResponse(r.Context(), libraryID, showTitle, actors))
+	a.writeCachedJSON(w, r, cacheKey(r, "tvShowActors"), 1*time.Minute, func() (any, error) {
+		actors, err := a.store.ListShowActors(r.Context(), libraryID, showTitle)
+		if err != nil {
+			return nil, err
+		}
+		return a.actorsForShowResponse(r.Context(), libraryID, showTitle, actors), nil
+	})
 }
 
 func (a *App) tvSeasonActors(w http.ResponseWriter, r *http.Request) {
@@ -429,12 +442,13 @@ func (a *App) tvSeasonActors(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "libraryId, showTitle, and season are required", http.StatusBadRequest)
 		return
 	}
-	actors, err := a.store.ListSeasonActors(r.Context(), libraryID, showTitle, season)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, a.actorsForShowResponse(r.Context(), libraryID, showTitle, actors))
+	a.writeCachedJSON(w, r, cacheKey(r, "tvSeasonActors"), 1*time.Minute, func() (any, error) {
+		actors, err := a.store.ListSeasonActors(r.Context(), libraryID, showTitle, season)
+		if err != nil {
+			return nil, err
+		}
+		return a.actorsForShowResponse(r.Context(), libraryID, showTitle, actors), nil
+	})
 }
 
 func queryFloat(r *http.Request, key string) float64 {
@@ -461,12 +475,9 @@ func (a *App) tvEpisodes(w http.ResponseWriter, r *http.Request) {
 		}
 		season = n
 	}
-	episodes, err := a.store.ListEpisodes(r.Context(), libraryID, showTitle, season)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, http.StatusOK, episodes)
+	a.writeCachedJSON(w, r, cacheKey(r, "tvEpisodes"), 30*time.Second, func() (any, error) {
+		return a.store.ListEpisodes(r.Context(), libraryID, showTitle, season)
+	})
 }
 
 func (a *App) item(w http.ResponseWriter, r *http.Request) {
@@ -474,9 +485,11 @@ func (a *App) item(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	item.Actors = a.enrichedItemActors(r.Context(), item)
-	item.Actors = a.actorsForItemResponse(item, item.Actors)
-	writeJSON(w, http.StatusOK, item)
+	a.writeCachedJSON(w, r, cacheKey(r, "item", item.ID), 30*time.Second, func() (any, error) {
+		item.Actors = a.enrichedItemActors(r.Context(), item)
+		item.Actors = a.actorsForItemResponse(item, item.Actors)
+		return item, nil
+	})
 }
 
 func (a *App) streams(w http.ResponseWriter, r *http.Request) {
@@ -604,7 +617,7 @@ func (a *App) image(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
 	http.ServeFile(w, r, path)
 }
 
@@ -823,18 +836,84 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+func (a *App) writeCachedJSON(w http.ResponseWriter, r *http.Request, key string, ttl time.Duration, build func() (any, error)) {
+	cacheKey := strconv.FormatUint(a.cacheGen.Load(), 10) + ":" + key
+	if body, ok := a.cachedResponse(cacheKey); ok {
+		writeJSONBytes(w, http.StatusOK, body)
+		return
+	}
+	value, err := build()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	body, err := json.Marshal(value)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	body = append(body, '\n')
+	a.storeCachedResponse(cacheKey, body, ttl)
+	writeJSONBytes(w, http.StatusOK, body)
+}
+
+func writeJSONBytes(w http.ResponseWriter, status int, body []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
+}
+
+func (a *App) cachedResponse(key string) ([]byte, bool) {
+	now := time.Now()
+	a.cache.mu.Lock()
+	defer a.cache.mu.Unlock()
+	entry, ok := a.cache.entries[key]
+	if !ok {
+		return nil, false
+	}
+	if now.After(entry.expiresAt) {
+		delete(a.cache.entries, key)
+		return nil, false
+	}
+	return append([]byte(nil), entry.body...), true
+}
+
+func (a *App) storeCachedResponse(key string, body []byte, ttl time.Duration) {
+	if ttl <= 0 {
+		return
+	}
+	a.cache.mu.Lock()
+	defer a.cache.mu.Unlock()
+	if len(a.cache.entries) >= 256 {
+		a.cache.entries = map[string]cachedResponse{}
+	}
+	a.cache.entries[key] = cachedResponse{
+		body:      append([]byte(nil), body...),
+		expiresAt: time.Now().Add(ttl),
+	}
+}
+
+func (a *App) invalidateResponseCache() {
+	a.cacheGen.Add(1)
+	a.cache.mu.Lock()
+	a.cache.entries = map[string]cachedResponse{}
+	a.cache.mu.Unlock()
+}
+
+func cacheKey(r *http.Request, parts ...any) string {
+	values := make([]string, 0, len(parts)+3)
+	values = append(values, r.Method, r.URL.Path, r.URL.RawQuery)
+	for _, part := range parts {
+		values = append(values, fmt.Sprint(part))
+	}
+	return strings.Join(values, "\x1f")
+}
+
 func logging(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		log.Debug("request", "method", r.Method, "path", r.URL.Path, "elapsed", time.Since(start))
-	})
-}
-
-func noCache(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		next.ServeHTTP(w, r)
 	})
 }
 
@@ -859,6 +938,11 @@ func popcornWebFiles(mount string) http.Handler {
 			_ = f.Close()
 		} else {
 			path = "index.html"
+		}
+		if strings.HasSuffix(path, ".html") {
+			w.Header().Set("Cache-Control", "no-store")
+		} else {
+			w.Header().Set("Cache-Control", "public, max-age=86400")
 		}
 		http.ServeFileFS(w, r, web.Files, path)
 	})

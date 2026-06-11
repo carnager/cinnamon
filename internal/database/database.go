@@ -13,10 +13,12 @@ func Open(path string) (*sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)&_pragma=temp_store(MEMORY)&_pragma=cache_size(-20000)&_pragma=mmap_size(268435456)")
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(8)
+	db.SetMaxIdleConns(8)
 	if err := migrate(db); err != nil {
 		db.Close()
 		return nil, err
@@ -73,6 +75,11 @@ CREATE TABLE IF NOT EXISTS media_items (
 );
 CREATE INDEX IF NOT EXISTS idx_media_library_sort ON media_items(library_id, sort_title);
 CREATE INDEX IF NOT EXISTS idx_media_updated ON media_items(updated_at);
+CREATE INDEX IF NOT EXISTS idx_media_library_kind_sort ON media_items(library_id, kind, sort_title, season_number, episode_number);
+CREATE INDEX IF NOT EXISTS idx_media_library_kind_updated ON media_items(library_id, kind, updated_at);
+CREATE INDEX IF NOT EXISTS idx_media_library_kind_mtime ON media_items(library_id, kind, mtime_unix);
+CREATE INDEX IF NOT EXISTS idx_media_library_kind_rating ON media_items(library_id, kind, rating);
+CREATE INDEX IF NOT EXISTS idx_media_path_library ON media_items(path, library_id);
 CREATE TABLE IF NOT EXISTS media_streams (
 	item_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
 	stream_index INTEGER NOT NULL,
@@ -150,6 +157,8 @@ CREATE TABLE IF NOT EXISTS media_actors (
 CREATE INDEX IF NOT EXISTS idx_media_actors_item ON media_actors(scope, item_id, sort_order);
 CREATE INDEX IF NOT EXISTS idx_media_actors_show ON media_actors(scope, library_id, show_title, sort_order);
 CREATE INDEX IF NOT EXISTS idx_media_actors_season ON media_actors(scope, library_id, show_title, season_number, sort_order);
+CREATE INDEX IF NOT EXISTS idx_media_actors_name_item ON media_actors(name, scope, item_id);
+CREATE INDEX IF NOT EXISTS idx_media_actors_name_show ON media_actors(name, scope, library_id, show_title);
 CREATE TABLE IF NOT EXISTS actor_metadata_cache (
 	name TEXT PRIMARY KEY,
 	tmdb_id TEXT,
@@ -315,6 +324,11 @@ CREATE TABLE IF NOT EXISTS app_updates (
 		`ALTER TABLE media_items ADD COLUMN episode_number INTEGER`,
 		`ALTER TABLE media_items ADD COLUMN episode_title TEXT`,
 		`CREATE INDEX IF NOT EXISTS idx_media_show ON media_items(library_id, show_title, season_number, episode_number)`,
+		`CREATE INDEX IF NOT EXISTS idx_media_library_kind_sort ON media_items(library_id, kind, sort_title, season_number, episode_number)`,
+		`CREATE INDEX IF NOT EXISTS idx_media_library_kind_updated ON media_items(library_id, kind, updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_media_library_kind_mtime ON media_items(library_id, kind, mtime_unix)`,
+		`CREATE INDEX IF NOT EXISTS idx_media_library_kind_rating ON media_items(library_id, kind, rating)`,
+		`CREATE INDEX IF NOT EXISTS idx_media_path_library ON media_items(path, library_id)`,
 		`CREATE TABLE IF NOT EXISTS media_streams (
 			item_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
 			stream_index INTEGER NOT NULL,
@@ -392,6 +406,8 @@ CREATE TABLE IF NOT EXISTS app_updates (
 		`CREATE INDEX IF NOT EXISTS idx_media_actors_item ON media_actors(scope, item_id, sort_order)`,
 		`CREATE INDEX IF NOT EXISTS idx_media_actors_show ON media_actors(scope, library_id, show_title, sort_order)`,
 		`CREATE INDEX IF NOT EXISTS idx_media_actors_season ON media_actors(scope, library_id, show_title, season_number, sort_order)`,
+		`CREATE INDEX IF NOT EXISTS idx_media_actors_name_item ON media_actors(name, scope, item_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_media_actors_name_show ON media_actors(name, scope, library_id, show_title)`,
 		`CREATE TABLE IF NOT EXISTS actor_metadata_cache (
 			name TEXT PRIMARY KEY,
 			tmdb_id TEXT,

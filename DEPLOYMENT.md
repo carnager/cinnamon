@@ -14,8 +14,9 @@ when `JAVA_HOME` is unset. Keep using Java 21 for Android builds; Java 26
 currently trips Android's JDK image transform during APK builds.
 
 The Android TV release APK is intentionally optimized for Shield-style devices:
-it is built as `arm64-v8a` only and uses release shrinking/R8. `scripts/release`
-fails if the TV APK accidentally contains extra native ABIs.
+it is built as `arm64-v8a` plus `armeabi-v7a` for older 32-bit Shield userspace
+support, and uses release shrinking/R8. `scripts/release` fails if the TV APK
+accidentally contains a different native ABI set.
 
 The script writes everything to:
 

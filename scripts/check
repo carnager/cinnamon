@@ -5,7 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 run_go="${POPCORN_CHECK_GO:-1}"
 run_android="${POPCORN_CHECK_ANDROID:-1}"
-android_tasks="${POPCORN_CHECK_ANDROID_TASKS:-:app:assembleRelease :companion:assembleRelease}"
+android_tasks="${POPCORN_CHECK_ANDROID_TASKS:-:app:assembleDebug :companion:assembleDebug}"
 
 if [[ -z "${JAVA_HOME:-}" && -d /usr/lib/jvm/java-21-openjdk ]]; then
   export JAVA_HOME=/usr/lib/jvm/java-21-openjdk

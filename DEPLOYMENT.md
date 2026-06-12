@@ -8,6 +8,14 @@ Build a release bundle from the repo root:
 scripts/release
 ```
 
+For a server/desktop-only bundle that does not require Android tooling:
+
+```sh
+scripts/release --server-only
+```
+
+Use `scripts/release --help` for all build flags.
+
 Android builds use the checked-in Gradle wrapper at `android-tv/gradlew`.
 The release and check scripts automatically select `/usr/lib/jvm/java-21-openjdk`
 when `JAVA_HOME` is unset. Keep using Java 21 for Android builds; Java 26
@@ -38,17 +46,54 @@ POPCORN_ANDROID_VERSION_NAME=v0.1.0-39-g6ce8f7d-dirty \
 scripts/release
 ```
 
+## Android Release Signing
+
+Android release builds require a real signing key. Debug keys are not used for
+release APKs.
+
+By default Gradle and `scripts/release` read:
+
+```text
+~/.local/android/release-keys/popcorn.properties
+```
+
+with these keys:
+
+```text
+POPCORN_ANDROID_STORE_FILE=/home/user/.local/android/release-keys/release.keystore
+POPCORN_ANDROID_STORE_PASSWORD=...
+POPCORN_ANDROID_KEY_ALIAS=popcorn
+POPCORN_ANDROID_KEY_PASSWORD=...
+```
+
+You can override the properties file with
+`POPCORN_ANDROID_SIGNING_PROPERTIES=/path/to/signing.properties`, or set the
+four `POPCORN_ANDROID_*` signing variables directly in the environment.
+
+The keystore and properties file must stay out of git.
+
 ## Release File Names
 
-The release script creates:
+The release script always creates:
 
 ```text
 dist/<git-version>/popcornd
+dist/<git-version>/popcorn-mpv
+dist/<git-version>/config.example.toml
+dist/<git-version>/config.package.toml
+dist/<git-version>/popcornd.service
+dist/<git-version>/popcorn.sysusers
+dist/<git-version>/popcorn.tmpfiles
+dist/<git-version>/PKGBUILD
+dist/<git-version>/ARCH.md
+dist/<git-version>/SHA256SUMS
+```
+
+Full Android releases also create:
+
+```text
 dist/<git-version>/popcorn-tv-<git-version>.apk
 dist/<git-version>/popcorn-companion-<git-version>.apk
-dist/<git-version>/config.example.toml
-dist/<git-version>/popcornd.service
-dist/<git-version>/SHA256SUMS
 ```
 
 Example:
@@ -56,6 +101,26 @@ Example:
 ```text
 dist/v0.1.0-39-g6ce8f7d-dirty/popcorn-tv-v0.1.0-39-g6ce8f7d-dirty.apk
 dist/v0.1.0-39-g6ce8f7d-dirty/popcorn-companion-v0.1.0-39-g6ce8f7d-dirty.apk
+```
+
+## Arch Package
+
+Build and install from the checkout:
+
+```sh
+cd packaging/arch
+makepkg -si
+sudoedit /etc/popcorn/config.toml
+sudo systemctl enable --now popcornd
+```
+
+The package installs:
+
+```text
+/usr/bin/popcornd
+/usr/bin/popcorn-mpv
+/etc/popcorn/config.toml
+/usr/lib/systemd/system/popcornd.service
 ```
 
 ## APK Updates

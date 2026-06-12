@@ -1,0 +1,52 @@
+# Maintainer: Popcorn maintainers
+pkgname=popcorn-media
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Local media server with web, Android TV, phone, and rofi/mpv clients'
+arch=('x86_64' 'aarch64')
+url='https://github.com/carnager/popcorn'
+license=('custom')
+depends=('ffmpeg' 'mpv' 'rofi')
+makedepends=('go' 'git')
+optdepends=(
+  'intel-media-driver: Intel Quick Sync transcoding'
+  'libva-mesa-driver: VAAPI transcoding on Mesa drivers'
+  'fzf: terminal selector for popcorn-mpv -selector fzf'
+)
+backup=('etc/popcorn/config.toml')
+_srcroot="${POPCORN_SRC:-$(realpath "$startdir/../..")}"
+source=("popcorn::git+file://${_srcroot}")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd popcorn
+  git describe --tags --always | sed 's/^v//;s/-/+/g'
+}
+
+build() {
+  cd popcorn
+  local version commit build_time
+  version="$(git describe --tags --always --dirty)"
+  commit="$(git rev-parse --short HEAD)"
+  build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  export CGO_ENABLED=0
+  export GOFLAGS='-trimpath -mod=readonly -modcacherw'
+  go build -ldflags "-s -w -X popcorn/internal/version.Version=${version} -X popcorn/internal/version.Commit=${commit} -X popcorn/internal/version.BuildTime=${build_time}" -o popcornd ./cmd/popcornd
+  go build -ldflags "-s -w" -o popcorn-mpv ./cmd/popcorn-mpv
+}
+
+package() {
+  cd popcorn
+  install -Dm755 popcornd "$pkgdir/usr/bin/popcornd"
+  install -Dm755 popcorn-mpv "$pkgdir/usr/bin/popcorn-mpv"
+
+  install -Dm644 packaging/config.package.toml "$pkgdir/etc/popcorn/config.toml"
+  install -Dm644 packaging/popcornd.service "$pkgdir/usr/lib/systemd/system/popcornd.service"
+  install -Dm644 packaging/popcorn.sysusers "$pkgdir/usr/lib/sysusers.d/popcorn.conf"
+  install -Dm644 packaging/popcorn.tmpfiles "$pkgdir/usr/lib/tmpfiles.d/popcorn.conf"
+
+  install -Dm644 README.md "$pkgdir/usr/share/doc/popcorn/README.md"
+  install -Dm644 DEPLOYMENT.md "$pkgdir/usr/share/doc/popcorn/DEPLOYMENT.md"
+  install -Dm644 config.example.toml "$pkgdir/usr/share/doc/popcorn/config.example.toml"
+}

@@ -1,0 +1,2 @@
+d /etc/popcorn 0755 root root -
+d /var/lib/popcorn 0750 popcorn popcorn -

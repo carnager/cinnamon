@@ -1,6 +1,7 @@
 package server
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -25,6 +26,9 @@ func TestAPKVersionFromBadgingRejectsMissingMetadata(t *testing.T) {
 func TestAPKVersionFromManifest(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)
 	apkPath := filepath.Clean(filepath.Join(filepath.Dir(file), "..", "..", "dist", "v0.1.0-39-g6ce8f7d-dirty", "popcorn-companion-v0.1.0-39-g6ce8f7d-dirty.apk"))
+	if _, err := os.Stat(apkPath); err != nil {
+		t.Skipf("release APK fixture unavailable: %v", err)
+	}
 	code, name, err := apkVersionFromManifest(apkPath)
 	if err != nil {
 		t.Fatalf("apkVersionFromManifest: %v", err)

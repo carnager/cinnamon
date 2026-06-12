@@ -182,6 +182,9 @@ func (a *App) updateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) requireUser(w http.ResponseWriter, r *http.Request) (auth.User, bool) {
+	if user, ok := r.Context().Value(authUserContextKey{}).(auth.User); ok && user.ID > 0 {
+		return user, true
+	}
 	if a.auth == nil {
 		http.Error(w, "auth unavailable", http.StatusServiceUnavailable)
 		return auth.User{}, false

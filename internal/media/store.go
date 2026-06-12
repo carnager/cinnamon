@@ -62,6 +62,30 @@ func (s *Store) UpsertItem(ctx context.Context, item Item) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := upsertItemTx(ctx, tx, item); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) UpsertItems(ctx context.Context, items []Item) error {
+	if len(items) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, item := range items {
+		if err := upsertItemTx(ctx, tx, item); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func upsertItemTx(ctx context.Context, tx *sql.Tx, item Item) error {
 	if err := reconcileItemIdentityTx(ctx, tx, item); err != nil {
 		return err
 	}
@@ -149,7 +173,7 @@ ON CONFLICT(path) DO UPDATE SET
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func reconcileItemIdentityTx(ctx context.Context, tx *sql.Tx, item Item) error {
@@ -517,24 +541,37 @@ func (s *Store) RemoveMissing(ctx context.Context, libraryID string, seen map[st
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	if len(missing) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	for _, path := range missing {
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM media_items WHERE path = ?`, path); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM media_items WHERE path = ?`, path); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) RemovePaths(ctx context.Context, libraryID string, paths []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	for _, path := range paths {
 		if strings.TrimSpace(path) == "" {
 			continue
 		}
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM media_items WHERE library_id = ? AND path = ?`, libraryID, path); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM media_items WHERE library_id = ? AND path = ?`, libraryID, path); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) RemovePathPrefix(ctx context.Context, libraryID, prefix string) error {
@@ -546,6 +583,22 @@ func (s *Store) RemovePathPrefix(ctx context.Context, libraryID, prefix string) 
 		return err
 	}
 	return nil
+}
+
+func (s *Store) ItemPathExists(ctx context.Context, libraryID, path string) (bool, error) {
+	var exists int
+	err := s.db.QueryRowContext(ctx, `
+SELECT 1
+FROM media_items
+WHERE library_id = ? AND path = ?
+LIMIT 1`, libraryID, path).Scan(&exists)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Store) ListItems(ctx context.Context, libraryID, q, genre, sort string, minRating float64, limit, offset int) ([]Item, error) {
@@ -850,21 +903,28 @@ func showGenreFilterSQL(genres []string) (string, []any) {
 	return "AND (" + strings.Join(clauses, " OR ") + ")", args
 }
 
-const itemSelect = `SELECT id, library_id, path, kind, title, sort_title, COALESCE(original_title, ''), COALESCE(year, 0), COALESCE(duration_ms, 0),
+const itemSelectColumns = `SELECT id, library_id, path, kind, title, sort_title, COALESCE(original_title, ''), COALESCE(year, 0), COALESCE(duration_ms, 0),
 COALESCE(container, ''), COALESCE(video_codec, ''), COALESCE(audio_codec, ''), COALESCE(imdb_id, ''), COALESCE(tmdb_id, ''), COALESCE(tvdb_id, ''), COALESCE(width, 0),
 COALESCE(height, 0), COALESCE(bit_rate, 0), size_bytes, mtime_unix, COALESCE(nfo_path, ''), COALESCE(nfo_mtime_unix, 0), COALESCE(poster_path, ''), COALESCE(poster_mtime_unix, 0), COALESCE(backdrop_path, ''), COALESCE(backdrop_mtime_unix, 0),
 COALESCE(overview, ''), COALESCE(tagline, ''), COALESCE(official_rating, ''), COALESCE(genres, ''), COALESCE(tags, ''),
 COALESCE(studios, ''), COALESCE(directors, ''), COALESCE(writers, ''), COALESCE(countries, ''), COALESCE(rating, 0), COALESCE(premiered, ''),
-COALESCE(show_title, ''), COALESCE(season_number, 0), COALESCE(episode_number, 0), COALESCE(episode_title, ''),
+COALESCE(show_title, ''), COALESCE(season_number, 0), COALESCE(episode_number, 0), COALESCE(episode_title, ''),`
+
+const itemSelect = itemSelectColumns + `
+0`
+
+const itemSelectWithStreamState = itemSelectColumns + `
 EXISTS(SELECT 1 FROM media_streams ms WHERE ms.item_id = id LIMIT 1)`
 
-const itemSelectMI = `SELECT mi.id, mi.library_id, mi.path, mi.kind, mi.title, mi.sort_title, COALESCE(mi.original_title, ''), COALESCE(mi.year, 0), COALESCE(mi.duration_ms, 0),
+const itemSelectMIColumns = `SELECT mi.id, mi.library_id, mi.path, mi.kind, mi.title, mi.sort_title, COALESCE(mi.original_title, ''), COALESCE(mi.year, 0), COALESCE(mi.duration_ms, 0),
 COALESCE(mi.container, ''), COALESCE(mi.video_codec, ''), COALESCE(mi.audio_codec, ''), COALESCE(mi.imdb_id, ''), COALESCE(mi.tmdb_id, ''), COALESCE(mi.tvdb_id, ''), COALESCE(mi.width, 0),
 COALESCE(mi.height, 0), COALESCE(mi.bit_rate, 0), mi.size_bytes, mi.mtime_unix, COALESCE(mi.nfo_path, ''), COALESCE(mi.nfo_mtime_unix, 0), COALESCE(mi.poster_path, ''), COALESCE(mi.poster_mtime_unix, 0), COALESCE(mi.backdrop_path, ''), COALESCE(mi.backdrop_mtime_unix, 0),
 COALESCE(mi.overview, ''), COALESCE(mi.tagline, ''), COALESCE(mi.official_rating, ''), COALESCE(mi.genres, ''), COALESCE(mi.tags, ''),
 COALESCE(mi.studios, ''), COALESCE(mi.directors, ''), COALESCE(mi.writers, ''), COALESCE(mi.countries, ''), COALESCE(mi.rating, 0), COALESCE(mi.premiered, ''),
-COALESCE(mi.show_title, ''), COALESCE(mi.season_number, 0), COALESCE(mi.episode_number, 0), COALESCE(mi.episode_title, ''),
-EXISTS(SELECT 1 FROM media_streams ms WHERE ms.item_id = mi.id LIMIT 1)`
+COALESCE(mi.show_title, ''), COALESCE(mi.season_number, 0), COALESCE(mi.episode_number, 0), COALESCE(mi.episode_title, ''),`
+
+const itemSelectMI = itemSelectMIColumns + `
+0`
 
 func (s *Store) GetItem(ctx context.Context, id int64) (Item, error) {
 	row := s.db.QueryRowContext(ctx, itemSelect+` FROM media_items WHERE id = ?`, id)
@@ -874,6 +934,55 @@ func (s *Store) GetItem(ctx context.Context, id int64) (Item, error) {
 	}
 	item.Actors, err = s.ListItemActors(ctx, item.ID)
 	return item, err
+}
+
+func (s *Store) ItemsByIDs(ctx context.Context, ids []int64) ([]Item, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	seen := map[int64]bool{}
+	orderedIDs := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		orderedIDs = append(orderedIDs, id)
+	}
+	if len(orderedIDs) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(orderedIDs))
+	args := make([]any, len(orderedIDs))
+	for i, id := range orderedIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	rows, err := s.db.QueryContext(ctx, itemSelect+`
+FROM media_items
+WHERE id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byID := map[int64]Item{}
+	for rows.Next() {
+		item, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		byID[item.ID] = item
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]Item, 0, len(byID))
+	for _, id := range orderedIDs {
+		if item, ok := byID[id]; ok {
+			out = append(out, item)
+		}
+	}
+	return out, nil
 }
 
 func (s *Store) AllItems(ctx context.Context) ([]Item, error) {
@@ -894,7 +1003,7 @@ func (s *Store) AllItems(ctx context.Context) ([]Item, error) {
 }
 
 func (s *Store) LibrarySnapshot(ctx context.Context, libraryID string) (map[string]Item, error) {
-	rows, err := s.db.QueryContext(ctx, itemSelect+` FROM media_items WHERE library_id = ?`, libraryID)
+	rows, err := s.db.QueryContext(ctx, itemSelectWithStreamState+` FROM media_items WHERE library_id = ?`, libraryID)
 	if err != nil {
 		return nil, err
 	}
@@ -1199,40 +1308,38 @@ func (s *Store) ListItemsByActor(ctx context.Context, actorName, libraryID, kind
 	if offset < 0 {
 		offset = 0
 	}
-	rows, err := s.db.QueryContext(ctx, `
-SELECT DISTINCT mi.id, COALESCE(mi.sort_title, mi.title, '') AS sort_title, mi.mtime_unix, COALESCE(mi.rating, 0)
+	rows, err := s.db.QueryContext(ctx, itemSelectMI+`
 FROM media_items mi
 JOIN media_actors ma ON ma.scope = 'item' AND ma.item_id = mi.id
 WHERE ma.name = ?
 AND (? = '' OR mi.library_id = ?)
 AND (? = '' OR mi.kind = ?)
+GROUP BY mi.id
 `+actorItemsOrderBy(normalizedSort(sort))+`
 LIMIT ? OFFSET ?`, actorName, libraryID, libraryID, kind, kind, limit, offset)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	ids := []int64{}
+	items := []Item{}
+	ids := make([]int64, 0, limit)
 	for rows.Next() {
-		var id int64
-		var sortTitle string
-		var mtime int64
-		var rating float64
-		if err := rows.Scan(&id, &sortTitle, &mtime, &rating); err != nil {
+		item, err := scanItem(rows)
+		if err != nil {
 			return nil, err
 		}
-		ids = append(ids, id)
+		ids = append(ids, item.ID)
+		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	items := make([]Item, 0, len(ids))
-	for _, id := range ids {
-		item, err := s.GetItem(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
+	actors, err := s.ListActorsForItems(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		items[i].Actors = actors[items[i].ID]
 	}
 	return items, nil
 }
@@ -1368,6 +1475,37 @@ ORDER BY sort_order, name`, itemID)
 		return nil, err
 	}
 	return scanActors(rows)
+}
+
+func (s *Store) ListActorsForItems(ctx context.Context, itemIDs []int64) (map[int64][]Actor, error) {
+	out := make(map[int64][]Actor, len(itemIDs))
+	if len(itemIDs) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(itemIDs))
+	args := make([]any, len(itemIDs))
+	for i, id := range itemIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT item_id, name, COALESCE(role, ''), COALESCE(thumb, ''), sort_order
+FROM media_actors
+WHERE scope = 'item' AND item_id IN (`+strings.Join(placeholders, ",")+`)
+ORDER BY item_id, sort_order, name`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var itemID int64
+		var actor Actor
+		if err := rows.Scan(&itemID, &actor.Name, &actor.Role, &actor.Thumb, &actor.Order); err != nil {
+			return nil, err
+		}
+		out[itemID] = append(out[itemID], actor)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) ListShowActors(ctx context.Context, libraryID, showTitle string) ([]Actor, error) {
@@ -1637,6 +1775,86 @@ ORDER BY mi.library_id, mi.show_title`, userID)
 		out = append(out, progress)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) NextUnwatchedEpisodesForShows(ctx context.Context, userID int64, shows []ShowProgress, limit int) ([]Item, error) {
+	if len(shows) == 0 || limit == 0 {
+		return nil, nil
+	}
+	if limit < 0 {
+		limit = len(shows)
+	}
+	if limit > len(shows) {
+		limit = len(shows)
+	}
+	clauses := make([]string, 0, len(shows))
+	args := []any{userID}
+	wanted := map[string]bool{}
+	showKeys := make([]string, 0, limit)
+	for _, show := range shows {
+		libraryID := strings.TrimSpace(show.LibraryID)
+		showTitle := strings.TrimSpace(show.ShowTitle)
+		if libraryID == "" || showTitle == "" {
+			continue
+		}
+		key := showEpisodeKey(libraryID, showTitle)
+		if wanted[key] {
+			continue
+		}
+		wanted[key] = true
+		showKeys = append(showKeys, key)
+		clauses = append(clauses, "(mi.library_id = ? AND mi.show_title = ?)")
+		args = append(args, libraryID, showTitle)
+	}
+	if len(clauses) == 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, itemSelectMI+`
+FROM media_items mi
+LEFT JOIN playback_progress pp ON pp.user_id = ? AND pp.item_id = mi.id
+WHERE mi.kind = 'episode'
+AND (`+strings.Join(clauses, " OR ")+`)
+AND COALESCE(pp.completed, 0) = 0
+ORDER BY mi.library_id, mi.show_title, COALESCE(mi.season_number, 0), COALESCE(mi.episode_number, 0), mi.id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	firstByShow := map[string]Item{}
+	for rows.Next() {
+		item, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		key := showEpisodeKey(item.LibraryID, item.ShowTitle)
+		if !wanted[key] {
+			continue
+		}
+		if _, ok := firstByShow[key]; ok {
+			continue
+		}
+		firstByShow[key] = item
+		if len(firstByShow) >= limit || len(firstByShow) >= len(wanted) {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]Item, 0, len(firstByShow))
+	for _, key := range showKeys {
+		if item, ok := firstByShow[key]; ok {
+			out = append(out, item)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+func showEpisodeKey(libraryID, showTitle string) string {
+	return libraryID + "\n" + strings.ToLower(strings.TrimSpace(showTitle))
 }
 
 func (s *Store) DeleteProgress(ctx context.Context, userID, itemID int64) error {

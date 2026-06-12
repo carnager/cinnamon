@@ -82,6 +82,15 @@ private fun libraryToJson(library: Library): JSONObject {
         .put("type", library.type)
 }
 
+private fun jsonToUser(o: JSONObject): User {
+    return User(
+        id = o.optLong("id"),
+        username = o.optString("username"),
+        displayName = o.optString("displayName"),
+        isAdmin = o.optBoolean("isAdmin"),
+    )
+}
+
 private fun jsonToShow(o: JSONObject): ShowSummary {
     return ShowSummary(
         libraryId = o.getString("libraryId"),
@@ -229,16 +238,11 @@ class Api(private val session: Session) {
         val body = JSONObject().put("username", username).put("password", password).toString()
         val json = request("/api/auth/login", "POST", body)
         val user = json.optJSONObject("user")
-        Session(session.server, json.getString("token"), user?.optString("username").orEmpty())
+        Session(session.server, json.getString("token"), user?.optString("username").orEmpty(), user?.optBoolean("isAdmin") ?: false)
     }
 
     suspend fun me(): User = withContext(Dispatchers.IO) {
-        val json = request("/api/auth/me")
-        User(
-            id = json.optLong("id"),
-            username = json.optString("username"),
-            displayName = json.optString("displayName"),
-        )
+        jsonToUser(request("/api/auth/me"))
     }
 
     suspend fun startQrLogin(deviceName: String): QRLoginStart = withContext(Dispatchers.IO) {
@@ -250,7 +254,7 @@ class Api(private val session: Session) {
         val json = request("/api/auth/qr/poll?code=${enc(code)}")
         if (json.optString("status") != "approved") return@withContext null
         val user = json.optJSONObject("user")
-        Session(session.server, json.getString("token"), user?.optString("username").orEmpty())
+        Session(session.server, json.getString("token"), user?.optString("username").orEmpty(), user?.optBoolean("isAdmin") ?: false)
     }
 
     suspend fun libraries(): List<Library> = withContext(Dispatchers.IO) {
@@ -258,6 +262,25 @@ class Api(private val session: Session) {
         (0 until arr.length()).map { i ->
             jsonToLibrary(arr.getJSONObject(i))
         }
+    }
+
+    suspend fun home(): HomePayload = withContext(Dispatchers.IO) {
+        val json = request("/api/home")
+        val libraries = json.optJSONArray("libraries") ?: JSONArray()
+        val watchlistJson = json.optJSONObject("watchlist") ?: JSONObject()
+        HomePayload(
+            user = jsonToUser(json.optJSONObject("user") ?: JSONObject()),
+            libraries = (0 until libraries.length()).map { i -> jsonToLibrary(libraries.getJSONObject(i)) },
+            homeMovies = parseItems(json.optJSONArray("homeMovies") ?: JSONArray()),
+            homeShows = parseShows(json.optJSONArray("homeShows") ?: JSONArray()),
+            recentMovies = parseItems(json.optJSONArray("recentMovies") ?: JSONArray()),
+            recentShows = parseShows(json.optJSONArray("recentShows") ?: JSONArray()),
+            continueMovies = parseItems(json.optJSONArray("continueMovies") ?: JSONArray()),
+            continueEpisodes = parseItems(json.optJSONArray("continueEpisodes") ?: JSONArray()),
+            progress = parseProgressList(json.optJSONArray("progress") ?: JSONArray()),
+            showProgress = parseShowProgressList(json.optJSONArray("showProgress") ?: JSONArray()),
+            watchlist = parseWatchlist(watchlistJson),
+        )
     }
 
     suspend fun item(itemId: Long): PopItem = withContext(Dispatchers.IO) {
@@ -337,6 +360,21 @@ class Api(private val session: Session) {
 
     suspend fun scanLibraries() = withContext(Dispatchers.IO) {
         requestText("/api/scan", "POST", "{}")
+    }
+
+    suspend fun scanStatus(): List<ScanStatus> = withContext(Dispatchers.IO) {
+        val arr = requestArray("/api/scan")
+        (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            ScanStatus(
+                libraryId = o.optString("libraryId"),
+                status = o.optString("status"),
+                finishedAt = o.optString("finishedAt"),
+                mediaFound = o.optLong("mediaFound"),
+                itemsImported = o.optLong("itemsImported"),
+                errors = o.optLong("errors"),
+            )
+        }
     }
 
     suspend fun alphabet(libraryId: String, kind: String, genre: String = ""): List<AlphabetEntry> = withContext(Dispatchers.IO) {
@@ -429,7 +467,7 @@ class Api(private val session: Session) {
         jsonToPlaybackPlan(request("/api/playback/plan", "POST", body.toString()))
     }
 
-    suspend fun playbackFailure(itemId: Long, plan: PlaybackPlan, errorCode: String, message: String): PlaybackPlan? = withContext(Dispatchers.IO) {
+    suspend fun playbackFailure(itemId: Long, plan: PlaybackPlan, errorCode: String, message: String, positionMs: Long = 0L): PlaybackPlan? = withContext(Dispatchers.IO) {
         val body = JSONObject()
             .put("itemId", itemId)
             .put("planId", plan.planId)
@@ -437,6 +475,7 @@ class Api(private val session: Session) {
             .put("client", "android-tv")
             .put("errorCode", errorCode)
             .put("message", message)
+            .put("positionMs", positionMs)
         val json = request("/api/playback/failure", "POST", body.toString())
         if (!json.optBoolean("retry")) return@withContext null
         json.optJSONObject("plan")?.let(::jsonToPlaybackPlan)
@@ -494,17 +533,7 @@ class Api(private val session: Session) {
         var offset = 0
         while (true) {
             val arr = requestArray("/api/progress?limit=$limit&offset=$offset")
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                out.add(
-                    PlaybackProgress(
-                        itemId = o.optLong("itemId"),
-                        positionMs = o.optLong("positionMs"),
-                        durationMs = o.optLong("durationMs"),
-                        completed = o.optBoolean("completed"),
-                    )
-                )
-            }
+            out.addAll(parseProgressList(arr))
             if (arr.length() < limit) break
             offset += limit
         }
@@ -512,27 +541,11 @@ class Api(private val session: Session) {
     }
 
     suspend fun showProgress(): List<ShowProgress> = withContext(Dispatchers.IO) {
-        val arr = requestArray("/api/progress/tv")
-        (0 until arr.length()).map { i ->
-            val o = arr.getJSONObject(i)
-            ShowProgress(
-                libraryId = o.getString("libraryId"),
-                showTitle = o.getString("showTitle"),
-                episodeCount = o.optInt("episodeCount"),
-                completedCount = o.optInt("completedCount"),
-                completed = o.optBoolean("completed"),
-            )
-        }
+        parseShowProgressList(requestArray("/api/progress/tv"))
     }
 
     suspend fun watchlist(): Watchlist = withContext(Dispatchers.IO) {
-        val json = request("/api/watchlist?limit=300")
-        val itemsArr = json.optJSONArray("items") ?: JSONArray()
-        val showsArr = json.optJSONArray("shows") ?: JSONArray()
-        Watchlist(
-            items = parseItems(itemsArr),
-            shows = parseShows(showsArr),
-        )
+        parseWatchlist(request("/api/watchlist?limit=300"))
     }
 
     suspend fun tvUpdate(currentVersionCode: Int): AppUpdateInfo = withContext(Dispatchers.IO) {
@@ -654,8 +667,44 @@ class Api(private val session: Session) {
         requestText("/api/devices/${enc(deviceId)}/state", "PUT", body)
     }
 
+    suspend fun clientLog(body: JSONObject) = withContext(Dispatchers.IO) {
+        requestText("/api/client/log", "POST", body.toString())
+    }
+
     private fun parseItems(arr: JSONArray): List<PopItem> = (0 until arr.length()).map { i ->
         jsonToItem(arr.getJSONObject(i))
+    }
+
+    private fun parseProgressList(arr: JSONArray): List<PlaybackProgress> {
+        return (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            PlaybackProgress(
+                itemId = o.optLong("itemId"),
+                positionMs = o.optLong("positionMs"),
+                durationMs = o.optLong("durationMs"),
+                completed = o.optBoolean("completed"),
+            )
+        }
+    }
+
+    private fun parseShowProgressList(arr: JSONArray): List<ShowProgress> {
+        return (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            ShowProgress(
+                libraryId = o.getString("libraryId"),
+                showTitle = o.getString("showTitle"),
+                episodeCount = o.optInt("episodeCount"),
+                completedCount = o.optInt("completedCount"),
+                completed = o.optBoolean("completed"),
+            )
+        }
+    }
+
+    private fun parseWatchlist(json: JSONObject): Watchlist {
+        return Watchlist(
+            items = parseItems(json.optJSONArray("items") ?: JSONArray()),
+            shows = parseShows(json.optJSONArray("shows") ?: JSONArray()),
+        )
     }
 
     private fun jsonToPlaybackPlan(o: JSONObject): PlaybackPlan {

@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.C
 import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.util.Util as Media3Util
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
@@ -106,6 +107,9 @@ private fun applyOriginalTrack(player: ExoPlayer, stream: StreamInfo?, trackType
         return
     }
     if (stream == null) return
+    // ffprobe reports ISO 639-2 codes ("ger", "jpn") while ExoPlayer normalizes
+    // Format.language to 639-1 ("de", "ja") — compare both sides normalized.
+    val streamLanguage = stream.language.takeIf { it.isNotBlank() }?.let { Media3Util.normalizeLanguageCode(it) }
     var bestGroup: androidx.media3.common.Tracks.Group? = null
     var bestIndex = -1
     var bestScore = 0
@@ -114,8 +118,9 @@ private fun applyOriginalTrack(player: ExoPlayer, stream: StreamInfo?, trackType
         for (i in 0 until group.length) {
             candidates.add(group to i)
             val format = group.getTrackFormat(i)
+            val formatLanguage = format.language?.let { Media3Util.normalizeLanguageCode(it) }
             var score = 0
-            if (stream.language.isNotBlank() && format.language?.equals(stream.language, ignoreCase = true) == true) score += 8
+            if (streamLanguage != null && formatLanguage != null && formatLanguage.equals(streamLanguage, ignoreCase = true)) score += 8
             if (stream.title.isNotBlank() && format.label?.contains(stream.title, ignoreCase = true) == true) score += 4
             if (stream.codec.isNotBlank() && format.sampleMimeType?.contains(stream.codec, ignoreCase = true) == true) score += 2
             if (score > bestScore) {
@@ -125,7 +130,10 @@ private fun applyOriginalTrack(player: ExoPlayer, stream: StreamInfo?, trackType
             }
         }
     }
-    if (bestScore <= 0 && preferredOrdinal != null) {
+    // A codec-only "match" (score 2) says nothing about which track the user picked
+    // (all audio tracks usually share a codec) — trust the container-order ordinal
+    // unless language or title actually matched.
+    if (bestScore < 4 && preferredOrdinal != null) {
         candidates.getOrNull(preferredOrdinal)?.let { (group, index) ->
             bestGroup = group
             bestIndex = index

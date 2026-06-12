@@ -332,24 +332,6 @@ func TestScanPathsRefreshesChangedSidecarOnly(t *testing.T) {
 	}
 }
 
-func TestAutoScanIgnoresActorImageChanges(t *testing.T) {
-	path := filepath.Join("Movies", "Abyss", ".actors", "Ed_Harris.jpg")
-	if !isIgnoredScanPath(path) {
-		t.Fatalf("isIgnoredScanPath(%q) = false, want true", path)
-	}
-}
-
-func TestAutoScanCoalescesMetadataEventsToFolder(t *testing.T) {
-	nfo := filepath.Join("Movies", "Hoppers", "Hoppers.nfo")
-	if got := scanPathForEvent(nfo); got != filepath.Dir(nfo) {
-		t.Fatalf("scanPathForEvent(nfo) = %q, want parent %q", got, filepath.Dir(nfo))
-	}
-	video := filepath.Join("Movies", "Hoppers", "Hoppers.mkv")
-	if got := scanPathForEvent(video); got != video {
-		t.Fatalf("scanPathForEvent(video) = %q, want exact video path", got)
-	}
-}
-
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {

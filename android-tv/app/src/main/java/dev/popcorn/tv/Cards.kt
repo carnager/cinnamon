@@ -77,7 +77,13 @@ fun <T> PosterGrid(
     val firstKey = entries.firstOrNull()?.let { key(it) }
     val targetKey = initialFocusKey?.takeIf { requested -> entries.any { key(it) == requested } } ?: firstKey
     var initialFocusPending by remember(firstKey, targetKey) { mutableStateOf(true) }
-    val gridState = rememberLazyGridState()
+    // Start the grid scrolled to the restore target: a lazy grid only composes
+    // visible items, so an off-screen target would otherwise never receive its
+    // autoFocus request and the grid would open at the top.
+    val initialGridIndex = remember(firstKey, targetKey) {
+        if (targetKey == null) 0 else entries.indexOfFirst { key(it) == targetKey }.coerceAtLeast(0)
+    }
+    val gridState = rememberLazyGridState(initialFirstVisibleItemIndex = initialGridIndex)
     val alphabetIndex = remember(entries, alphabetTitle, alphabetEntries, onAlphabet) {
         if (alphabetEntries.isNotEmpty()) {
             alphabetEntries.associateBy { it.letter }

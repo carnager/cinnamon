@@ -1,9 +1,9 @@
 package dev.popcorn.tv
 
+import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.graphics.Color as AndroidColor
-import android.net.Uri
 import android.view.KeyEvent as AndroidKeyEvent
 import android.view.LayoutInflater
 import android.view.View
@@ -12,6 +12,7 @@ import android.widget.ImageView
 import android.widget.ImageButton
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -51,10 +52,13 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import coil.imageLoader
 import coil.request.ImageRequest
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.net.URLEncoder
+import org.json.JSONObject
 
 @Composable
 fun PlayerScreen(
@@ -67,6 +71,7 @@ fun PlayerScreen(
     initialStartPositionMs: Long,
     initialBandwidthKbps: Int?,
     onBandwidthSelected: (Int?) -> Unit,
+    onBack: () -> Unit,
     onRemoteStop: () -> Unit,
     onRemoteCommandConsumed: (Long) -> Unit,
 ) {
@@ -74,25 +79,26 @@ fun PlayerScreen(
     val lifecycle = (context as? ComponentActivity)?.lifecycle
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val scope = rememberCoroutineScope()
+    // Outlives the composition: dispose-time cleanup (progress save, HLS stop, logs)
+    // launched on the composition scope is silently dropped because that scope is
+    // already cancelled when onDispose runs.
+    val reportScope = remember { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
     var selectedAudioIndex by remember(item.id) { mutableStateOf(initialAudioIndex) }
     var selectedSubtitleIndex by remember(item.id) { mutableStateOf(initialSubtitleIndex) }
     var selectedBandwidth by remember(item.id) { mutableStateOf(initialBandwidthKbps) }
     var hlsSessionId by remember(item.id) { mutableStateOf<String?>(null) }
     var playbackBaseMs by remember(item.id) { mutableStateOf(0L) }
     var planUsesHls by remember(item.id) { mutableStateOf(false) }
-    var planUsesMpv by remember(item.id) { mutableStateOf(false) }
     var activePlan by remember(item.id) { mutableStateOf<PlaybackPlan?>(null) }
     var fallbackRetried by remember(item.id) { mutableStateOf(false) }
     var playbackPlanJob by remember(item.id) { mutableStateOf<Job?>(null) }
     var playbackPlanSerial by remember(item.id) { mutableStateOf(0L) }
-    var mpvEndReported by remember(item.id) { mutableStateOf(false) }
     var pendingSeekTargetMs by remember(item.id) { mutableStateOf<Long?>(null) }
     var pendingSeekJob by remember(item.id) { mutableStateOf<Job?>(null) }
-    var consumeNextPlayerBackUp by remember(item.id) { mutableStateOf(false) }
+    var exitingPlayer by remember(item.id) { mutableStateOf(false) }
     val pressedSeekKeys = remember(item.id) { mutableMapOf<Int, Long>() }
     val originalStreams = remember { mutableStateListOf<StreamInfo>() }
     val playbackProfile = remember(context) { buildPlaybackProfile(context) }
-    val mpvHost = remember { MpvVideoHost(context) }
 
     LaunchedEffect(item.id, session) {
         val active = session ?: return@LaunchedEffect
@@ -126,17 +132,22 @@ fun PlayerScreen(
             controllerHideOnTouch = false
             controllerShowTimeoutMs = 5000
             keepScreenOn = true
-            setShutterBackgroundColor(AndroidColor.TRANSPARENT)
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         }
     }
 
-    val autoHideRunnable = remember(playerView, exoPlayer, mpvHost) {
-        Runnable {
-            val isPlaying = if (planUsesMpv) mpvHost.isPlaying else exoPlayer.isPlaying
-            if (playerView.findViewWithTag<View>(NativeTrackMenuTag) == null && isPlaying) {
-                playerView.hideController()
-                playerView.requestFocus()
+    val autoHideRunnable = remember(playerView, exoPlayer) {
+        object : Runnable {
+            override fun run() {
+                if (playerView.findViewWithTag<View>(NativeTrackMenuTag) != null) return
+                if (exoPlayer.isPlaying) {
+                    playerView.hideController()
+                    playerView.requestFocus()
+                } else if (playerView.isControllerFullyVisible) {
+                    // Not playing yet (still buffering); keep polling instead of leaving
+                    // the controller stuck visible forever.
+                    mainHandler.postDelayed(this, 1_000)
+                }
             }
         }
     }
@@ -148,7 +159,6 @@ fun PlayerScreen(
 
     fun focusPlayerControl(focusTimeBar: Boolean = false) {
         playerView.post {
-            if (planUsesMpv) forceMpvControllerEnabled(playerView)
             val focusTarget = if (focusTimeBar) {
                 playerView.findViewById<View>(R.id.popcorn_hls_progress)?.takeIf { planUsesHls }
                     ?: playerView.findViewById<View>(R.id.popcorn_progress)
@@ -159,7 +169,6 @@ fun PlayerScreen(
             if (!focused) playerView.requestFocus()
         }
         playerView.postDelayed({
-            if (planUsesMpv) forceMpvControllerEnabled(playerView)
             val fallbackTarget = if (focusTimeBar) {
                 playerView.findViewById<View>(R.id.popcorn_hls_progress)?.takeIf { planUsesHls }
                     ?: playerView.findViewById<View>(R.id.popcorn_progress)
@@ -171,14 +180,49 @@ fun PlayerScreen(
     }
 
     fun logicalPositionMs(): Long {
-        val current = if (planUsesMpv) mpvHost.positionMs.coerceAtLeast(0) else exoPlayer.currentPosition.coerceAtLeast(0)
+        val current = exoPlayer.currentPosition.coerceAtLeast(0)
         val position = if (planUsesHls) playbackBaseMs + current else current
         return if (item.durationMs > 0) position.coerceIn(0, item.durationMs) else position
     }
 
     fun logicalDurationMs(): Long {
         return item.durationMs.takeIf { it > 0 }
-            ?: if (planUsesMpv) mpvHost.durationMs.coerceAtLeast(0) else exoPlayer.duration.coerceAtLeast(0)
+            ?: exoPlayer.duration.coerceAtLeast(0)
+    }
+
+    fun playerStateLabel(): String = when {
+        exoPlayer.isPlaying -> "exo-playing"
+        exoPlayer.playbackState == Player.STATE_READY -> "exo-ready"
+        exoPlayer.playbackState == Player.STATE_BUFFERING -> "exo-buffering"
+        exoPlayer.playbackState == Player.STATE_ENDED -> "exo-ended"
+        else -> "exo-idle"
+    }
+
+    fun logClient(event: String, keyEvent: AndroidKeyEvent? = null, message: String = "", extra: JSONObject? = null) {
+        val activeSession = session ?: return
+        reportScope.launch {
+            runCatching {
+                val body = JSONObject()
+                    .put("deviceId", deviceId)
+                    .put("deviceName", shieldDeviceName())
+                    .put("event", event)
+                    .put("screen", "player")
+                    .put("itemId", item.id)
+                    .put("title", if (item.kind == "episode") item.episodeTitle.ifBlank { item.title } else item.title)
+                    .put("planMode", activePlan?.mode.orEmpty())
+                    .put("usesHls", planUsesHls)
+                    .put("usesMpv", false)
+                    .put("hlsId", hlsSessionId.orEmpty())
+                    .put("positionMs", logicalPositionMs())
+                    .put("durationMs", logicalDurationMs())
+                    .put("keyCode", keyEvent?.keyCode ?: 0)
+                    .put("keyAction", keyEvent?.action ?: -1)
+                    .put("playerState", playerStateLabel())
+                    .put("message", message)
+                    .put("extra", extra ?: JSONObject())
+                Api(activeSession).clientLog(body)
+            }
+        }
     }
 
     fun boundarySeekTarget(currentMs: Long, forward: Boolean): Long {
@@ -209,7 +253,7 @@ fun PlayerScreen(
     }
 
     fun applyDirectTrackSelections() {
-        if (planUsesHls || planUsesMpv || originalStreams.isEmpty()) return
+        if (planUsesHls || originalStreams.isEmpty()) return
         applyOriginalTrackSelection(exoPlayer, originalStreams, selectedAudioIndex, selectedSubtitleIndex)
     }
 
@@ -232,7 +276,7 @@ fun PlayerScreen(
         val position = logicalPositionMs()
         val completed = forceCompleted || progressCompleted(position, duration)
         if (position < 5_000 && !completed) return
-        scope.launch {
+        reportScope.launch {
             runCatching { Api(activeSession).saveProgress(item.id, position, duration, completed, state) }
         }
     }
@@ -240,7 +284,7 @@ fun PlayerScreen(
     fun reportRemoteState(state: String) {
         val activeSession = session ?: return
         if (deviceId.isBlank()) return
-        scope.launch {
+        reportScope.launch {
             runCatching {
                 Api(activeSession).putDeviceState(
                     deviceId = deviceId,
@@ -258,12 +302,6 @@ fun PlayerScreen(
         return if (plan.url.startsWith("http://") || plan.url.startsWith("https://")) plan.url else activeSession.server + plan.url
     }
 
-    fun urlWithApiKey(url: String, token: String): String {
-        if (token.isBlank() || url.contains("api_key=", ignoreCase = true)) return url
-        val separator = if (url.contains("?")) "&" else "?"
-        return "$url${separator}api_key=${URLEncoder.encode(token, "UTF-8")}"
-    }
-
     fun subtitleUrl(activeSession: Session, subtitleIndex: Int, startMs: Long): String {
         val startSeconds = "%.3f".format(java.util.Locale.US, startMs.coerceAtLeast(0) / 1000.0)
         return "${activeSession.server}/api/items/${item.id}/subtitles/$subtitleIndex.vtt?start=$startSeconds"
@@ -272,11 +310,6 @@ fun PlayerScreen(
     fun isTextSubtitle(index: Int): Boolean {
         val codec = originalStreams.firstOrNull { it.type == "subtitle" && it.index == index }?.codec?.lowercase().orEmpty()
         return codec in setOf("subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text")
-    }
-
-    fun streamOrdinal(type: String, index: Int?): Int? {
-        if (index == null) return null
-        return originalStreams.filter { it.type == type }.indexOfFirst { it.index == index }.takeIf { it >= 0 }
     }
 
     fun playbackMediaItem(activeSession: Session, url: String, subtitleIndex: Int?, subtitleStartMs: Long): MediaItem {
@@ -294,79 +327,25 @@ fun PlayerScreen(
         return builder.build()
     }
 
-    fun applyMpvDirectPlayback(activeSession: Session, startMs: Long, wasPlaying: Boolean, showController: Boolean) {
-        val oldHlsSession = hlsSessionId
-        activePlan = PlaybackPlan(
-            planId = "local-mpv-direct-${item.id}-${System.currentTimeMillis()}",
-            mode = "direct",
-            playable = true,
-            url = "/api/items/${item.id}/stream",
-            sessionId = "",
-            startPositionMs = startMs.coerceAtLeast(0),
-            durationMs = item.durationMs,
-            selectedAudioIndex = selectedAudioIndex,
-            selectedSubtitleIndex = selectedSubtitleIndex,
-            reasons = listOf("android-tv mpv direct backend"),
-        )
-        planUsesHls = false
-        planUsesMpv = true
-        mpvEndReported = false
-        hlsSessionId = null
-        playbackBaseMs = 0L
-        exoPlayer.stop()
-        exoPlayer.clearMediaItems()
-        mpvHost.load(
-            MpvLoad(
-                url = urlWithApiKey("${activeSession.server}/api/items/${item.id}/stream", activeSession.token),
-                authorizationHeader = "Authorization: Bearer ${activeSession.token}",
-                startPositionMs = startMs.coerceAtLeast(0),
-                audioIndex = selectedAudioIndex,
-                audioOrdinal = streamOrdinal("audio", selectedAudioIndex),
-                subtitleIndex = selectedSubtitleIndex,
-                subtitleOrdinal = streamOrdinal("subtitle", selectedSubtitleIndex),
-                playWhenReady = wasPlaying,
-            ),
-        )
-        if (showController) {
-            playerView.showController()
-            focusPlayerControl()
-            scheduleControllerAutoHide()
-        } else {
-            playerView.hideController()
-            playerView.requestFocus()
-        }
-        if (oldHlsSession != null) {
-            scope.launch { stopHlsSession(activeSession, oldHlsSession) }
-        }
-    }
-
     fun applyPlaybackPlan(activeSession: Session, plan: PlaybackPlan, wasPlaying: Boolean, startMs: Long, showController: Boolean = true) {
         if (!plan.playable || plan.url.isBlank()) return
         val oldHlsSession = hlsSessionId
         activePlan = plan
         planUsesHls = plan.usesHls
-        planUsesMpv = true
-        mpvEndReported = false
         hlsSessionId = plan.sessionId.ifBlank { null }
         playbackBaseMs = if (plan.usesHls) plan.startPositionMs.coerceAtLeast(0) else 0L
         plan.selectedAudioIndex?.let { selectedAudioIndex = it }
         selectedSubtitleIndex = plan.selectedSubtitleIndex
-        exoPlayer.stop()
-        exoPlayer.clearMediaItems()
-        val streamUrl = urlWithApiKey(absolutePlanUrl(activeSession, plan), activeSession.token)
-        val hlsSubtitleOrdinal = if (plan.usesHls && plan.selectedSubtitleIndex != null) 0 else null
-        mpvHost.load(
-            MpvLoad(
-                url = streamUrl,
-                authorizationHeader = "Authorization: Bearer ${activeSession.token}",
-                startPositionMs = if (plan.usesHls) 0L else startMs.coerceAtLeast(0),
-                audioIndex = if (plan.usesHls) null else plan.selectedAudioIndex,
-                audioOrdinal = if (plan.usesHls) null else streamOrdinal("audio", plan.selectedAudioIndex),
-                subtitleIndex = if (plan.usesHls) null else plan.selectedSubtitleIndex,
-                subtitleOrdinal = if (plan.usesHls) hlsSubtitleOrdinal else streamOrdinal("subtitle", plan.selectedSubtitleIndex),
-                playWhenReady = wasPlaying,
-            ),
-        )
+        if (plan.usesHls) {
+            applyHlsSubtitleSelection(plan.selectedSubtitleIndex)
+        }
+        val subtitleStartMs = if (plan.usesHls) plan.startPositionMs else 0L
+        exoPlayer.setMediaItem(playbackMediaItem(activeSession, absolutePlanUrl(activeSession, plan), plan.selectedSubtitleIndex, subtitleStartMs))
+        exoPlayer.prepare()
+        if (!plan.usesHls && startMs > 0) {
+            exoPlayer.seekTo(startMs)
+        }
+        exoPlayer.playWhenReady = wasPlaying
         if (showController) {
             playerView.showController()
             focusPlayerControl()
@@ -376,21 +355,28 @@ fun PlayerScreen(
             playerView.requestFocus()
         }
         if (oldHlsSession != null && oldHlsSession != hlsSessionId) {
-            scope.launch { stopHlsSession(activeSession, oldHlsSession) }
+            reportScope.launch {
+                logClient("hls-stop-old", message = oldHlsSession)
+                stopHlsSession(activeSession, oldHlsSession)
+            }
         }
+        logClient("plan-applied", extra = JSONObject().put("wasPlaying", wasPlaying).put("startMs", startMs).put("mode", plan.mode))
     }
+
+    // "Direct" bandwidth means original quality, not "force direct file play": with
+    // auto the server direct-plays when the profile allows it and falls back to
+    // remux/transcode otherwise. Forcing "direct" returns an unplayable plan for
+    // files the device cannot play natively (e.g. AC3 audio without passthrough).
+    fun forceModeForBandwidth(kbps: Int?): String = if (kbps == null) "auto" else "transcode"
 
     fun requestPlaybackPlan(kbps: Int?, startMs: Long, forceMode: String, wasPlaying: Boolean? = null, showController: Boolean = true) {
         val activeSession = session ?: return
-        val shouldPlay = wasPlaying ?: if (planUsesMpv) mpvHost.isPlaying else exoPlayer.playWhenReady
-        if (kbps == null) {
-            applyMpvDirectPlayback(activeSession, startMs, shouldPlay, showController)
-            return
-        }
+        val shouldPlay = wasPlaying ?: exoPlayer.playWhenReady
         val serial = playbackPlanSerial + 1L
         playbackPlanSerial = serial
         playbackPlanJob?.cancel()
         playbackPlanJob = scope.launch {
+            logClient("playback-plan-request", extra = JSONObject().put("bandwidthKbps", kbps ?: 0).put("forceMode", forceMode).put("startMs", startMs))
             runCatching {
                 Api(activeSession).playbackPlan(
                     itemId = item.id,
@@ -404,11 +390,19 @@ fun PlayerScreen(
             }.onSuccess { plan ->
                 if (serial != playbackPlanSerial) return@onSuccess
                 fallbackRetried = false
+                logClient("playback-plan-response", extra = JSONObject().put("mode", plan.mode).put("hls", plan.usesHls).put("playable", plan.playable))
+                if (!plan.playable || plan.url.isBlank()) {
+                    logClient("plan-unplayable", message = plan.reasons.joinToString("; ").take(230))
+                    if (forceMode != "auto") {
+                        requestPlaybackPlan(kbps, startMs, "auto", wasPlaying = shouldPlay, showController = showController)
+                    }
+                    return@onSuccess
+                }
                 applyPlaybackPlan(activeSession, plan, shouldPlay, startMs, showController)
             }.onFailure {
                 if (serial != playbackPlanSerial) return@onFailure
-                if (forceMode == "direct") return@onFailure
-                val fallbackHlsSession = newHlsSessionId(deviceId, item.id)
+                logClient("playback-plan-failed", message = it.message.orEmpty())
+                val fallbackHlsSession = kbps?.let { _ -> newHlsSessionId(deviceId, item.id) }
                 val fallbackUrl = playbackUrl(
                     activeSession,
                     item.id,
@@ -420,31 +414,23 @@ fun PlayerScreen(
                 )
                 val oldHlsSession = hlsSessionId
                 activePlan = null
-                planUsesHls = true
-                planUsesMpv = true
-                mpvEndReported = false
+                planUsesHls = fallbackHlsSession != null
                 hlsSessionId = fallbackHlsSession
-                playbackBaseMs = startMs.coerceAtLeast(0)
-                exoPlayer.stop()
-                exoPlayer.clearMediaItems()
-                mpvHost.load(
-                    MpvLoad(
-                        url = urlWithApiKey(fallbackUrl, activeSession.token),
-                        authorizationHeader = "Authorization: Bearer ${activeSession.token}",
-                        startPositionMs = 0L,
-                        audioIndex = null,
-                        audioOrdinal = null,
-                        subtitleIndex = null,
-                        subtitleOrdinal = if (selectedSubtitleIndex != null) 0 else null,
-                        playWhenReady = shouldPlay,
-                    ),
+                playbackBaseMs = if (fallbackHlsSession != null) startMs.coerceAtLeast(0) else 0L
+                exoPlayer.setMediaItem(
+                    playbackMediaItem(activeSession, fallbackUrl, selectedSubtitleIndex, if (fallbackHlsSession != null) startMs else 0L),
                 )
+                exoPlayer.prepare()
+                if (fallbackHlsSession == null && startMs > 0) {
+                    exoPlayer.seekTo(startMs)
+                }
+                exoPlayer.playWhenReady = shouldPlay
                 if (!showController) {
                     playerView.hideController()
                     playerView.requestFocus()
                 }
                 if (oldHlsSession != null && oldHlsSession != hlsSessionId) {
-                    scope.launch { stopHlsSession(activeSession, oldHlsSession) }
+                    reportScope.launch { stopHlsSession(activeSession, oldHlsSession) }
                 }
             }
         }
@@ -457,13 +443,7 @@ fun PlayerScreen(
         val duration = logicalDurationMs()
         val target = if (duration > 0) targetMs.coerceIn(0, duration) else targetMs.coerceAtLeast(0)
         if (planUsesHls) {
-            requestPlaybackPlan(selectedBandwidth, target, "auto", showController = showController)
-        } else if (planUsesMpv) {
-            mpvHost.seekTo(target)
-            if (!showController) {
-                playerView.hideController()
-                playerView.requestFocus()
-            }
+            requestPlaybackPlan(selectedBandwidth, target, forceModeForBandwidth(selectedBandwidth), showController = showController)
         } else {
             exoPlayer.seekTo(target)
             if (!showController) {
@@ -501,44 +481,34 @@ fun PlayerScreen(
         val startMs = (targetSeconds * 1000.0).toLong().coerceAtLeast(0)
         selectedBandwidth = kbps
         onBandwidthSelected(kbps)
-        requestPlaybackPlan(kbps, startMs, if (kbps == null) "direct" else "auto")
+        requestPlaybackPlan(kbps, startMs, forceModeForBandwidth(kbps))
     }
 
     fun switchAudio(index: Int?) {
         selectedAudioIndex = index
-        if (planUsesMpv && !planUsesHls) {
-            mpvHost.setAudioTrack(index, streamOrdinal("audio", index))
+        if (!planUsesHls && originalStreams.isNotEmpty()) {
+            logClient("switch-audio-direct", extra = JSONObject().put("index", index ?: -1))
+            applyDirectTrackSelections()
             return
         }
-        requestPlaybackPlan(selectedBandwidth, logicalPositionMs(), "auto")
+        logClient("switch-audio-plan", extra = JSONObject().put("index", index ?: -1))
+        requestPlaybackPlan(selectedBandwidth, logicalPositionMs(), forceModeForBandwidth(selectedBandwidth))
     }
 
     fun switchSubtitle(index: Int?) {
         selectedSubtitleIndex = index
-        if (planUsesMpv && !planUsesHls) {
-            mpvHost.setSubtitleTrack(index, streamOrdinal("subtitle", index))
-            return
-        }
-        requestPlaybackPlan(selectedBandwidth, logicalPositionMs(), "auto")
+        logClient("switch-subtitle", extra = JSONObject().put("index", index ?: -1))
+        requestPlaybackPlan(selectedBandwidth, logicalPositionMs(), forceModeForBandwidth(selectedBandwidth))
     }
 
     fun applyRemoteCommand(command: PlayerRemoteCommand) {
         when (command.type) {
-            "pause" -> if (planUsesMpv) mpvHost.pause() else exoPlayer.pause()
-            "resume" -> {
-                if (planUsesMpv) {
-                    mpvEndReported = false
-                    mpvHost.play()
-                } else {
-                    exoPlayer.play()
-                }
-            }
+            "pause" -> exoPlayer.pause()
+            "resume" -> exoPlayer.play()
             "seek" -> {
                 val target = command.payload.optLong("positionMs").coerceAtLeast(0)
                 if (planUsesHls) {
-                    requestPlaybackPlan(selectedBandwidth, target, "auto")
-                } else if (planUsesMpv) {
-                    mpvHost.seekTo(target)
+                    requestPlaybackPlan(selectedBandwidth, target, forceModeForBandwidth(selectedBandwidth))
                 } else {
                     exoPlayer.seekTo(target)
                 }
@@ -557,12 +527,15 @@ fun PlayerScreen(
 
     LaunchedEffect(item.id, session) {
         if (session == null) return@LaunchedEffect
-        requestPlaybackPlan(selectedBandwidth, initialStartPositionMs.coerceAtLeast(0), "auto", wasPlaying = true)
+        requestPlaybackPlan(selectedBandwidth, initialStartPositionMs.coerceAtLeast(0), forceModeForBandwidth(selectedBandwidth), wasPlaying = true)
     }
 
     fun isActionKey(keyCode: Int): Boolean = keyCode == AndroidKeyEvent.KEYCODE_DPAD_CENTER ||
         keyCode == AndroidKeyEvent.KEYCODE_ENTER ||
         keyCode == AndroidKeyEvent.KEYCODE_NUMPAD_ENTER
+
+    fun isBackKey(keyCode: Int): Boolean = keyCode == AndroidKeyEvent.KEYCODE_BACK ||
+        keyCode == AndroidKeyEvent.KEYCODE_ESCAPE
 
     fun isRevealKey(keyCode: Int): Boolean =
         keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN ||
@@ -589,34 +562,54 @@ fun PlayerScreen(
         return true
     }
 
-    fun hidePlayerOverlay(): Boolean {
-        val trackMenu = playerView.findViewWithTag<View>(NativeTrackMenuTag)
-        if (trackMenu != null) {
-            closeNativeTrackMenu(playerView, restoreFocus = false)
-            playerView.requestFocus()
-            return true
+    fun exitPlayer() {
+        logClient("exit-player-called")
+        if (exitingPlayer) {
+            logClient("exit-player-ignored", message = "already exiting")
+            return
         }
-        if (playerView.isControllerFullyVisible) {
-            mainHandler.removeCallbacks(autoHideRunnable)
-            playerView.hideController()
-            playerView.requestFocus()
-            return true
-        }
-        return false
+        exitingPlayer = true
+        playbackPlanJob?.cancel()
+        pendingSeekJob?.cancel()
+        mainHandler.removeCallbacks(autoHideRunnable)
+        logClient("exit-player-stopping-engines")
+        reportProgress("stopped")
+        runCatching { exoPlayer.stop() }
+        logClient("exit-player-navigate")
+        onBack()
+    }
+
+    BackHandler {
+        logClient("compose-back-handler")
+        exitPlayer()
     }
 
     DisposableEffect(Unit) {
+        PlayerBackBridge.handler = { event ->
+            when {
+                isBackKey(event.keyCode) && event.action == AndroidKeyEvent.ACTION_DOWN -> {
+                    logClient("player-back-dispatch", event)
+                    exitPlayer()
+                    true
+                }
+                isBackKey(event.keyCode) && event.action == AndroidKeyEvent.ACTION_UP -> {
+                    logClient("player-back-dispatch-up", event)
+                    true
+                }
+                else -> false
+            }
+        }
         PlayerOsdBridge.handler = { event ->
             when {
-                event.keyCode == AndroidKeyEvent.KEYCODE_BACK && event.action == AndroidKeyEvent.ACTION_DOWN && hidePlayerOverlay() -> {
-                    consumeNextPlayerBackUp = true
+                isBackKey(event.keyCode) && event.action == AndroidKeyEvent.ACTION_DOWN -> {
+                    logClient("player-osd-back", event)
+                    exitPlayer()
                     true
                 }
-                event.keyCode == AndroidKeyEvent.KEYCODE_BACK && event.action == AndroidKeyEvent.ACTION_UP && consumeNextPlayerBackUp -> {
-                    consumeNextPlayerBackUp = false
+                isBackKey(event.keyCode) && event.action == AndroidKeyEvent.ACTION_UP -> {
+                    logClient("player-osd-back-up", event)
                     true
                 }
-                event.keyCode == AndroidKeyEvent.KEYCODE_BACK && event.action == AndroidKeyEvent.ACTION_UP && hidePlayerOverlay() -> true
                 isHiddenSeekKey(event.keyCode) && !playerView.isControllerFullyVisible && playerView.findViewWithTag<View>(NativeTrackMenuTag) == null -> {
                     if (event.action == AndroidKeyEvent.ACTION_UP) {
                         pressedSeekKeys.remove(event.keyCode)
@@ -628,11 +621,7 @@ fun PlayerScreen(
                 }
                 isActionKey(event.keyCode) && !playerView.isControllerFullyVisible && playerView.findViewWithTag<View>(NativeTrackMenuTag) == null -> {
                     if (event.action == AndroidKeyEvent.ACTION_UP) {
-                        if (planUsesMpv) {
-                            if (mpvHost.isPlaying) mpvHost.pause() else mpvHost.play()
-                        } else {
-                            if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-                        }
+                        if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
                     }
                     true
                 }
@@ -640,28 +629,45 @@ fun PlayerScreen(
                     if (event.action == AndroidKeyEvent.ACTION_UP) revealController()
                     true
                 }
+                event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP && !playerView.isControllerFullyVisible && playerView.findViewWithTag<View>(NativeTrackMenuTag) == null -> {
+                    // Swallow UP while the OSD is hidden: media3's PlayerView would consume
+                    // it and show the controller without focusing any of our controls.
+                    true
+                }
                 event.action == AndroidKeyEvent.ACTION_UP && playerView.isControllerFullyVisible -> {
                     scheduleControllerAutoHide()
-                    false
+                    val focused = playerView.findFocus()
+                    if (focused == null || focused === playerView) {
+                        logClient("osd-focus-repair", event)
+                        focusPlayerControl()
+                        true
+                    } else {
+                        false
+                    }
                 }
                 else -> false
             }
         }
         scheduleControllerAutoHide()
+        logClient("player-mounted", extra = JSONObject().put("model", Build.MODEL).put("sdk", Build.VERSION.SDK_INT))
         onDispose {
+            logClient("player-dispose")
+            if (PlayerBackBridge.handler != null) PlayerBackBridge.handler = null
             if (PlayerOsdBridge.handler != null) PlayerOsdBridge.handler = null
             playbackPlanJob?.cancel()
             pressedSeekKeys.clear()
-            consumeNextPlayerBackUp = false
             mainHandler.removeCallbacks(autoHideRunnable)
             closeNativeTrackMenu(playerView, restoreFocus = false)
             val oldHlsSession = hlsSessionId
             val activeSession = session
             if (oldHlsSession != null && activeSession != null) {
-                scope.launch { stopHlsSession(activeSession, oldHlsSession) }
+                reportScope.launch {
+                    logClient("hls-stop-dispose", message = oldHlsSession)
+                    stopHlsSession(activeSession, oldHlsSession)
+                }
             }
             reportProgress("stopped")
-            mpvHost.release()
+            logClient("player-release")
             exoPlayer.release()
         }
     }
@@ -669,9 +675,9 @@ fun PlayerScreen(
     DisposableEffect(lifecycle) {
         if (lifecycle == null) return@DisposableEffect onDispose {}
         val observer = LifecycleEventObserver { _, event ->
+            logClient("lifecycle-${event.name.lowercase()}")
             if (event == Lifecycle.Event.ON_STOP) {
                 reportProgress("stopped")
-                mpvHost.stop()
                 exoPlayer.stop()
             }
         }
@@ -698,6 +704,7 @@ fun PlayerScreen(
 
             override fun onPlayerError(error: PlaybackException) {
                 val activeSession = session ?: return
+                logClient("exo-error", message = "${error.errorCodeName}: ${error.message.orEmpty()}".take(230))
                 val failedPlan = activePlan ?: return
                 if (fallbackRetried) return
                 fallbackRetried = true
@@ -709,6 +716,7 @@ fun PlayerScreen(
                             plan = failedPlan,
                             errorCode = error.errorCodeName,
                             message = error.message.orEmpty(),
+                            positionMs = position,
                         )
                     }.onSuccess { fallback ->
                         if (fallback != null) {
@@ -722,7 +730,7 @@ fun PlayerScreen(
         onDispose { exoPlayer.removeListener(listener) }
     }
 
-    DisposableEffect(playerView, selectedBandwidth, planUsesHls, planUsesMpv) {
+    DisposableEffect(playerView, selectedBandwidth, planUsesHls) {
         val titleView = playerView.findViewById<TextView>(R.id.popcorn_title)
         val clearLogoView = playerView.findViewById<ImageView>(R.id.popcorn_clearlogo)
         val playPauseButton = playerView.findViewById<ImageButton>(R.id.popcorn_play_pause)
@@ -770,11 +778,7 @@ fun PlayerScreen(
                 when (event.action) {
                     AndroidKeyEvent.ACTION_DOWN -> true
                     AndroidKeyEvent.ACTION_UP -> {
-                        if (planUsesMpv) {
-                            if (mpvHost.isPlaying) mpvHost.pause() else mpvHost.play()
-                        } else {
-                            if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-                        }
+                        if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
                         activeTimeBar?.requestFocus()
                         scheduleControllerAutoHide()
                         true
@@ -812,7 +816,7 @@ fun PlayerScreen(
         }
         bandwidthButton?.text = bandwidthLabel(selectedBandwidth)
         playPauseButton?.setImageResource(
-            if (planUsesMpv && mpvHost.isPlaying || !planUsesMpv && exoPlayer.isPlaying) {
+            if (exoPlayer.isPlaying) {
                 androidx.media3.ui.R.drawable.exo_icon_pause
             } else {
                 androidx.media3.ui.R.drawable.exo_icon_play
@@ -824,22 +828,12 @@ fun PlayerScreen(
         nativeDurationView?.visibility = if (planUsesHls) View.GONE else View.VISIBLE
         hlsPositionView?.visibility = if (planUsesHls) View.VISIBLE else View.GONE
         hlsDurationView?.visibility = if (planUsesHls) View.VISIBLE else View.GONE
-        playerView.setBackgroundColor(if (planUsesMpv) AndroidColor.TRANSPARENT else AndroidColor.BLACK)
-        playerView.findViewById<View>(androidx.media3.ui.R.id.exo_content_frame)?.visibility =
-            if (planUsesMpv) View.INVISIBLE else View.VISIBLE
-        if (planUsesMpv) {
-            forceMpvControllerEnabled(playerView)
-        }
         playerView.setOnKeyListener(controllerKeyListener)
         playPauseButton?.setOnKeyListener(controllerKeyListener)
         playPauseButton?.setOnClickListener {
-            if (planUsesMpv) {
-                if (mpvHost.isPlaying) mpvHost.pause() else mpvHost.play()
-            } else {
-                if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-            }
+            if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
             playPauseButton.setImageResource(
-                if (planUsesMpv && mpvHost.isPlaying || !planUsesMpv && exoPlayer.isPlaying) {
+                if (exoPlayer.isPlaying) {
                     androidx.media3.ui.R.drawable.exo_icon_pause
                 } else {
                     androidx.media3.ui.R.drawable.exo_icon_play
@@ -872,9 +866,7 @@ fun PlayerScreen(
             override fun onScrubStop(timeBar: TimeBar, position: Long, canceled: Boolean) {
                 val wasScrubbing = timeBarScrubbing
                 timeBarScrubbing = false
-                if (wasScrubbing && !canceled && planUsesHls) {
-                    seekToLogical(position.coerceAtLeast(0))
-                } else if (wasScrubbing && !canceled) {
+                if (wasScrubbing && !canceled) {
                     seekToLogical(position.coerceAtLeast(0))
                 } else {
                     updateDisplayedPosition(logicalPositionMs())
@@ -887,54 +879,30 @@ fun PlayerScreen(
         hlsTimeBar?.setKeyTimeIncrement(30_000)
         audioButton?.setOnClickListener {
             scheduleControllerAutoHide()
-            if ((planUsesHls || planUsesMpv) && originalStreams.any { it.type == "audio" }) {
-                showNativeOriginalTrackMenu(
-                    playerView = playerView,
-                    title = "Audio Track",
-                    tracks = originalStreams.filter { it.type == "audio" },
-                    selectedIndex = selectedAudioIndex,
-                    allowOff = false,
-                    returnFocus = audioButton,
-                    onSelected = { switchAudio(it) },
-                    onClosed = ::scheduleControllerAutoHide,
-                )
-            } else {
-                showNativeTrackMenu(
-                    playerView = playerView,
-                    player = exoPlayer,
-                    title = "Audio Track",
-                    trackType = C.TRACK_TYPE_AUDIO,
-                    allowOff = false,
-                    returnFocus = audioButton,
-                    onClosed = ::scheduleControllerAutoHide,
-                )
-            }
+            showNativeOriginalTrackMenu(
+                playerView = playerView,
+                title = "Audio Track",
+                tracks = originalStreams.filter { it.type == "audio" },
+                selectedIndex = selectedAudioIndex,
+                allowOff = false,
+                returnFocus = audioButton,
+                onSelected = { switchAudio(it) },
+                onClosed = ::scheduleControllerAutoHide,
+            )
         }
         audioButton?.setOnKeyListener(controllerKeyListener)
         subtitleButton?.setOnClickListener {
             scheduleControllerAutoHide()
-            if ((planUsesHls || planUsesMpv) && originalStreams.any { it.type == "subtitle" }) {
-                showNativeOriginalTrackMenu(
-                    playerView = playerView,
-                    title = "Subtitle Track",
-                    tracks = originalStreams.filter { it.type == "subtitle" },
-                    selectedIndex = selectedSubtitleIndex,
-                    allowOff = true,
-                    returnFocus = subtitleButton,
-                    onSelected = { switchSubtitle(it) },
-                    onClosed = ::scheduleControllerAutoHide,
-                )
-            } else {
-                showNativeTrackMenu(
-                    playerView = playerView,
-                    player = exoPlayer,
-                    title = "Subtitle Track",
-                    trackType = C.TRACK_TYPE_TEXT,
-                    allowOff = true,
-                    returnFocus = subtitleButton,
-                    onClosed = ::scheduleControllerAutoHide,
-                )
-            }
+            showNativeOriginalTrackMenu(
+                playerView = playerView,
+                title = "Subtitle Track",
+                tracks = originalStreams.filter { it.type == "subtitle" },
+                selectedIndex = selectedSubtitleIndex,
+                allowOff = true,
+                returnFocus = subtitleButton,
+                onSelected = { switchSubtitle(it) },
+                onClosed = ::scheduleControllerAutoHide,
+            )
         }
         subtitleButton?.setOnKeyListener(controllerKeyListener)
         bandwidthButton?.setOnClickListener {
@@ -948,9 +916,6 @@ fun PlayerScreen(
             )
         }
         bandwidthButton?.setOnKeyListener(controllerKeyListener)
-        if (planUsesMpv) {
-            forceMpvControllerEnabled(playerView)
-        }
 
         onDispose {
             playerView.setOnKeyListener(null)
@@ -978,7 +943,7 @@ fun PlayerScreen(
         playerView.findViewById<TextView>(R.id.popcorn_bandwidth)?.text = bandwidthLabel(selectedBandwidth)
     }
 
-    LaunchedEffect(planUsesHls, planUsesMpv, playbackBaseMs, playerView, item.durationMs) {
+    LaunchedEffect(planUsesHls, playbackBaseMs, playerView, item.durationMs) {
         val nativeTimeBar = playerView.findViewById<DefaultTimeBar>(R.id.popcorn_progress)
         val playPauseButton = playerView.findViewById<ImageButton>(R.id.popcorn_play_pause)
         val timeBar = playerView.findViewById<DefaultTimeBar>(R.id.popcorn_hls_progress)
@@ -992,7 +957,7 @@ fun PlayerScreen(
         nativeDurationView?.visibility = if (planUsesHls) View.GONE else View.VISIBLE
         positionView?.visibility = if (planUsesHls) View.VISIBLE else View.GONE
         durationView?.visibility = if (planUsesHls) View.VISIBLE else View.GONE
-        while (planUsesHls || planUsesMpv) {
+        while (true) {
             val duration = logicalDurationMs()
             val position = pendingSeekTargetMs ?: logicalPositionMs()
             if (duration > 0) {
@@ -1004,17 +969,14 @@ fun PlayerScreen(
                     positionView?.text = fmtClock(position)
                 } else {
                     nativeTimeBar?.setDuration(duration)
-                    nativeTimeBar?.setBufferedPosition(duration)
+                    nativeTimeBar?.setBufferedPosition(exoPlayer.bufferedPosition.coerceAtLeast(0))
                     nativeTimeBar?.setPosition(position)
                     nativeDurationView?.text = fmtClock(duration)
                     nativePositionView?.text = fmtClock(position)
                 }
             }
-            if (planUsesMpv) {
-                forceMpvControllerEnabled(playerView)
-            }
             playPauseButton?.setImageResource(
-                if (planUsesMpv && mpvHost.isPlaying || !planUsesMpv && exoPlayer.isPlaying) {
+                if (exoPlayer.isPlaying) {
                     androidx.media3.ui.R.drawable.exo_icon_pause
                 } else {
                     androidx.media3.ui.R.drawable.exo_icon_play
@@ -1025,7 +987,7 @@ fun PlayerScreen(
     }
 
     LaunchedEffect(originalStreams.size, selectedAudioIndex, selectedSubtitleIndex, planUsesHls, exoPlayer) {
-        if (planUsesHls || planUsesMpv || originalStreams.isEmpty()) return@LaunchedEffect
+        if (planUsesHls || originalStreams.isEmpty()) return@LaunchedEffect
         repeat(20) {
             applyDirectTrackSelections()
             if (exoPlayer.currentTracks.groups.isNotEmpty()) return@LaunchedEffect
@@ -1036,7 +998,7 @@ fun PlayerScreen(
     LaunchedEffect(item.id, session, exoPlayer) {
         while (true) {
             delay(10_000)
-            if (planUsesMpv || exoPlayer.playbackState == Player.STATE_READY || exoPlayer.playbackState == Player.STATE_BUFFERING) {
+            if (exoPlayer.playbackState == Player.STATE_READY || exoPlayer.playbackState == Player.STATE_BUFFERING) {
                 reportProgress("")
             }
         }
@@ -1050,16 +1012,10 @@ fun PlayerScreen(
         while (true) {
             delay(1_000)
             val state = when {
-                planUsesMpv && mpvHost.isEnded -> "ended"
-                planUsesMpv && mpvHost.isPlaying -> "playing"
                 exoPlayer.playbackState == Player.STATE_ENDED -> "ended"
                 exoPlayer.isPlaying -> "playing"
                 exoPlayer.playbackState == Player.STATE_BUFFERING -> "buffering"
                 else -> "paused"
-            }
-            if (planUsesMpv && mpvHost.isEnded && !mpvEndReported) {
-                mpvEndReported = true
-                reportProgress("stopped", forceCompleted = true)
             }
             reportRemoteState(state)
         }
@@ -1078,14 +1034,6 @@ fun PlayerScreen(
             .background(Color.Black),
     ) {
         AndroidView(
-            factory = { mpvHost },
-            modifier = Modifier.fillMaxSize(),
-            update = {
-                it.visibility = View.VISIBLE
-                it.alpha = if (planUsesMpv) 1f else 0f
-            },
-        )
-        AndroidView(
             factory = { playerView },
             modifier = Modifier.fillMaxSize(),
         )
@@ -1101,26 +1049,6 @@ fun PlayerScreen(
                     .background(Color(0xCC080C12), RoundedCornerShape(18.dp))
                     .padding(horizontal = 28.dp, vertical = 16.dp),
             )
-        }
-    }
-}
-
-private fun forceMpvControllerEnabled(playerView: PlayerView) {
-    val controls = intArrayOf(
-        R.id.popcorn_play_pause,
-        R.id.popcorn_rew,
-        R.id.popcorn_ffwd,
-        R.id.popcorn_progress,
-        R.id.popcorn_subtitles,
-        R.id.popcorn_audio,
-        R.id.popcorn_bandwidth,
-    )
-    controls.forEach { id ->
-        playerView.findViewById<View>(id)?.let { view ->
-            view.isEnabled = true
-            view.isFocusable = true
-            view.isClickable = true
-            view.alpha = 1f
         }
     }
 }

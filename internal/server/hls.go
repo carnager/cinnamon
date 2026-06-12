@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"popcorn/internal/config"
@@ -19,12 +21,86 @@ import (
 )
 
 type hlsSession struct {
-	dir     string
-	cmd     *exec.Cmd
-	owner   string
-	userID  int64
-	started time.Time
-	done    chan struct{}
+	dir        string
+	cmd        *exec.Cmd
+	owner      string
+	userID     int64
+	started    time.Time
+	lastAccess atomic.Int64
+	done       chan struct{}
+}
+
+func (s *hlsSession) touch() {
+	s.lastAccess.Store(time.Now().UnixNano())
+}
+
+func (s *hlsSession) idleFor() time.Duration {
+	last := s.lastAccess.Load()
+	if last == 0 {
+		return time.Since(s.started)
+	}
+	return time.Since(time.Unix(0, last))
+}
+
+// hlsScratchDir returns the directory for HLS transcode output. Full-movie
+// sessions hold gigabytes of segments, so they live next to the database on
+// real disk instead of /tmp, which is usually a RAM-backed tmpfs.
+func (a *App) hlsScratchDir() string {
+	if a.cfg.DatabasePath == "" {
+		return ""
+	}
+	dir := filepath.Join(filepath.Dir(a.cfg.DatabasePath), "hls-cache")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		a.log.Warn("hls scratch dir unavailable, falling back to system temp", "dir", dir, "error", err)
+		return ""
+	}
+	return dir
+}
+
+// cleanHLSScratch removes leftover session directories from previous runs.
+// On tmpfs a reboot cleared them; on disk we have to do it ourselves.
+func (a *App) cleanHLSScratch() {
+	scratch := a.hlsScratchDir()
+	if scratch == "" {
+		return
+	}
+	entries, err := os.ReadDir(scratch)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "popcorn-hls-") {
+			_ = os.RemoveAll(filepath.Join(scratch, entry.Name()))
+		}
+	}
+}
+
+// reapIdleHLSSessions stops ffmpeg sessions no client has touched recently.
+// Clients are expected to stop their sessions, but a killed app or dropped
+// connection must not leave a transcoder running for hours.
+func (a *App) reapIdleHLSSessions() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		idle := map[string]*hlsSession{}
+		a.hlsMu.Lock()
+		for id, sess := range a.hlsSessions {
+			if sess.idleFor() > 3*time.Minute {
+				idle[id] = sess
+				delete(a.hlsSessions, id)
+			}
+		}
+		a.hlsMu.Unlock()
+		for id, sess := range idle {
+			a.log.Info("hls session reaped after idle timeout", "session", id)
+			a.stopHLSSession(id, sess)
+		}
+	}
 }
 
 func (a *App) transcode(w http.ResponseWriter, r *http.Request) {
@@ -187,21 +263,28 @@ func (a *App) hlsPlaylist(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) serveHLSPlaylist(w http.ResponseWriter, r *http.Request, itemID int64, sessionID string, sess *hlsSession) {
+	sess.touch()
 	playlist := filepath.Join(sess.dir, "index.m3u8")
 	if err := waitForFileOrDone(r.Context(), playlist, 8*time.Second, sess.done); err != nil {
 		a.log.Warn("hls playlist timeout", "item", itemID, "session", sessionID, "error", err)
 		http.Error(w, err.Error(), http.StatusGatewayTimeout)
 		return
 	}
-	if err := rewritePlaylistSegments(playlist, fmt.Sprintf("/api/items/%d/hls/%s/", itemID, sessionID)); err != nil {
-		a.log.Warn("hls playlist rewrite failed", "item", itemID, "session", sessionID, "error", err)
+	// Rewrite in memory only: index.m3u8 belongs to ffmpeg, which rewrites it
+	// after every segment. Writing our rewritten copy back to disk raced those
+	// updates and could leave clients a stale playlist that never gains new
+	// segments or the final ENDLIST.
+	b, err := os.ReadFile(playlist)
+	if err != nil || len(b) == 0 {
+		a.log.Warn("hls playlist read failed", "item", itemID, "session", sessionID, "error", err)
+		http.Error(w, "playlist unavailable", http.StatusServiceUnavailable)
+		return
 	}
-	if info, err := os.Stat(playlist); err == nil {
-		a.log.Info("hls playlist served", "item", itemID, "session", sessionID, "bytes", info.Size())
-	}
+	body := rewritePlaylistBody(b, fmt.Sprintf("/api/items/%d/hls/%s/", itemID, sessionID), hlsPlaylistAuthQuery(r))
+	a.log.Debug("hls playlist served", "item", itemID, "session", sessionID, "bytes", len(body))
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-store")
-	http.ServeFile(w, r, playlist)
+	_, _ = w.Write(body)
 }
 
 func (a *App) hlsSegment(w http.ResponseWriter, r *http.Request) {
@@ -226,6 +309,7 @@ func (a *App) hlsSegment(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	sess.touch()
 	path := filepath.Join(sess.dir, segment)
 	if err := waitForFileOrDone(r.Context(), path, 10*time.Second, sess.done); err != nil {
 		a.log.Warn("hls segment unavailable", "session", sessionID, "segment", segment, "error", err)
@@ -233,14 +317,14 @@ func (a *App) hlsSegment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if info, err := os.Stat(path); err == nil {
-		a.log.Info("hls segment served", "session", sessionID, "segment", segment, "bytes", info.Size())
+		a.log.Debug("hls segment served", "session", sessionID, "segment", segment, "bytes", info.Size())
 	}
 	if strings.HasSuffix(segment, ".m4s") {
 		w.Header().Set("Content-Type", "video/iso.segment")
 	} else {
 		w.Header().Set("Content-Type", "video/mp4")
 	}
-	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
 	http.ServeFile(w, r, path)
 }
 
@@ -302,7 +386,7 @@ func (a *App) ensureHLSSessionWithArgs(ctx context.Context, sessionID string, us
 			delete(a.hlsSessions, id)
 		}
 	}
-	dir, err := os.MkdirTemp("", "popcorn-hls-"+sessionID+"-")
+	dir, err := os.MkdirTemp(a.hlsScratchDir(), "popcorn-hls-"+sessionID+"-")
 	if err != nil {
 		a.hlsMu.Unlock()
 		return nil, err
@@ -341,13 +425,28 @@ func (a *App) ensureHLSSessionWithArgs(ctx context.Context, sessionID string, us
 
 func hlsSessionOwner(sessionID string) string {
 	parts := strings.Split(sessionID, "_")
-	if len(parts) >= 3 && (parts[0] == "android" || parts[0] == "phone") && (parts[1] == "dev" || parts[1] == "user") {
-		return strings.Join(parts[:3], "_")
+	if len(parts) >= 4 && isDigits(parts[len(parts)-2]) && isDigits(parts[len(parts)-3]) {
+		return strings.Join(parts[:len(parts)-3], "_")
+	}
+	if len(parts) >= 3 && isDigits(parts[len(parts)-1]) && isDigits(parts[len(parts)-2]) {
+		return strings.Join(parts[:len(parts)-2], "_")
 	}
 	if len(parts) > 0 && parts[0] != "" {
 		return parts[0]
 	}
 	return sessionID
+}
+
+func isDigits(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) stopHLSSession(id string, sess *hlsSession) {
@@ -667,6 +766,8 @@ func waitForFile(ctx context.Context, path string, timeout time.Duration) error 
 
 func waitForFileOrDone(ctx context.Context, path string, timeout time.Duration, done <-chan struct{}) error {
 	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
 	for {
 		info, err := os.Stat(path)
 		if err == nil && info.Size() > 0 {
@@ -680,33 +781,71 @@ func waitForFileOrDone(ctx context.Context, path string, timeout time.Duration, 
 			return ctx.Err()
 		case <-done:
 			return fmt.Errorf("transcoder exited before %s was written", filepath.Base(path))
-		case <-time.After(100 * time.Millisecond):
+		case <-ticker.C:
 		}
 	}
 }
 
-func rewritePlaylistSegments(path, prefix string) error {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return err
+func hlsPlaylistAuthQuery(r *http.Request) string {
+	token := strings.TrimSpace(r.URL.Query().Get("api_key"))
+	if token == "" {
+		token = queryTokenCaseInsensitive(r, "api_key")
 	}
+	if token == "" {
+		return ""
+	}
+	return "api_key=" + url.QueryEscape(token)
+}
+
+func rewritePlaylistBody(b []byte, prefix, authQuery string) []byte {
 	lines := strings.Split(string(b), "\n")
-	changed := false
 	for i, line := range lines {
-		if strings.HasPrefix(line, `#EXT-X-MAP:URI="`) && strings.Contains(line, `init.mp4`) && !strings.Contains(line, prefix) {
-			lines[i] = strings.Replace(line, `URI="init.mp4"`, `URI="`+prefix+`init.mp4"`, 1)
-			changed = true
+		if rewritten, ok := rewritePlaylistMapLine(line, prefix, authQuery); ok {
+			lines[i] = rewritten
 			continue
 		}
-		if strings.HasPrefix(line, "seg_") && !strings.HasPrefix(line, prefix) {
-			lines[i] = prefix + line
-			changed = true
+		if strings.HasPrefix(line, "seg_") {
+			lines[i] = appendPlaylistAuth(prefix+line, authQuery)
+			continue
+		}
+		if strings.HasPrefix(line, prefix) {
+			lines[i] = appendPlaylistAuth(line, authQuery)
 		}
 	}
-	if !changed {
-		return nil
+	return []byte(strings.Join(lines, "\n"))
+}
+
+func rewritePlaylistMapLine(line, prefix, authQuery string) (string, bool) {
+	const marker = `URI="`
+	start := strings.Index(line, marker)
+	if !strings.HasPrefix(line, "#EXT-X-MAP:") || start < 0 {
+		return line, false
 	}
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
+	valueStart := start + len(marker)
+	valueEnd := strings.Index(line[valueStart:], `"`)
+	if valueEnd < 0 {
+		return line, false
+	}
+	valueEnd += valueStart
+	uri := line[valueStart:valueEnd]
+	if !strings.Contains(uri, "init.mp4") {
+		return line, false
+	}
+	if !strings.HasPrefix(uri, prefix) && !strings.HasPrefix(uri, "http://") && !strings.HasPrefix(uri, "https://") {
+		uri = prefix + uri
+	}
+	uri = appendPlaylistAuth(uri, authQuery)
+	return line[:valueStart] + uri + line[valueEnd:], true
+}
+
+func appendPlaylistAuth(uri, authQuery string) string {
+	if authQuery == "" || strings.Contains(strings.ToLower(uri), "api_key=") {
+		return uri
+	}
+	if strings.Contains(uri, "?") {
+		return uri + "&" + authQuery
+	}
+	return uri + "?" + authQuery
 }
 
 type streamInfo struct {
@@ -767,7 +906,7 @@ func hwInputArgs(mode string) []string {
 	case "vaapi":
 		return nil
 	case "qsv":
-		return []string{"-hwaccel", "qsv"}
+		return []string{"-hwaccel", "qsv", "-hwaccel_output_format", "qsv"}
 	case "cuda", "nvenc", "auto":
 		return []string{"-hwaccel", "auto"}
 	default:
@@ -780,7 +919,11 @@ func hwCodecArgs(mode, device string) []string {
 	case "nvenc", "cuda":
 		return []string{"-c:v", "h264_nvenc", "-preset", "p4"}
 	case "qsv":
-		return []string{"-c:v", "h264_qsv", "-preset", "veryfast"}
+		// vpp_qsv converts 10-bit sources (HEVC Main10 etc.) to 8-bit NV12 on the
+		// GPU; h264_qsv rejects 10-bit input outright. forced_idr makes the encoder
+		// honor force_key_frames as IDR frames — without it segments grow to the
+		// encoder's default GOP (~10s) instead of the requested hls_time.
+		return []string{"-vf", "vpp_qsv=format=nv12", "-c:v", "h264_qsv", "-preset", "veryfast", "-forced_idr", "1"}
 	case "vaapi":
 		args := []string{}
 		if device != "" {

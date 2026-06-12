@@ -4,6 +4,8 @@ import android.content.Context
 import android.media.MediaCodecList
 import android.os.Build
 import android.view.Display
+import androidx.media3.common.C
+import androidx.media3.exoplayer.audio.AudioCapabilities
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -37,6 +39,15 @@ fun buildPlaybackProfile(context: Context): JSONObject {
                 }
             }
         }
+    }
+    // AC3/E-AC3 are usually played via passthrough on TV devices; MediaCodecList
+    // only lists decoders and misses audio-sink capabilities.
+    val sinkCaps = runCatching { AudioCapabilities.getCapabilities(context) }.getOrNull()
+    if (sinkCaps?.supportsEncoding(C.ENCODING_AC3) == true) {
+        audio.putIfAbsent("ac3", JSONObject().put("codec", "ac3").put("maxChannels", 6))
+    }
+    if (sinkCaps?.supportsEncoding(C.ENCODING_E_AC3) == true) {
+        audio.putIfAbsent("eac3", JSONObject().put("codec", "eac3").put("maxChannels", 8))
     }
     listOf("aac", "mp3", "flac", "opus", "vorbis").forEach { codec ->
         audio.putIfAbsent(codec, JSONObject().put("codec", codec).put("maxChannels", 8))

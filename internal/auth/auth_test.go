@@ -162,6 +162,26 @@ func TestSessionLifecycleAndExpiry(t *testing.T) {
 	}
 }
 
+func TestShouldTouchSessionAcceptsSQLiteAndRFC3339Timestamps(t *testing.T) {
+	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
+	recentSQLite := now.Add(-time.Minute).Format("2006-01-02 15:04:05")
+	oldSQLite := now.Add(-sessionTouchInterval).Format("2006-01-02 15:04:05")
+	recentRFC3339 := now.Add(-time.Minute).Format(time.RFC3339)
+
+	if shouldTouchSession(recentSQLite, now) {
+		t.Fatalf("recent SQLite timestamp should not be touched")
+	}
+	if !shouldTouchSession(oldSQLite, now) {
+		t.Fatalf("old SQLite timestamp should be touched")
+	}
+	if shouldTouchSession(recentRFC3339, now) {
+		t.Fatalf("recent RFC3339 timestamp should not be touched")
+	}
+	if !shouldTouchSession("not a timestamp", now) {
+		t.Fatalf("invalid timestamp should be touched")
+	}
+}
+
 func newTestStore(t *testing.T) (*Store, context.Context) {
 	t.Helper()
 	db, err := database.Open(filepath.Join(t.TempDir(), "popcorn.db"))

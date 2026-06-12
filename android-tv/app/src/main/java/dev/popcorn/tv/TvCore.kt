@@ -40,6 +40,12 @@ object PlayerOsdBridge {
     fun dispatch(event: AndroidKeyEvent): Boolean = handler?.invoke(event) == true
 }
 
+object PlayerBackBridge {
+    var handler: ((AndroidKeyEvent) -> Boolean)? = null
+
+    fun dispatch(event: AndroidKeyEvent): Boolean = handler?.invoke(event) == true
+}
+
 object BrowseBackBridge {
     var handler: ((AndroidKeyEvent) -> Boolean)? = null
     private var consumeNextBackUp = false

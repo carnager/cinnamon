@@ -147,12 +147,13 @@ func (a *App) playbackFailure(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		ItemID    int64  `json:"itemId"`
-		PlanID    string `json:"planId"`
-		Mode      string `json:"mode"`
-		Client    string `json:"client"`
-		ErrorCode string `json:"errorCode"`
-		Message   string `json:"message"`
+		ItemID     int64  `json:"itemId"`
+		PlanID     string `json:"planId"`
+		Mode       string `json:"mode"`
+		Client     string `json:"client"`
+		ErrorCode  string `json:"errorCode"`
+		Message    string `json:"message"`
+		PositionMS int64  `json:"positionMs"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
@@ -166,9 +167,16 @@ func (a *App) playbackFailure(w http.ResponseWriter, r *http.Request) {
 	a.playbackMu.Lock()
 	a.failHints[fmt.Sprintf("%d:%d:%s", user.ID, in.ItemID, in.Mode)] = time.Now().Add(30 * time.Minute)
 	a.playbackMu.Unlock()
+	// Resume where playback actually failed, not where the failed plan began:
+	// after an error an hour into a session, the original plan's start position
+	// would throw the viewer back to the beginning.
+	startMS := plan.StartPositionMS
+	if in.PositionMS > 0 {
+		startMS = in.PositionMS
+	}
 	req := PlaybackPlanRequest{
 		ItemID:          in.ItemID,
-		StartPositionMS: plan.StartPositionMS,
+		StartPositionMS: startMS,
 		AudioIndex:      plan.Selected.AudioIndex,
 		SubtitleIndex:   plan.Selected.SubtitleIndex,
 		BandwidthKbps:   nil,

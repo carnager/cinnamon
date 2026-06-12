@@ -18,7 +18,7 @@ android {
         versionCode = popcornAndroidVersionCode
         versionName = popcornAndroidVersionName
         ndk {
-            abiFilters += listOf("arm64-v8a")
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
     }
 
@@ -63,7 +63,6 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
     implementation("androidx.media3:media3-ui:1.5.1")
-    implementation("dev.jdtech.mpv:libmpv:1.0.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("com.google.zxing:core:3.5.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")

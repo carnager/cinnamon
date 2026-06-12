@@ -27,6 +27,7 @@ var videoExts = map[string]struct{}{
 var episodePattern = regexp.MustCompile(`(?i)(?:^|[\s._-])s(\d{1,2})e(\d{1,3})(?:[\s._-]|$)`)
 
 const metadataBackfillNFOActors = "nfo-metadata-actors-v2"
+const scanImportBatchSize = 64
 
 var ErrScanAlreadyRunning = errors.New("scan already running")
 
@@ -46,9 +47,11 @@ func TryStartScan() (func(), bool) {
 }
 
 type Scanner struct {
-	cfg   config.Config
-	store *Store
-	log   *slog.Logger
+	cfg        config.Config
+	store      *Store
+	log        *slog.Logger
+	nfoCache   sync.Map
+	mtimeCache sync.Map
 }
 
 func NewScanner(cfg config.Config, store *Store, log *slog.Logger) *Scanner {
@@ -70,6 +73,7 @@ func (s *Scanner) ScanWithLease(ctx context.Context, release func()) error {
 }
 
 func (s *Scanner) scan(ctx context.Context) error {
+	s.clearScanCaches()
 	if len(s.cfg.Libraries) == 0 {
 		return nil
 	}
@@ -91,6 +95,7 @@ func (s *Scanner) ScanPaths(ctx context.Context, lib config.Library, paths []str
 }
 
 func (s *Scanner) scanPaths(ctx context.Context, lib config.Library, paths []string) error {
+	s.clearScanCaches()
 	if len(paths) == 0 {
 		return nil
 	}
@@ -118,13 +123,29 @@ func (s *Scanner) scanPaths(ctx context.Context, lib config.Library, paths []str
 			return err
 		}
 	}
-	for _, job := range jobs {
-		item := s.buildItem(ctx, lib, job.path, job.info, snapshot[job.path])
-		if err := s.store.UpsertItem(ctx, item); err != nil {
+	batch := make([]Item, 0, scanImportBatchSize)
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		if err := s.store.UpsertItems(ctx, batch); err != nil {
 			stats.errors.Add(1)
 			return err
 		}
-		stats.itemsImported.Add(1)
+		stats.itemsImported.Add(int64(len(batch)))
+		batch = batch[:0]
+		return nil
+	}
+	for _, job := range jobs {
+		batch = append(batch, s.buildItem(ctx, lib, job.path, job.info, snapshot[job.path]))
+		if len(batch) >= scanImportBatchSize {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return err
 	}
 	finalStatus := ScanStatus{
 		LibraryID:     lib.ID,
@@ -236,20 +257,20 @@ func (s *Scanner) addScanFile(ctx context.Context, lib config.Library, path stri
 	}
 	stats.mediaFound.Add(1)
 	existing := snapshot[abs]
-	if !scanFileChanged(lib, abs, info, existing) {
+	if !s.scanFileChanged(lib, abs, info, existing) {
 		return nil
 	}
 	jobs[abs] = scanJob{path: abs, info: info}
 	return nil
 }
 
-func scanFileChanged(lib config.Library, path string, info os.FileInfo, existing Item) bool {
+func (s *Scanner) scanFileChanged(lib config.Library, path string, info os.FileInfo, existing Item) bool {
 	return existing.Path == "" ||
 		existing.SizeBytes != info.Size() ||
 		existing.MTimeUnix != info.ModTime().Unix() ||
-		existing.NFOMTimeUnix != expectedNFOMTime(lib, path) ||
-		existing.PosterMTimeUnix != expectedPosterMTime(lib, path) ||
-		existing.BackdropMTimeUnix != expectedBackdropMTime(lib, path) ||
+		existing.NFOMTimeUnix != expectedNFOMTime(lib, path, s.fileMTimeUnix) ||
+		existing.PosterMTimeUnix != expectedPosterMTime(lib, path, s.fileMTimeUnix) ||
+		existing.BackdropMTimeUnix != expectedBackdropMTime(lib, path, s.fileMTimeUnix) ||
 		!existing.StreamsKnown
 }
 
@@ -290,11 +311,53 @@ func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
 	seen := map[string]struct{}{}
 	var seenMu sync.Mutex
 	jobs := make(chan scanJob, runtime.NumCPU()*2)
+	items := make(chan Item, scanImportBatchSize*2)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var wg sync.WaitGroup
+	var writerWG sync.WaitGroup
 	var firstErr error
 	var errMu sync.Mutex
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		stats.errors.Add(1)
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+		errMu.Unlock()
+	}
+	writerWG.Add(1)
+	go func() {
+		defer writerWG.Done()
+		batch := make([]Item, 0, scanImportBatchSize)
+		flush := func() bool {
+			if len(batch) == 0 {
+				return true
+			}
+			if err := s.store.UpsertItems(ctx, batch); err != nil {
+				s.log.Warn("scan import batch failed", "library", lib.ID, "items", len(batch), "error", err)
+				recordErr(err)
+				return false
+			}
+			imported := stats.itemsImported.Add(int64(len(batch)))
+			if imported <= 10 || imported%250 == 0 {
+				s.log.Debug("scan items imported", "library", lib.ID, "imported", imported)
+			}
+			batch = batch[:0]
+			return true
+		}
+		for item := range items {
+			batch = append(batch, item)
+			if len(batch) >= scanImportBatchSize && !flush() {
+				return
+			}
+		}
+		_ = flush()
+	}()
 	workers := runtime.NumCPU()
 	if workers < 2 {
 		workers = 2
@@ -308,20 +371,10 @@ func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
 			defer wg.Done()
 			for job := range jobs {
 				item := s.buildItem(ctx, lib, job.path, job.info, snapshot[job.path])
-				if err := s.store.UpsertItem(ctx, item); err != nil {
-					stats.errors.Add(1)
-					s.log.Warn("scan import failed", "library", lib.ID, "path", job.path, "error", err)
-					errMu.Lock()
-					if firstErr == nil {
-						firstErr = err
-						cancel()
-					}
-					errMu.Unlock()
+				select {
+				case items <- item:
+				case <-ctx.Done():
 					return
-				}
-				imported := stats.itemsImported.Add(1)
-				if imported <= 10 || imported%250 == 0 {
-					s.log.Debug("scan item imported", "library", lib.ID, "imported", imported, "path", job.path, "kind", item.Kind, "title", item.Title)
 				}
 			}
 		}()
@@ -371,7 +424,7 @@ func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
 		seenMu.Lock()
 		seen[abs] = struct{}{}
 		seenMu.Unlock()
-		if !scanFileChanged(lib, abs, info, snapshot[abs]) {
+		if !s.scanFileChanged(lib, abs, info, snapshot[abs]) {
 			return nil
 		}
 		select {
@@ -383,6 +436,8 @@ func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
 	})
 	close(jobs)
 	wg.Wait()
+	close(items)
+	writerWG.Wait()
 	errMu.Lock()
 	if firstErr != nil && walkErr == nil {
 		walkErr = firstErr
@@ -454,8 +509,8 @@ type scanJob struct {
 
 func (s *Scanner) buildItem(ctx context.Context, lib config.Library, path string, info os.FileInfo, existing Item) Item {
 	nfo := findSidecar(path, []string{".nfo"})
-	nfoMTime := fileMTimeUnix(nfo)
-	meta := readNFO(nfo)
+	nfoMTime := s.fileMTimeUnix(nfo)
+	meta := s.readNFO(nfo)
 	title := meta.Title
 	if title == "" {
 		title = cleanTitle(filepath.Base(strings.TrimSuffix(path, filepath.Ext(path))))
@@ -479,7 +534,7 @@ func (s *Scanner) buildItem(ctx context.Context, lib config.Library, path string
 			seasonNumber, episodeNumber = parseEpisodeNumbers(path)
 		}
 		showNFO = findShowNFO(lib.Path, path)
-		showMeta = readNFO(showNFO)
+		showMeta = s.readNFO(showNFO)
 		if showTitle == "" {
 			showTitle = firstNonEmpty(showMeta.Title, readShowTitle(lib.Path, path), fallbackShowTitle(lib.Path, path))
 		}
@@ -490,14 +545,14 @@ func (s *Scanner) buildItem(ctx context.Context, lib config.Library, path string
 			showMeta.Title = showTitle
 		}
 		seasonNFO = findSeasonNFO(path, seasonNumber)
-		seasonMeta = readNFO(seasonNFO)
-		nfoMTime = maxInt64(nfoMTime, fileMTimeUnix(showNFO))
-		nfoMTime = maxInt64(nfoMTime, fileMTimeUnix(seasonNFO))
+		seasonMeta = s.readNFO(seasonNFO)
+		nfoMTime = maxInt64(nfoMTime, s.fileMTimeUnix(showNFO))
+		nfoMTime = maxInt64(nfoMTime, s.fileMTimeUnix(seasonNFO))
 		title = episodeDisplayTitle(showTitle, seasonNumber, episodeNumber, episodeTitle)
 	}
 	posterPath, backdropPath := artworkPaths(lib, path)
-	posterMTime := fileMTimeUnix(posterPath)
-	backdropMTime := fileMTimeUnix(backdropPath)
+	posterMTime := s.fileMTimeUnix(posterPath)
+	backdropMTime := s.fileMTimeUnix(backdropPath)
 	actorDirs := itemActorDirs(lib, path)
 	itemActors := actorsFromNFO(meta.Actors, actorDirs...)
 	var showMetadata *ShowMetadata
@@ -511,7 +566,7 @@ func (s *Scanner) buildItem(ctx context.Context, lib config.Library, path string
 			OriginalTitle: showMeta.OriginalTitle,
 			Year:          showMeta.Year,
 			NFOPath:       showNFO,
-			NFOMTimeUnix:  fileMTimeUnix(showNFO),
+			NFOMTimeUnix:  s.fileMTimeUnix(showNFO),
 			Overview:      firstNonEmpty(showMeta.Plot, showMeta.Outline),
 			Genres:        strings.Join(showMeta.Genres, ", "),
 			Rating:        showMeta.Rating,
@@ -525,9 +580,9 @@ func (s *Scanner) buildItem(ctx context.Context, lib config.Library, path string
 			SeasonNumber:    seasonNumber,
 			Title:           seasonMeta.Title,
 			NFOPath:         seasonNFO,
-			NFOMTimeUnix:    fileMTimeUnix(seasonNFO),
+			NFOMTimeUnix:    s.fileMTimeUnix(seasonNFO),
 			PosterPath:      seasonPoster,
-			PosterMTimeUnix: fileMTimeUnix(seasonPoster),
+			PosterMTimeUnix: s.fileMTimeUnix(seasonPoster),
 			Overview:        firstNonEmpty(seasonMeta.Plot, seasonMeta.Outline),
 			Rating:          seasonMeta.Rating,
 			Premiered:       firstNonEmpty(seasonMeta.Premiered, seasonMeta.Released),
@@ -543,13 +598,7 @@ func (s *Scanner) buildItem(ctx context.Context, lib config.Library, path string
 			probed.Streams = append(probed.Streams, MediaStream{Index: 1, Type: "audio", Codec: existing.AudioCodec})
 		}
 	}
-	streamCount := 0
-	if existing.ID > 0 {
-		if count, err := s.store.MediaStreamCount(ctx, existing.ID); err == nil {
-			streamCount = count
-		}
-	}
-	needsProbe := existing.Path == "" || existing.SizeBytes != info.Size() || existing.MTimeUnix != info.ModTime().Unix() || existing.DurationMS == 0 || streamCount == 0
+	needsProbe := existing.Path == "" || existing.SizeBytes != info.Size() || existing.MTimeUnix != info.ModTime().Unix() || existing.DurationMS == 0 || !existing.StreamsKnown
 	var streamsToStore []MediaStream
 	streamsKnown := false
 	if needsProbe {
@@ -643,25 +692,25 @@ func EpisodeArtworkPath(video string) string {
 	})
 }
 
-func expectedNFOMTime(lib config.Library, video string) int64 {
+func expectedNFOMTime(lib config.Library, video string, mtime func(string) int64) int64 {
 	nfo := findSidecar(video, []string{".nfo"})
-	mtime := fileMTimeUnix(nfo)
+	out := mtime(nfo)
 	if lib.Type == "tv" {
-		mtime = maxInt64(mtime, fileMTimeUnix(findShowNFO(lib.Path, video)))
+		out = maxInt64(out, mtime(findShowNFO(lib.Path, video)))
 		season, _ := parseEpisodeNumbers(video)
-		mtime = maxInt64(mtime, fileMTimeUnix(findSeasonNFO(video, season)))
+		out = maxInt64(out, mtime(findSeasonNFO(video, season)))
 	}
-	return mtime
+	return out
 }
 
-func expectedPosterMTime(lib config.Library, video string) int64 {
+func expectedPosterMTime(lib config.Library, video string, mtime func(string) int64) int64 {
 	poster, _ := artworkPaths(lib, video)
-	return fileMTimeUnix(poster)
+	return mtime(poster)
 }
 
-func expectedBackdropMTime(lib config.Library, video string) int64 {
+func expectedBackdropMTime(lib config.Library, video string, mtime func(string) int64) int64 {
 	_, backdrop := artworkPaths(lib, video)
-	return fileMTimeUnix(backdrop)
+	return mtime(backdrop)
 }
 
 func isMetadataOrArtwork(path string) bool {
@@ -747,6 +796,23 @@ func fileMTimeUnix(path string) int64 {
 		return 0
 	}
 	return info.ModTime().Unix()
+}
+
+func (s *Scanner) clearScanCaches() {
+	s.nfoCache = sync.Map{}
+	s.mtimeCache = sync.Map{}
+}
+
+func (s *Scanner) fileMTimeUnix(path string) int64 {
+	if path == "" {
+		return 0
+	}
+	if cached, ok := s.mtimeCache.Load(path); ok {
+		return cached.(int64)
+	}
+	mtime := fileMTimeUnix(path)
+	s.mtimeCache.Store(path, mtime)
+	return mtime
 }
 
 func maxInt64(a, b int64) int64 {
@@ -913,6 +979,18 @@ func ReadNFOSourceRatings(path string) SourceRatings {
 		}
 	}
 	return out
+}
+
+func (s *Scanner) readNFO(path string) nfoMovie {
+	if path == "" {
+		return nfoMovie{}
+	}
+	if cached, ok := s.nfoCache.Load(path); ok {
+		return cached.(nfoMovie)
+	}
+	meta := readNFO(path)
+	s.nfoCache.Store(path, meta)
+	return meta
 }
 
 func ReadNFOExtras(path string) NFOExtras {

@@ -1,8 +1,6 @@
 package server
 
 import (
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -71,6 +69,9 @@ func TestCleanSessionID(t *testing.T) {
 }
 
 func TestHLSSessionOwnerUsesDeviceScopedAndroidIDs(t *testing.T) {
+	if got, want := hlsSessionOwner("android-tv_nvidia_shield_android_tv_6970_1780933114271_4c56d817"), "android-tv_nvidia_shield_android_tv"; got != want {
+		t.Fatalf("android-tv hlsSessionOwner = %q, want %q", got, want)
+	}
 	if got, want := hlsSessionOwner("android_dev_ddf855546f1512d4322d0847_1326_1780598803359"), "android_dev_ddf855546f1512d4322d0847"; got != want {
 		t.Fatalf("hlsSessionOwner = %q, want %q", got, want)
 	}
@@ -94,7 +95,6 @@ func TestTranscodeRatesCapStereoAACBitrate(t *testing.T) {
 }
 
 func TestRewritePlaylistSegments(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "index.m3u8")
 	input := strings.Join([]string{
 		"#EXTM3U",
 		`#EXT-X-MAP:URI="init.mp4"`,
@@ -104,22 +104,12 @@ func TestRewritePlaylistSegments(t *testing.T) {
 		"/api/items/1/hls/session/seg_00002.m4s",
 		"",
 	}, "\n")
-	if err := os.WriteFile(path, []byte(input), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	prefix := "/api/items/1/hls/session/"
-	if err := rewritePlaylistSegments(path, prefix); err != nil {
-		t.Fatal(err)
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := string(b)
-	if !strings.Contains(got, `#EXT-X-MAP:URI="`+prefix+`init.mp4"`) {
+	got := string(rewritePlaylistBody([]byte(input), prefix, "api_key=test-token"))
+	if !strings.Contains(got, `#EXT-X-MAP:URI="`+prefix+`init.mp4?api_key=test-token"`) {
 		t.Fatalf("rewritten playlist missing prefixed init.mp4:\n%s", got)
 	}
-	if !strings.Contains(got, prefix+"seg_00001.m4s") {
+	if !strings.Contains(got, prefix+"seg_00001.m4s?api_key=test-token") {
 		t.Fatalf("rewritten playlist missing prefixed segment:\n%s", got)
 	}
 	if strings.Count(got, prefix+"seg_00002.m4s") != 1 {

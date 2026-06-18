@@ -332,6 +332,58 @@ func TestScanPathsRefreshesChangedSidecarOnly(t *testing.T) {
 	}
 }
 
+func TestScanPathsPrunesDeletedFilesInDir(t *testing.T) {
+	store, ctx := newTestStore(t)
+	root := t.TempDir()
+	libDir := filepath.Join(root, "Movies")
+	keepDir := filepath.Join(libDir, "Keeper")
+	goneDir := filepath.Join(libDir, "Goner")
+	mustMkdirAll(t, keepDir)
+	mustMkdirAll(t, goneDir)
+
+	keepVideo := filepath.Join(keepDir, "Keeper.mkv")
+	goneVideo := filepath.Join(goneDir, "Goner.mkv")
+	mustWrite(t, keepVideo, "fake video")
+	mustWrite(t, goneVideo, "fake video")
+
+	for _, path := range []string{keepVideo, goneVideo} {
+		mustChtimes(t, path, 1000)
+		info := mustStat(t, path)
+		if err := store.UpsertItem(ctx, Item{
+			LibraryID:    "movies",
+			Path:         path,
+			Kind:         "movie",
+			Title:        filepath.Base(path),
+			SortTitle:    filepath.Base(path),
+			DurationMS:   123_000,
+			SizeBytes:    info.Size(),
+			MTimeUnix:    info.ModTime().Unix(),
+			StreamsKnown: true,
+		}); err != nil {
+			t.Fatalf("upsert %s: %v", path, err)
+		}
+	}
+
+	// The Goner folder is deleted on disk, which bumps the library directory's
+	// mtime. The incremental scan of the library dir must prune its item.
+	if err := os.RemoveAll(goneDir); err != nil {
+		t.Fatalf("remove goner dir: %v", err)
+	}
+
+	scanner := NewScanner(config.Config{FFprobePath: "ffprobe"}, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := scanner.ScanPaths(ctx, config.Library{ID: "movies", Type: "movies", Path: libDir}, []string{libDir}); err != nil {
+		t.Fatalf("scan library dir: %v", err)
+	}
+
+	items, err := store.AllItems(ctx)
+	if err != nil {
+		t.Fatalf("list items: %v", err)
+	}
+	if len(items) != 1 || items[0].Path != keepVideo {
+		t.Fatalf("items = %#v, want only the keeper to remain", items)
+	}
+}
+
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {

@@ -153,7 +153,7 @@ func defaults() Config {
 		ScanOnStart:        true,
 		AutoScan:           true,
 		AutoScanDebounce:   3 * time.Second,
-		AutoScanInterval:   6 * time.Hour,
+		AutoScanInterval:   30 * time.Second,
 		AutoScanWatchDepth: 0,
 		ScanTimeout:        30 * time.Minute,
 	}

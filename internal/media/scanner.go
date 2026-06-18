@@ -109,17 +109,43 @@ func (s *Scanner) scanPaths(ctx context.Context, lib config.Library, paths []str
 	}
 	jobs := map[string]scanJob{}
 	removed := map[string]struct{}{}
+	seen := map[string]struct{}{}
+	var scannedDirs []string
 	for _, path := range paths {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err := s.collectScanJobs(ctx, lib, path, snapshot, jobs, removed, stats); err != nil {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			abs = filepath.Clean(path)
+		}
+		if info, err := os.Stat(abs); err == nil && info.IsDir() {
+			scannedDirs = append(scannedDirs, abs)
+		}
+		if err := s.collectScanJobs(ctx, lib, path, snapshot, jobs, removed, seen, stats); err != nil {
 			stats.errors.Add(1)
 			s.log.Warn("incremental scan path failed", "library", lib.ID, "path", path, "error", err)
 		}
 	}
 	for prefix := range removed {
 		if err := s.store.RemovePathPrefix(ctx, lib.ID, prefix); err != nil {
+			return err
+		}
+	}
+	// Prune items that no longer exist on disk within the directories we fully
+	// walked. A deleted file (or whole sub-folder) bumps its parent directory's
+	// mtime, so that parent is in the changed set and gets reconciled here.
+	var pruned []string
+	for itemPath := range snapshot {
+		if _, ok := seen[itemPath]; ok {
+			continue
+		}
+		if pathUnderAnyDir(itemPath, scannedDirs) {
+			pruned = append(pruned, itemPath)
+		}
+	}
+	if len(pruned) > 0 {
+		if err := s.store.RemovePaths(ctx, lib.ID, pruned); err != nil {
 			return err
 		}
 	}
@@ -166,12 +192,26 @@ func (s *Scanner) scanPaths(ctx context.Context, lib config.Library, paths []str
 		"mediaFound", finalStatus.MediaFound,
 		"itemsImported", finalStatus.ItemsImported,
 		"removedPrefixes", len(removed),
+		"prunedItems", len(pruned),
 		"errors", finalStatus.Errors,
 	)
 	return nil
 }
 
-func (s *Scanner) collectScanJobs(ctx context.Context, lib config.Library, path string, snapshot map[string]Item, jobs map[string]scanJob, removed map[string]struct{}, stats *scanStats) error {
+// pathUnderAnyDir reports whether path lives inside one of the given directories.
+func pathUnderAnyDir(path string, dirs []string) bool {
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		if strings.HasPrefix(path, dir+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Scanner) collectScanJobs(ctx context.Context, lib config.Library, path string, snapshot map[string]Item, jobs map[string]scanJob, removed, seen map[string]struct{}, stats *scanStats) error {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		abs = filepath.Clean(path)
@@ -200,11 +240,11 @@ func (s *Scanner) collectScanJobs(ctx context.Context, lib config.Library, path 
 				}
 				return nil
 			}
-			return s.addScanFile(ctx, lib, candidate, snapshot, jobs, stats)
+			return s.addScanFile(ctx, lib, candidate, snapshot, jobs, seen, stats)
 		})
 	}
 	if _, ok := videoExts[strings.ToLower(filepath.Ext(abs))]; ok {
-		return s.addScanFile(ctx, lib, abs, snapshot, jobs, stats)
+		return s.addScanFile(ctx, lib, abs, snapshot, jobs, seen, stats)
 	}
 	if !isMetadataOrArtwork(abs) {
 		stats.filesSeen.Add(1)
@@ -226,11 +266,11 @@ func (s *Scanner) collectScanJobs(ctx context.Context, lib config.Library, path 
 			}
 			return nil
 		}
-		return s.addScanFile(ctx, lib, candidate, snapshot, jobs, stats)
+		return s.addScanFile(ctx, lib, candidate, snapshot, jobs, seen, stats)
 	})
 }
 
-func (s *Scanner) addScanFile(ctx context.Context, lib config.Library, path string, snapshot map[string]Item, jobs map[string]scanJob, stats *scanStats) error {
+func (s *Scanner) addScanFile(ctx context.Context, lib config.Library, path string, snapshot map[string]Item, jobs map[string]scanJob, seen map[string]struct{}, stats *scanStats) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -256,6 +296,9 @@ func (s *Scanner) addScanFile(ctx context.Context, lib config.Library, path stri
 		abs = filepath.Clean(path)
 	}
 	stats.mediaFound.Add(1)
+	if seen != nil {
+		seen[abs] = struct{}{}
+	}
 	existing := snapshot[abs]
 	if !s.scanFileChanged(lib, abs, info, existing) {
 		return nil

@@ -85,7 +85,6 @@ fun DetailView(
     var subtitleMenuOpen by remember { mutableStateOf(false) }
     var fullTextOpen by remember { mutableStateOf(false) }
     var resumeProgress by remember(item.id) { mutableStateOf<PlaybackProgress?>(null) }
-    var resumeDialogOpen by remember(item.id) { mutableStateOf(false) }
     val audioFocus = remember { FocusRequester() }
     val subtitleFocus = remember { FocusRequester() }
     val descriptionFocus = remember { FocusRequester() }
@@ -142,10 +141,9 @@ fun DetailView(
     val subtitleLabel = selectedTrackLabel(subtitleTracks, selectedSubtitle, if (streamsLoaded) "Off" else "Loading\u2026")
     val resumePosition = resumeProgress?.positionMs ?: 0L
     val resumeDuration = resumeProgress?.durationMs?.takeIf { it > 0 } ?: detailItem.durationMs
-    val canResume = resumeProgress?.completed != true &&
-        resumeDuration > 0 &&
-        resumePosition >= 30_000 &&
-        resumePosition < (resumeDuration - 90_000).coerceAtLeast(30_000)
+    // Resume keys off the saved position, not the completed flag, so a finished
+    // (still "seen") item being re-watched still offers Resume.
+    val canResume = resumeProgress != null && progressResumable(resumePosition, resumeDuration)
 
     LaunchedEffect(item.id) {
         delay(260)
@@ -232,13 +230,10 @@ fun DetailView(
                 onAudio = { audioMenuOpen = true },
                 onSubtitle = { subtitleMenuOpen = true },
                 onFullText = { fullTextOpen = true },
-                onPlay = {
-                    if (canResume) {
-                        resumeDialogOpen = true
-                    } else {
-                        onPlay(selectedAudio, selectedSubtitle, 0L)
-                    }
-                },
+                canResume = canResume,
+                resumePositionMs = resumePosition,
+                onResume = { onPlay(selectedAudio, selectedSubtitle, resumePosition) },
+                onPlayFromStart = { onPlay(selectedAudio, selectedSubtitle, 0L) },
                 onTrailer = { onTrailer(sidecars.trailer) },
                 onWatchedChange = { onWatchedChange(!watched) },
                 onWatchlistChange = { onWatchlistChange(!watchlisted) },
@@ -293,22 +288,6 @@ fun DetailView(
     if (fullTextOpen) {
         FullTextDialog(item = detailItem, onDismiss = { fullTextOpen = false })
     }
-
-    if (resumeDialogOpen) {
-        ResumeChoiceDialog(
-            title = displayTitle,
-            positionMs = resumePosition,
-            onDismiss = { resumeDialogOpen = false },
-            onResume = {
-                resumeDialogOpen = false
-                onPlay(selectedAudio, selectedSubtitle, resumePosition)
-            },
-            onStartOver = {
-                resumeDialogOpen = false
-                onPlay(selectedAudio, selectedSubtitle, 0L)
-            },
-        )
-    }
 }
 
 @Composable
@@ -329,10 +308,13 @@ private fun DetailHeroContent(
     castFocus: FocusRequester,
     watched: Boolean,
     watchlisted: Boolean,
+    canResume: Boolean,
+    resumePositionMs: Long,
     onAudio: () -> Unit,
     onSubtitle: () -> Unit,
     onFullText: () -> Unit,
-    onPlay: () -> Unit,
+    onResume: () -> Unit,
+    onPlayFromStart: () -> Unit,
     onTrailer: () -> Unit,
     onWatchedChange: () -> Unit,
     onWatchlistChange: () -> Unit,
@@ -401,6 +383,7 @@ private fun DetailHeroContent(
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 chips.forEach { TechChip(it) }
+                detailGenres(detailItem).forEach { GenreChip(it) }
                 SelectorBadge(
                     label = "Audio",
                     value = audioLabel,
@@ -439,12 +422,31 @@ private fun DetailHeroContent(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                PlayButton(
-                    focusRequester = playFocus,
-                    onUp = { requestDetailFocus(descriptionFocus) },
-                    onDown = { requestDetailFocus(castFocus) },
-                    onClick = onPlay,
-                )
+                if (canResume) {
+                    PlayButton(
+                        label = "Resume",
+                        detail = fmtClock(resumePositionMs),
+                        focusRequester = playFocus,
+                        onUp = { requestDetailFocus(descriptionFocus) },
+                        onDown = { requestDetailFocus(castFocus) },
+                        onClick = onResume,
+                    )
+                    PlayButton(
+                        label = "Play",
+                        primary = false,
+                        onUp = { requestDetailFocus(descriptionFocus) },
+                        onDown = { requestDetailFocus(castFocus) },
+                        onClick = onPlayFromStart,
+                    )
+                } else {
+                    PlayButton(
+                        label = "Play",
+                        focusRequester = playFocus,
+                        onUp = { requestDetailFocus(descriptionFocus) },
+                        onDown = { requestDetailFocus(castFocus) },
+                        onClick = onPlayFromStart,
+                    )
+                }
                 ActionToggle(
                     label = "Trailer",
                     active = false,
@@ -475,39 +477,13 @@ private fun requestDetailFocus(requester: FocusRequester): Boolean {
     return runCatching { requester.requestFocus() }.isSuccess
 }
 
-@Composable
-private fun ResumeChoiceDialog(
-    title: String,
-    positionMs: Long,
-    onDismiss: () -> Unit,
-    onResume: () -> Unit,
-    onStartOver: () -> Unit,
-) {
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier
-                .width(420.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(SurfaceColor)
-                .border(1.dp, Line, RoundedCornerShape(10.dp))
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            Text("Resume playback?", color = Accent, fontSize = 19.sp, fontWeight = FontWeight.Black)
-            Text(title, color = TextColor, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text("Continue from ${fmtClock(positionMs)} or start from the beginning.", color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                FocusButton(label = "Resume ${fmtClock(positionMs)}", primary = true, modifier = Modifier.weight(1f), onClick = onResume)
-                FocusButton(label = "Start over", primary = false, modifier = Modifier.weight(1f), onClick = onStartOver)
-            }
-        }
-    }
-}
-
 // ── Action buttons ──
 
 @Composable
 private fun PlayButton(
+    label: String = "Play",
+    detail: String? = null,
+    primary: Boolean = true,
     focusRequester: FocusRequester? = null,
     onFocus: () -> Unit = {},
     onUp: (() -> Boolean)? = null,
@@ -515,12 +491,23 @@ private fun PlayButton(
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
+    val bg = when {
+        focused -> Color.White
+        primary -> Accent
+        else -> Color.White.copy(alpha = .12f)
+    }
+    val contentColor = if (focused || primary) Color.Black else TextColor
+    val borderColor = when {
+        focused -> Accent
+        primary -> Color.Transparent
+        else -> Color.White.copy(alpha = .22f)
+    }
     Row(
         Modifier
             .height(42.dp)
             .clip(RoundedCornerShape(6.dp))
-            .background(if (focused) Color.White else Accent)
-            .border(2.dp, if (focused) Accent else Color.Transparent, RoundedCornerShape(6.dp))
+            .background(bg)
+            .border(2.dp, borderColor, RoundedCornerShape(6.dp))
             .onFocusChanged {
                 focused = it.isFocused
                 if (it.isFocused) onFocus()
@@ -537,10 +524,13 @@ private fun PlayButton(
             .tvActivate(onClick)
             .padding(horizontal = 24.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("\u25B6", color = Color.Black, fontSize = 16.sp, fontWeight = FontWeight.Black)
-        Text("Play", color = Color.Black, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text("\u25B6", color = contentColor, fontSize = 16.sp, fontWeight = FontWeight.Black)
+        Text(label, color = contentColor, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        if (detail != null) {
+            Text(detail, color = contentColor.copy(alpha = .72f), fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        }
     }
 }
 
@@ -735,6 +725,25 @@ private fun TechChip(text: String) {
             .padding(horizontal = 8.dp, vertical = 4.dp),
     )
 }
+
+@Composable
+private fun GenreChip(text: String) {
+    Text(
+        text,
+        color = Accent.copy(alpha = .92f),
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(Accent.copy(alpha = .12f))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+    )
+}
+
+private fun detailGenres(item: PopItem): List<String> =
+    item.genres.split(",", "/", "|").map { it.trim() }.filter { it.isNotBlank() }.take(3)
 
 @Composable
 private fun SelectorBadge(

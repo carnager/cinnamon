@@ -5,6 +5,7 @@ import android.os.Build
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
@@ -102,6 +103,49 @@ fun fmtClock(ms: Long): String {
     val s = total % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
+
+// ── Playback progress helpers ──
+//
+// The server keeps the "completed" flag sticky (completed = MAX(old, new)) so a
+// finished show stays "seen" even when you start re-watching it. That means we
+// can't use the completed flag to decide whether to offer resume — a re-watch
+// resets the position but leaves completed = true. Instead we look only at the
+// saved position: near the end means finished, a meaningful mid-point means
+// resume.
+
+// progressFinished mirrors the server's isFinished and the player's
+// progressCompleted: at/near the end of the file.
+fun progressFinished(positionMs: Long, durationMs: Long): Boolean {
+    if (durationMs <= 0 || positionMs <= 0) return false
+    return durationMs - positionMs <= 90_000 || positionMs.toDouble() / durationMs.toDouble() >= 0.92
+}
+
+// progressResumable is true when there is a mid-file position worth resuming,
+// regardless of the sticky completed flag.
+fun progressResumable(positionMs: Long, durationMs: Long): Boolean {
+    if (durationMs <= 0 || positionMs < 30_000) return false
+    return !progressFinished(positionMs, durationMs)
+}
+
+fun resumeFraction(positionMs: Long, durationMs: Long): Float {
+    if (durationMs <= 0) return 0f
+    return (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+}
+
+// resumeFractionMap builds itemId -> watched fraction for everything currently
+// resumable, used to draw the progress bar on posters.
+fun resumeFractionMap(progress: List<PlaybackProgress>): Map<Long, Float> {
+    val out = HashMap<Long, Float>()
+    for (p in progress) {
+        if (!progressResumable(p.positionMs, p.durationMs)) continue
+        out[p.itemId] = resumeFraction(p.positionMs, p.durationMs)
+    }
+    return out
+}
+
+// Provides per-item resume fractions to poster cards without threading the map
+// through every screen composable.
+val LocalResumeProgress = compositionLocalOf { emptyMap<Long, Float>() }
 
 fun imageUrl(session: Session?, itemId: Long, kind: String, version: Long = 0): String {
     if (session == null || itemId <= 0) return ""

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -283,6 +284,8 @@ fun ItemCard(
             if (item.rating > 0) PosterRating(item.rating)
             if (watched) SeenBadge()
             if (watchlisted) WatchlistBadge()
+            val progress = LocalResumeProgress.current[item.id] ?: 0f
+            if (progress > 0f) PosterProgressBar(progress)
         }
         Spacer(Modifier.height(5.dp))
         Text(
@@ -303,6 +306,28 @@ fun ItemCard(
                 overflow = TextOverflow.Ellipsis,
             )
         }
+    }
+}
+
+// Half-transparent resume bar pinned to the bottom of a poster.
+@Composable
+fun BoxScope.PosterProgressBar(fraction: Float) {
+    Box(
+        Modifier
+            .align(Alignment.BottomCenter)
+            .fillMaxWidth()
+            .padding(horizontal = 6.dp, vertical = 6.dp)
+            .height(4.dp)
+            .clip(RoundedCornerShape(99.dp))
+            .background(Color.Black.copy(alpha = .55f)),
+    ) {
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(fraction.coerceIn(0.04f, 1f))
+                .clip(RoundedCornerShape(99.dp))
+                .background(Accent),
+        )
     }
 }
 

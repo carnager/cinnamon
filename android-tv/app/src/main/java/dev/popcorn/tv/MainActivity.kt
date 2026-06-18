@@ -11,6 +11,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -96,6 +97,7 @@ fun PopcornApp() {
     var recentMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var recentShows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
     var completedItems by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    var resumeFractionById by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
     var completedShows by remember { mutableStateOf<Set<String>>(emptySet()) }
     var watchlistItems by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var watchlistShows by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -144,6 +146,7 @@ fun PopcornApp() {
                 val progress = api.progressList()
                 val showProgress = api.showProgress()
                 completedItems = progress.filter { it.completed }.map { it.itemId }.toSet()
+                resumeFractionById = resumeFractionMap(progress)
                 completedShows = showProgress.filter { it.completed }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
             }
         }
@@ -153,14 +156,9 @@ fun PopcornApp() {
         val progress = knownProgress ?: api.progressList()
         val completedItemIds = progress.filter { it.completed }.map { it.itemId }.toSet()
         val resumable = progress
-            .filter { progress ->
-                val duration = progress.durationMs
-                val position = progress.positionMs
-                !progress.completed &&
-                    duration > 0 &&
-                    position >= 30_000 &&
-                    position < (duration - 90_000).coerceAtLeast(30_000)
-            }
+            // Resume is driven by saved position, not the sticky completed flag,
+            // so re-watching a finished show still surfaces here.
+            .filter { progressResumable(it.positionMs, it.durationMs) }
             .take(40)
         val entries = coroutineScope {
             resumable.map { progress ->
@@ -223,6 +221,7 @@ fun PopcornApp() {
         continueMovies = payload.continueMovies
         continueEpisodes = payload.continueEpisodes
         completedItems = payload.progress.filter { it.completed }.map { it.itemId }.toSet()
+        resumeFractionById = resumeFractionMap(payload.progress)
         completedShows = payload.showProgress.filter { it.completed }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
         watchlistMovies = payload.watchlist.items.filter { it.kind == "movie" }
         watchlistTvShows = payload.watchlist.shows
@@ -494,6 +493,7 @@ fun PopcornApp() {
                     val showProgress = showProgressDeferred.await()
                     if (generation == loadGeneration) {
                         completedItems = progress.filter { it.completed }.map { it.itemId }.toSet()
+                        resumeFractionById = resumeFractionMap(progress)
                         completedShows = showProgress.filter { it.completed }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
                     }
 
@@ -638,7 +638,7 @@ fun PopcornApp() {
         val api = Api(active)
         lastScanSignature = runCatching { scanSignature(api.scanStatus()) }.getOrDefault("")
         while (true) {
-            delay(10_000)
+            delay(4_000)
             val statuses = runCatching { api.scanStatus() }.getOrNull() ?: continue
             if (statuses.any { it.status == "running" }) continue
             val signature = scanSignature(statuses)
@@ -805,6 +805,7 @@ fun PopcornApp() {
         }
     }
 
+    CompositionLocalProvider(LocalResumeProgress provides resumeFractionById) {
     when (val current = screen) {
         Screen.Loading -> LoadingView(error)
         Screen.Login -> LoginView(
@@ -1139,6 +1140,7 @@ fun PopcornApp() {
                 session = session,
                 onBack = { screen = current.returnScreen },
             )
+    }
     }
     watchMenu?.let { menu ->
         WatchActionOverlay(

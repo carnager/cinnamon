@@ -1701,7 +1701,7 @@ VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 ON CONFLICT(user_id, item_id) DO UPDATE SET
 	position_ms=excluded.position_ms,
 	duration_ms=excluded.duration_ms,
-	completed=excluded.completed,
+	completed=MAX(playback_progress.completed, excluded.completed),
 	updated_at=CURRENT_TIMESTAMP`, userID, itemID, positionMS, durationMS, boolInt(completed))
 	if err != nil {
 		return PlaybackProgress{}, err

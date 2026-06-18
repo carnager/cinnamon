@@ -132,6 +132,76 @@ require_android_signing() {
   fi
 }
 
+# Resolve a signing value from the environment first, then the properties file.
+signing_value() {
+  local key="$1"
+  if [[ -n "${!key:-}" ]]; then
+    printf '%s' "${!key}"
+    return 0
+  fi
+  [[ -f "$android_signing_properties" ]] || return 1
+  awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$android_signing_properties"
+}
+
+# Locate apksigner from the Android SDK so we can read v2/v3-signed APKs
+# (keytool -jarfile cannot, since release APKs have no v1/JAR signature).
+find_apksigner() {
+  local candidates=() sdk bin sdkdir
+  [[ -n "${ANDROID_HOME:-}" ]] && candidates+=("$ANDROID_HOME")
+  [[ -n "${ANDROID_SDK_ROOT:-}" ]] && candidates+=("$ANDROID_SDK_ROOT")
+  if [[ -f "$repo_root/android-tv/local.properties" ]]; then
+    sdkdir="$(awk -F= '/^sdk.dir=/ { sub(/^sdk.dir=/, ""); print; exit }' "$repo_root/android-tv/local.properties")"
+    [[ -n "$sdkdir" ]] && candidates+=("$sdkdir")
+  fi
+  candidates+=("$HOME/Android/Sdk" "$HOME/Library/Android/sdk")
+  for sdk in "${candidates[@]}"; do
+    bin="$(ls "$sdk"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)"
+    [[ -n "$bin" ]] && { printf '%s' "$bin"; return 0; }
+  done
+  bin="$(command -v apksigner 2>/dev/null || true)"
+  [[ -n "$bin" ]] && { printf '%s' "$bin"; return 0; }
+  return 1
+}
+
+# SHA-256 of the configured release keystore certificate.
+release_cert_sha256() {
+  local store_file store_pass key_alias
+  store_file="$(signing_value POPCORN_ANDROID_STORE_FILE)" || return 1
+  store_pass="$(signing_value POPCORN_ANDROID_STORE_PASSWORD)" || return 1
+  key_alias="$(signing_value POPCORN_ANDROID_KEY_ALIAS)" || return 1
+  keytool -list -v -keystore "$store_file" -storepass "$store_pass" -alias "$key_alias" 2>/dev/null \
+    | awk -F'SHA256: ' '/SHA256:/ { gsub(/[: ]/, "", $2); print tolower($2); exit }'
+}
+
+# SHA-256 of the certificate an APK is actually signed with.
+apk_cert_sha256() {
+  local apk="$1"
+  "$apksigner_bin" verify --print-certs "$apk" 2>/dev/null \
+    | awk -F'SHA-256 digest: ' '/certificate SHA-256 digest:/ { print tolower($2); exit }'
+}
+
+# Guarantee a built APK is signed with the configured release key. A mis-signed
+# (e.g. debug-signed) APK can never update an existing release-signed install, so
+# refuse to publish one rather than ship an un-updatable release.
+verify_release_signature() {
+  local apk="$1" label="$2" got expected
+  got="$(apk_cert_sha256 "$apk")"
+  if [[ -z "$got" ]]; then
+    echo "Could not read the signing certificate of $label." >&2
+    echo "Checked: $apk" >&2
+    exit 1
+  fi
+  if [[ "$got" != "$expected_release_cert" ]]; then
+    echo "$label is NOT signed with the configured release key." >&2
+    echo "  apk certificate:      $got" >&2
+    echo "  release keystore key: ${expected_release_cert:-<unreadable>}" >&2
+    echo "Publishing this would break in-app updates (Android rejects a signing-key change)." >&2
+    echo "Check $android_signing_properties and android-tv/*/build.gradle.kts signingConfig." >&2
+    exit 1
+  fi
+  echo "  $label signed with release key ($got)"
+}
+
 copy_release_files() {
   cp "$repo_root/config.example.toml" "$out_dir/config.example.toml"
   cp "$repo_root/packaging/config.package.toml" "$out_dir/config.package.toml"
@@ -159,6 +229,17 @@ fi
 
 if [[ "$build_android" == 1 ]]; then
   require_android_signing
+  apksigner_bin="$(find_apksigner)" || {
+    echo "Could not find 'apksigner' to verify APK signatures." >&2
+    echo "Install Android SDK build-tools or set ANDROID_HOME/ANDROID_SDK_ROOT." >&2
+    exit 2
+  }
+  expected_release_cert="$(release_cert_sha256 || true)"
+  if [[ -z "$expected_release_cert" ]]; then
+    echo "Could not read the release certificate from the configured keystore." >&2
+    echo "Check POPCORN_ANDROID_STORE_FILE / STORE_PASSWORD / KEY_ALIAS (or $android_signing_properties)." >&2
+    exit 2
+  fi
 fi
 
 echo "==> build popcornd"
@@ -199,6 +280,10 @@ if [[ "$build_android" == 1 ]]; then
     echo "Expected $expected_tv_abis. Check android-tv/app/build.gradle.kts ndk.abiFilters." >&2
     exit 1
   fi
+
+  echo "==> verify APK signatures"
+  verify_release_signature "$tv_apk" "Android TV APK"
+  verify_release_signature "$companion_apk" "Companion APK"
 
   release_files+=("popcorn-tv-$version.apk" "popcorn-companion-$version.apk")
 else

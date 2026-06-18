@@ -43,7 +43,12 @@ android {
 
     buildTypes {
         release {
-            signingConfig = if (releaseSigningComplete) signingConfigs.getByName("release") else signingConfigs.getByName("debug")
+            // Never silently fall back to the debug key for a release build:
+            // a debug-signed "release" APK can't update a release-signed install
+            // (and vice versa). Leave it unsigned instead so the build/publish
+            // fails loudly rather than shipping an un-updatable APK. Release
+            // tasks already hard-fail above when signing is incomplete.
+            signingConfig = if (releaseSigningComplete) signingConfigs.getByName("release") else null
             isMinifyEnabled = true
             isShrinkResources = true
             isDebuggable = false

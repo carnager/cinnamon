@@ -36,11 +36,12 @@ If the watcher and server see identical paths, omit `-map`.
 
 ## Running on TrueNAS SCALE (Docker / custom app)
 
-> TrueNAS SCALE has a **read-only root filesystem**: you cannot place the binary
-> in `/usr/local/bin` or install a persistent host systemd unit. Keep the binary
-> on a dataset (e.g. `/mnt/<pool>/.../popcorn-watch`, `chmod +x` it) and run it
-> from a container/app (durable) or a Post-Init script. The static build means
-> it runs as-is from a `scratch`/`alpine` image too.
+> TrueNAS SCALE mounts `/usr` (and `/usr/local/bin`) **read-only**, so keep the
+> binary on a **dataset** (e.g. `/mnt/<pool>/.../popcorn-watch`, `chmod +x` it),
+> not in `/usr/local/bin`. From there you can run it via a host systemd unit if
+> `/etc/systemd/system` is writable on your install (point `ExecStart` at the
+> dataset path — see the systemd section), or via a container/app for the most
+> upgrade-safe setup. The static build runs as-is from `scratch`/`alpine` too.
 
 A minimal compose service (bind-mount the datasets **read-only**). The watch
 dirs use the in-container paths, and `-map` translates those to popcorn's paths:
@@ -67,7 +68,12 @@ services:
 inside the container sees host writes. Note the `-map` here translates the
 in-container path to the popcorn library path.
 
-## Running as a systemd service (generic Linux host — NOT TrueNAS SCALE)
+## Running as a systemd service
+
+Works on a generic Linux host and on TrueNAS SCALE when `/etc/systemd/system` is
+writable — keep the binary on a dataset and point `ExecStart` at it (do not copy
+to the read-only `/usr/local/bin`). On SCALE, `/etc/systemd` may be cleared by a
+major OS upgrade; re-add the unit if so.
 
 ```ini
 [Unit]
@@ -75,7 +81,7 @@ Description=popcorn filesystem watcher
 After=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/popcorn-watch
+ExecStart=/mnt/pool/apps/popcorn-watch   # a dataset path; /usr/local/bin is read-only on SCALE
 Environment=POPCORN_WATCH_SERVER=http://gemenon:8097
 Environment=POPCORN_WATCH_USER=admin
 Environment=POPCORN_WATCH_PASSWORD=...

@@ -75,6 +75,10 @@ writable — keep the binary on a dataset and point `ExecStart` at it (do not co
 to the read-only `/usr/local/bin`). On SCALE, `/etc/systemd` may be cleared by a
 major OS upgrade; re-add the unit if so.
 
+IMPORTANT: systemd's `Environment=` splits on whitespace, so any value that
+contains a space (e.g. a path like `.../TV Shows`) MUST be wrapped in double
+quotes around the whole `KEY=value`, or it gets truncated at the space.
+
 ```ini
 [Unit]
 Description=popcorn filesystem watcher
@@ -85,8 +89,9 @@ ExecStart=/mnt/pool/apps/popcorn-watch   # a dataset path; /usr/local/bin is rea
 Environment=POPCORN_WATCH_SERVER=http://gemenon:8097
 Environment=POPCORN_WATCH_USER=admin
 Environment=POPCORN_WATCH_PASSWORD=...
-Environment=POPCORN_WATCH_DIRS=/mnt/tank/media/movies,/mnt/tank/media/tv
-Environment=POPCORN_WATCH_MAP=/mnt/tank/media/movies=/nas/movies,/mnt/tank/media/tv=/nas/tv
+# Quote values that contain spaces (whole KEY=value inside the quotes):
+Environment="POPCORN_WATCH_DIRS=/mnt/tank/media/movies,/mnt/tank/media/TV Shows"
+Environment="POPCORN_WATCH_MAP=/mnt/tank/media/movies=/nas/movies,/mnt/tank/media/TV Shows=/nas/tv"
 Restart=always
 RestartSec=5
 

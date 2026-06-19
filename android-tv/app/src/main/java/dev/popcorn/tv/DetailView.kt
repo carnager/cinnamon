@@ -325,18 +325,33 @@ private fun DetailHeroContent(
         verticalAlignment = Alignment.Top,
     ) {
         if (detailItem.posterPath.isNotBlank() && session != null) {
-            SizedAsyncImage(
-                model = imageUrl(session, detailItem.id, "poster", detailItem.posterMtimeUnix),
-                contentDescription = null,
-                modifier = Modifier
-                    .width(140.dp)
-                    .aspectRatio(2f / 3f)
-                    .clip(RoundedCornerShape(8.dp)),
-                contentScale = ContentScale.Crop,
-                widthPx = 280,
-                heightPx = 420,
-                authToken = session.token,
-            )
+            Column(Modifier.width(140.dp)) {
+                SizedAsyncImage(
+                    model = imageUrl(session, detailItem.id, "poster", detailItem.posterMtimeUnix),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(2f / 3f)
+                        .clip(RoundedCornerShape(8.dp)),
+                    contentScale = ContentScale.Crop,
+                    widthPx = 280,
+                    heightPx = 420,
+                    authToken = session.token,
+                )
+                val genres = detailGenres(detailItem)
+                if (genres.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        genres.joinToString(", "),
+                        color = Accent.copy(alpha = .78f),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        lineHeight = 15.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
 
         Column(Modifier.widthIn(max = 680.dp)) {
@@ -383,7 +398,6 @@ private fun DetailHeroContent(
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 chips.forEach { TechChip(it) }
-                detailGenres(detailItem).forEach { GenreChip(it) }
                 SelectorBadge(
                     label = "Audio",
                     value = audioLabel,
@@ -722,22 +736,6 @@ private fun TechChip(text: String) {
         modifier = Modifier
             .clip(RoundedCornerShape(4.dp))
             .background(Color.White.copy(alpha = .08f))
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-    )
-}
-
-@Composable
-private fun GenreChip(text: String) {
-    Text(
-        text,
-        color = Accent.copy(alpha = .92f),
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Bold,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-        modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .background(Accent.copy(alpha = .12f))
             .padding(horizontal = 8.dp, vertical = 4.dp),
     )
 }

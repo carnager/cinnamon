@@ -111,6 +111,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/libraries", a.libraries)
 	mux.HandleFunc("GET /api/home", a.home)
 	mux.HandleFunc("POST /api/scan", a.scan)
+	mux.HandleFunc("POST /api/scan/path", a.scanPath)
 	mux.HandleFunc("GET /api/scan", a.scanStatus)
 	mux.HandleFunc("GET /api/items", a.items)
 	mux.HandleFunc("GET /api/search", a.search)

@@ -248,11 +248,15 @@ echo "==> build popcornd"
 echo "==> build popcorn-mpv"
 (cd "$repo_root" && go build -trimpath -ldflags "-s -w" -o "$out_dir/popcorn-mpv" ./cmd/popcorn-mpv)
 
+echo "==> build popcorn-watch"
+(cd "$repo_root" && go build -trimpath -ldflags "-s -w" -o "$out_dir/popcorn-watch" ./cmd/popcorn-watch)
+
 copy_release_files
 
 release_files=(
   popcornd
   popcorn-mpv
+  popcorn-watch
   config.example.toml
   config.package.toml
   popcornd.service
@@ -302,6 +306,7 @@ echo
 echo "==> server binaries:"
 echo "  popcornd:          $(file_size "$out_dir/popcornd")"
 echo "  popcorn-mpv:       $(file_size "$out_dir/popcorn-mpv")"
+echo "  popcorn-watch:     $(file_size "$out_dir/popcorn-watch")"
 
 if [[ "$build_android" == 1 ]]; then
   echo

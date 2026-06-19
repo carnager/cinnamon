@@ -14,7 +14,11 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
@@ -30,10 +34,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -74,6 +82,7 @@ fun PlayerScreen(
     onBack: () -> Unit,
     onRemoteStop: () -> Unit,
     onRemoteCommandConsumed: (Long) -> Unit,
+    onPlayNext: (PopItem) -> Unit,
 ) {
     val context = LocalContext.current
     val lifecycle = (context as? ComponentActivity)?.lifecycle
@@ -99,6 +108,20 @@ fun PlayerScreen(
     val pressedSeekKeys = remember(item.id) { mutableMapOf<Int, Long>() }
     val originalStreams = remember { mutableStateListOf<StreamInfo>() }
     val playbackProfile = remember(context) { buildPlaybackProfile(context) }
+
+    // ── Up Next (auto-play next episode) ──
+    var nextEpisode by remember(item.id) { mutableStateOf<PopItem?>(null) }
+    var upNextDismissed by remember(item.id) { mutableStateOf(false) }
+    var upNextSecondsLeft by remember(item.id) { mutableStateOf<Int?>(null) }
+    var advancingToNext by remember(item.id) { mutableStateOf(false) }
+    val upNextFocus = remember { FocusRequester() }
+
+    fun playNextEpisode() {
+        val next = nextEpisode ?: return
+        if (advancingToNext) return
+        advancingToNext = true
+        onPlayNext(next)
+    }
 
     LaunchedEffect(item.id, session) {
         val active = session ?: return@LaunchedEffect
@@ -530,6 +553,40 @@ fun PlayerScreen(
         requestPlaybackPlan(selectedBandwidth, initialStartPositionMs.coerceAtLeast(0), forceModeForBandwidth(selectedBandwidth), wasPlaying = true)
     }
 
+    // Resolve the next episode (same show) so we can auto-advance at the end.
+    LaunchedEffect(item.id, session) {
+        nextEpisode = null
+        if (item.kind != "episode") return@LaunchedEffect
+        val active = session ?: return@LaunchedEffect
+        val episodes = runCatching { Api(active).episodes(item.libraryId, item.showTitle) }.getOrNull() ?: return@LaunchedEffect
+        nextEpisode = episodeAfter(episodes, item)
+    }
+
+    // Surface the Up Next countdown over the last seconds of playback.
+    LaunchedEffect(item.id, nextEpisode, exoPlayer) {
+        if (nextEpisode == null) {
+            upNextSecondsLeft = null
+            return@LaunchedEffect
+        }
+        while (true) {
+            delay(500)
+            if (upNextDismissed || advancingToNext) {
+                upNextSecondsLeft = null
+                continue
+            }
+            val duration = logicalDurationMs()
+            val remaining = duration - logicalPositionMs()
+            upNextSecondsLeft = if (duration > 0 &&
+                exoPlayer.playbackState == Player.STATE_READY &&
+                remaining in 1..UpNextLeadMs
+            ) {
+                ((remaining + 999) / 1000).toInt()
+            } else {
+                null
+            }
+        }
+    }
+
     fun isActionKey(keyCode: Int): Boolean = keyCode == AndroidKeyEvent.KEYCODE_DPAD_CENTER ||
         keyCode == AndroidKeyEvent.KEYCODE_ENTER ||
         keyCode == AndroidKeyEvent.KEYCODE_NUMPAD_ENTER
@@ -690,6 +747,9 @@ fun PlayerScreen(
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_ENDED) {
                     reportProgress("stopped", forceCompleted = true)
+                    if (nextEpisode != null && !upNextDismissed) {
+                        playNextEpisode()
+                    }
                 }
                 if (playbackState == Player.STATE_READY) {
                     applyDirectTrackSelections()
@@ -1049,6 +1109,74 @@ fun PlayerScreen(
                     .background(Color(0xCC080C12), RoundedCornerShape(18.dp))
                     .padding(horizontal = 28.dp, vertical = 16.dp),
             )
+        }
+        val next = nextEpisode
+        val secondsLeft = upNextSecondsLeft
+        if (next != null && secondsLeft != null && !upNextDismissed && !advancingToNext) {
+            UpNextCard(
+                episode = next,
+                secondsLeft = secondsLeft,
+                focusRequester = upNextFocus,
+                onPlayNow = { playNextEpisode() },
+                onDismiss = { upNextDismissed = true },
+            )
+            BackHandler { upNextDismissed = true }
+        }
+    }
+}
+
+// Window before the end of an episode during which the Up Next card appears.
+private const val UpNextLeadMs = 25_000L
+
+// Next episode in show order: prefer the position in the returned list, fall
+// back to the first episode after the current one by (season, episode).
+private fun episodeAfter(episodes: List<PopItem>, current: PopItem): PopItem? {
+    val idx = episodes.indexOfFirst { it.id == current.id }
+    if (idx >= 0) return episodes.getOrNull(idx + 1)
+    return episodes
+        .sortedWith(compareBy({ it.seasonNumber }, { it.episodeNumber }))
+        .firstOrNull {
+            it.seasonNumber > current.seasonNumber ||
+                (it.seasonNumber == current.seasonNumber && it.episodeNumber > current.episodeNumber)
+        }
+}
+
+@Composable
+private fun UpNextCard(
+    episode: PopItem,
+    secondsLeft: Int,
+    focusRequester: FocusRequester,
+    onPlayNow: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    LaunchedEffect(Unit) {
+        delay(120)
+        runCatching { focusRequester.requestFocus() }
+    }
+    val code = if (episode.seasonNumber > 0 && episode.episodeNumber > 0) {
+        "S%02dE%02d".format(episode.seasonNumber, episode.episodeNumber)
+    } else {
+        ""
+    }
+    val line = listOf(episode.showTitle, code, episode.episodeTitle.ifBlank { episode.title })
+        .filter { it.isNotBlank() }
+        .joinToString("  ·  ")
+    Box(Modifier.fillMaxSize().padding(end = 48.dp, bottom = 64.dp), contentAlignment = Alignment.BottomEnd) {
+        Column(
+            Modifier
+                .widthIn(max = 380.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(0xF00B0E14))
+                .border(1.dp, Color.White.copy(alpha = .14f), RoundedCornerShape(12.dp))
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("Up next  ·  in ${secondsLeft}s", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Black)
+            Text(line, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                FocusButton(label = "Play now", primary = true, modifier = Modifier.focusRequester(focusRequester), onClick = onPlayNow)
+                FocusButton(label = "Cancel", primary = false, onClick = onDismiss)
+            }
         }
     }
 }

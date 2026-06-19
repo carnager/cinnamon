@@ -15,6 +15,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -1112,28 +1113,34 @@ fun PopcornApp() {
             onItemMenu = { item, requester -> openItemWatchMenu(item, requester) },
             onShowMenu = { show, requester -> openShowWatchMenu(show, requester) },
         )
-        is Screen.Player -> PlayerScreen(
-            item = current.item,
-            session = session,
-            deviceId = deviceId,
-            remoteCommand = pendingPlayerCommand,
-            initialAudioIndex = current.audioIndex,
-            initialSubtitleIndex = current.subtitleIndex,
-            initialStartPositionMs = current.startPositionMs,
-            initialBandwidthKbps = preferredBandwidthKbps,
-            onBandwidthSelected = { kbps ->
-                preferredBandwidthKbps = kbps
-                prefs.edit().putInt("preferredBandwidthKbps", kbps ?: -1).apply()
-            },
-            onBack = ::returnFromPlayer,
-            onRemoteStop = {
-                pendingPlayerCommand = null
-                returnFromPlayer()
-            },
-            onRemoteCommandConsumed = { id ->
-                if (pendingPlayerCommand?.id == id) pendingPlayerCommand = null
-            },
-        )
+        is Screen.Player -> key(current.item.id) {
+            PlayerScreen(
+                item = current.item,
+                session = session,
+                deviceId = deviceId,
+                remoteCommand = pendingPlayerCommand,
+                initialAudioIndex = current.audioIndex,
+                initialSubtitleIndex = current.subtitleIndex,
+                initialStartPositionMs = current.startPositionMs,
+                initialBandwidthKbps = preferredBandwidthKbps,
+                onBandwidthSelected = { kbps ->
+                    preferredBandwidthKbps = kbps
+                    prefs.edit().putInt("preferredBandwidthKbps", kbps ?: -1).apply()
+                },
+                onBack = ::returnFromPlayer,
+                onRemoteStop = {
+                    pendingPlayerCommand = null
+                    returnFromPlayer()
+                },
+                onRemoteCommandConsumed = { id ->
+                    if (pendingPlayerCommand?.id == id) pendingPlayerCommand = null
+                },
+                onPlayNext = { next ->
+                    pendingPlayerCommand = null
+                    screen = Screen.Player(next, null, null, 0L)
+                },
+            )
+        }
             is Screen.SidecarPlayer -> SidecarPlayerScreen(
                 url = current.url,
                 title = current.title,

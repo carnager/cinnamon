@@ -798,7 +798,7 @@ fun PopcornApp() {
             is Screen.Show -> screen = if (s.fromActor != null) Screen.Actor(s.fromActor) else if (s.fromSearch) Screen.Search else if (s.fromWatchlist) Screen.Watchlist else if (s.fromHome) Screen.Home else if (activeLibrary?.type == "tv") Screen.LibraryPage(activeLibrary!!) else Screen.Home
             is Screen.Season -> screen = Screen.Show(s.show, fromHome = s.fromHome, fromSearch = s.fromSearch, fromWatchlist = s.fromWatchlist, fromActor = s.fromActor)
             is Screen.Detail -> returnFromDetail(s)
-            is Screen.ItemShelf -> screen = Screen.Home
+            is Screen.ItemShelf -> screen = s.returnTo ?: Screen.Home
             is Screen.Actor -> screen = lastActorReturnScreen ?: Screen.Home
             is Screen.Player -> returnFromPlayer()
             is Screen.SidecarPlayer -> screen = s.returnScreen
@@ -1004,7 +1004,7 @@ fun PopcornApp() {
             items = current.items,
             completedItems = completedItems,
             watchlistItems = watchlistItems,
-            onBack = { screen = Screen.Home },
+            onBack = { screen = current.returnTo ?: Screen.Home },
             onItem = { screen = Screen.Detail(it, null, fromHome = true) },
             onItemMenu = { item, requester -> openItemWatchMenu(item, requester) },
         )
@@ -1096,15 +1096,8 @@ fun PopcornApp() {
                 lastActorReturnScreen = current
                 screen = Screen.Actor(actor)
             },
-            onItem = { sim ->
-                screen = Screen.Detail(
-                    sim,
-                    current.fromShow,
-                    fromHome = current.fromHome,
-                    fromSearch = current.fromSearch,
-                    fromWatchlist = current.fromWatchlist,
-                    fromActor = current.fromActor,
-                )
+            onMoreLikeThis = { items ->
+                screen = Screen.ItemShelf("More like this", items, returnTo = current)
             },
         )
         is Screen.Actor -> ActorView(

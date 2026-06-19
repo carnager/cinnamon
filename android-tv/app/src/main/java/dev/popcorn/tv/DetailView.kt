@@ -73,7 +73,7 @@ fun DetailView(
     onSearch: () -> Unit,
     onWatchlist: () -> Unit,
     onActor: (Actor) -> Unit,
-    onItem: (PopItem) -> Unit,
+    onMoreLikeThis: (List<PopItem>) -> Unit,
 ) {
     val streams = remember { mutableStateListOf<StreamInfo>() }
     var detailItem by remember(item.id) { mutableStateOf(item) }
@@ -92,7 +92,6 @@ fun DetailView(
     val descriptionFocus = remember { FocusRequester() }
     val playFocus = remember { FocusRequester() }
     val castFocus = remember { FocusRequester() }
-    val similarFocus = remember { FocusRequester() }
 
     LaunchedEffect(item.id) {
         detailItem = item
@@ -219,13 +218,6 @@ fun DetailView(
                 .fillMaxSize()
                 .padding(start = 52.dp, end = 48.dp),
         ) {
-            // First focusable row below the action buttons: cast if present,
-            // else the similar row, else nothing (stay on the buttons).
-            val belowHeroFocus = when {
-                detailItem.actors.isNotEmpty() -> castFocus
-                similar.isNotEmpty() -> similarFocus
-                else -> playFocus
-            }
             Spacer(Modifier.height(54.dp))
             DetailHeroContent(
                 session = session,
@@ -241,9 +233,10 @@ fun DetailView(
                 subtitleFocus = subtitleFocus,
                 descriptionFocus = descriptionFocus,
                 playFocus = playFocus,
-                castFocus = belowHeroFocus,
+                castFocus = castFocus,
                 watched = watched,
                 watchlisted = watchlisted,
+                showSimilar = similar.isNotEmpty(),
                 onAudio = { audioMenuOpen = true },
                 onSubtitle = { subtitleMenuOpen = true },
                 onFullText = { fullTextOpen = true },
@@ -254,6 +247,7 @@ fun DetailView(
                 onTrailer = { onTrailer(sidecars.trailer) },
                 onWatchedChange = { onWatchedChange(!watched) },
                 onWatchlistChange = { onWatchlistChange(!watchlisted) },
+                onSimilar = { onMoreLikeThis(similar) },
             )
 
             if (detailItem.actors.isNotEmpty()) {
@@ -263,25 +257,7 @@ fun DetailView(
                     actors = detailItem.actors,
                     firstFocusRequester = castFocus,
                     onUp = { runCatching { playFocus.requestFocus() }.isSuccess },
-                    onDown = if (similar.isNotEmpty()) {
-                        { runCatching { similarFocus.requestFocus() }.isSuccess }
-                    } else {
-                        null
-                    },
                     onActor = onActor,
-                )
-            }
-            if (similar.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
-                SimilarStrip(
-                    session = session,
-                    items = similar,
-                    firstFocusRequester = similarFocus,
-                    onUp = {
-                        val target = if (detailItem.actors.isNotEmpty()) castFocus else playFocus
-                        runCatching { target.requestFocus() }.isSuccess
-                    },
-                    onItem = onItem,
                 )
             }
             Spacer(Modifier.height(24.dp))
@@ -345,6 +321,7 @@ private fun DetailHeroContent(
     watchlisted: Boolean,
     canResume: Boolean,
     resumePositionMs: Long,
+    showSimilar: Boolean,
     onAudio: () -> Unit,
     onSubtitle: () -> Unit,
     onFullText: () -> Unit,
@@ -353,6 +330,7 @@ private fun DetailHeroContent(
     onTrailer: () -> Unit,
     onWatchedChange: () -> Unit,
     onWatchlistChange: () -> Unit,
+    onSimilar: () -> Unit,
 ) {
     Row(
         Modifier.widthIn(max = 920.dp),
@@ -517,6 +495,15 @@ private fun DetailHeroContent(
                     onDown = { requestDetailFocus(castFocus) },
                     onClick = onWatchlistChange,
                 )
+                if (showSimilar) {
+                    ActionToggle(
+                        label = "Similar",
+                        active = false,
+                        onUp = { requestDetailFocus(descriptionFocus) },
+                        onDown = { requestDetailFocus(castFocus) },
+                        onClick = onSimilar,
+                    )
+                }
             }
         }
     }
@@ -905,33 +892,6 @@ fun CastStrip(
                     onDown = onDown,
                     onClick = { onActor(actor) },
                 )
-            }
-        }
-    }
-}
-
-@Composable
-private fun SimilarStrip(
-    session: Session?,
-    items: List<PopItem>,
-    firstFocusRequester: FocusRequester,
-    onUp: () -> Boolean,
-    onItem: (PopItem) -> Unit,
-) {
-    Column(Modifier.widthIn(max = 920.dp)) {
-        Text("More like this", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(8.dp))
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            itemsIndexed(items) { index, movie ->
-                Box(Modifier.width(94.dp)) {
-                    ItemCard(
-                        session = session,
-                        item = movie,
-                        focusRequester = if (index == 0) firstFocusRequester else null,
-                        onUp = onUp,
-                        onClick = { onItem(movie) },
-                    )
-                }
             }
         }
     }

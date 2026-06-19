@@ -208,7 +208,7 @@ sealed interface Screen {
     data object Watchlist : Screen
     data object Updates : Screen
     data class LibraryPage(val library: Library) : Screen
-    data class ItemShelf(val title: String, val items: List<PopItem>) : Screen
+    data class ItemShelf(val title: String, val items: List<PopItem>, val returnTo: Screen? = null) : Screen
     data object Search : Screen
     data class Show(val show: ShowSummary, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null) : Screen
     data class Season(val show: ShowSummary, val season: SeasonSummary, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null) : Screen

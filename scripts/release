@@ -249,7 +249,10 @@ echo "==> build popcorn-mpv"
 (cd "$repo_root" && go build -trimpath -ldflags "-s -w" -o "$out_dir/popcorn-mpv" ./cmd/popcorn-mpv)
 
 echo "==> build popcorn-watch"
-(cd "$repo_root" && go build -trimpath -ldflags "-s -w" -o "$out_dir/popcorn-watch" ./cmd/popcorn-watch)
+# Static (CGO disabled) so it runs on any Linux host/container regardless of
+# libc — important for TrueNAS SCALE (read-only root) where it runs from a
+# dataset or a minimal container image.
+(cd "$repo_root" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$out_dir/popcorn-watch" ./cmd/popcorn-watch)
 
 copy_release_files
 

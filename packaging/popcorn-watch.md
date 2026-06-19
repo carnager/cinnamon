@@ -36,7 +36,14 @@ If the watcher and server see identical paths, omit `-map`.
 
 ## Running on TrueNAS SCALE (Docker / custom app)
 
-A minimal compose service (bind-mount the datasets **read-only**):
+> TrueNAS SCALE has a **read-only root filesystem**: you cannot place the binary
+> in `/usr/local/bin` or install a persistent host systemd unit. Keep the binary
+> on a dataset (e.g. `/mnt/<pool>/.../popcorn-watch`, `chmod +x` it) and run it
+> from a container/app (durable) or a Post-Init script. The static build means
+> it runs as-is from a `scratch`/`alpine` image too.
+
+A minimal compose service (bind-mount the datasets **read-only**). The watch
+dirs use the in-container paths, and `-map` translates those to popcorn's paths:
 
 ```yaml
 services:
@@ -60,7 +67,7 @@ services:
 inside the container sees host writes. Note the `-map` here translates the
 in-container path to the popcorn library path.
 
-## Running as a systemd service
+## Running as a systemd service (generic Linux host — NOT TrueNAS SCALE)
 
 ```ini
 [Unit]

@@ -125,6 +125,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/tv/episodes", a.tvEpisodes)
 	mux.HandleFunc("GET /api/items/{id}", a.item)
 	mux.HandleFunc("GET /api/items/{id}/ratings", a.itemRatings)
+	mux.HandleFunc("GET /api/items/{id}/similar", a.itemSimilar)
 	mux.HandleFunc("POST /api/auth/login", a.login)
 	mux.HandleFunc("POST /api/auth/logout", a.logout)
 	mux.HandleFunc("GET /api/auth/me", a.me)

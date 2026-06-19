@@ -73,6 +73,7 @@ fun DetailView(
     onSearch: () -> Unit,
     onWatchlist: () -> Unit,
     onActor: (Actor) -> Unit,
+    onItem: (PopItem) -> Unit,
 ) {
     val streams = remember { mutableStateListOf<StreamInfo>() }
     var detailItem by remember(item.id) { mutableStateOf(item) }
@@ -85,11 +86,13 @@ fun DetailView(
     var subtitleMenuOpen by remember { mutableStateOf(false) }
     var fullTextOpen by remember { mutableStateOf(false) }
     var resumeProgress by remember(item.id) { mutableStateOf<PlaybackProgress?>(null) }
+    var similar by remember(item.id) { mutableStateOf<List<PopItem>>(emptyList()) }
     val audioFocus = remember { FocusRequester() }
     val subtitleFocus = remember { FocusRequester() }
     val descriptionFocus = remember { FocusRequester() }
     val playFocus = remember { FocusRequester() }
     val castFocus = remember { FocusRequester() }
+    val similarFocus = remember { FocusRequester() }
 
     LaunchedEffect(item.id) {
         detailItem = item
@@ -131,6 +134,13 @@ fun DetailView(
     LaunchedEffect(item.id) {
         val active = session ?: return@LaunchedEffect
         resumeProgress = runCatching { Api(active).progress(item.id) }.getOrNull()
+    }
+
+    LaunchedEffect(item.id) {
+        similar = emptyList()
+        if (item.kind != "movie") return@LaunchedEffect
+        val active = session ?: return@LaunchedEffect
+        similar = runCatching { Api(active).similar(item.id) }.getOrDefault(emptyList())
     }
 
     val audioTracks = streams.filter { it.type == "audio" }
@@ -209,6 +219,13 @@ fun DetailView(
                 .fillMaxSize()
                 .padding(start = 52.dp, end = 48.dp),
         ) {
+            // First focusable row below the action buttons: cast if present,
+            // else the similar row, else nothing (stay on the buttons).
+            val belowHeroFocus = when {
+                detailItem.actors.isNotEmpty() -> castFocus
+                similar.isNotEmpty() -> similarFocus
+                else -> playFocus
+            }
             Spacer(Modifier.height(54.dp))
             DetailHeroContent(
                 session = session,
@@ -224,7 +241,7 @@ fun DetailView(
                 subtitleFocus = subtitleFocus,
                 descriptionFocus = descriptionFocus,
                 playFocus = playFocus,
-                castFocus = castFocus,
+                castFocus = belowHeroFocus,
                 watched = watched,
                 watchlisted = watchlisted,
                 onAudio = { audioMenuOpen = true },
@@ -246,7 +263,25 @@ fun DetailView(
                     actors = detailItem.actors,
                     firstFocusRequester = castFocus,
                     onUp = { runCatching { playFocus.requestFocus() }.isSuccess },
+                    onDown = if (similar.isNotEmpty()) {
+                        { runCatching { similarFocus.requestFocus() }.isSuccess }
+                    } else {
+                        null
+                    },
                     onActor = onActor,
+                )
+            }
+            if (similar.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                SimilarStrip(
+                    session = session,
+                    items = similar,
+                    firstFocusRequester = similarFocus,
+                    onUp = {
+                        val target = if (detailItem.actors.isNotEmpty()) castFocus else playFocus
+                        runCatching { target.requestFocus() }.isSuccess
+                    },
+                    onItem = onItem,
                 )
             }
             Spacer(Modifier.height(24.dp))
@@ -854,6 +889,7 @@ fun CastStrip(
     actors: List<Actor>,
     firstFocusRequester: FocusRequester? = null,
     onUp: (() -> Boolean)? = null,
+    onDown: (() -> Boolean)? = null,
     onActor: (Actor) -> Unit,
 ) {
     Column(Modifier.widthIn(max = 920.dp)) {
@@ -866,8 +902,36 @@ fun CastStrip(
                     actor = actor,
                     focusRequester = if (index == 0) firstFocusRequester else null,
                     onUp = onUp,
+                    onDown = onDown,
                     onClick = { onActor(actor) },
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SimilarStrip(
+    session: Session?,
+    items: List<PopItem>,
+    firstFocusRequester: FocusRequester,
+    onUp: () -> Boolean,
+    onItem: (PopItem) -> Unit,
+) {
+    Column(Modifier.widthIn(max = 920.dp)) {
+        Text("More like this", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            itemsIndexed(items) { index, movie ->
+                Box(Modifier.width(94.dp)) {
+                    ItemCard(
+                        session = session,
+                        item = movie,
+                        focusRequester = if (index == 0) firstFocusRequester else null,
+                        onUp = onUp,
+                        onClick = { onItem(movie) },
+                    )
+                }
             }
         }
     }
@@ -879,6 +943,7 @@ private fun CastAvatar(
     actor: Actor,
     focusRequester: FocusRequester? = null,
     onUp: (() -> Boolean)? = null,
+    onDown: (() -> Boolean)? = null,
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -891,7 +956,11 @@ private fun CastAvatar(
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .focusable()
             .onPreviewKeyEvent {
-                it.type == KeyEventType.KeyDown && it.key == Key.DirectionUp && onUp != null && onUp()
+                when {
+                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionUp && onUp != null -> onUp()
+                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionDown && onDown != null -> onDown()
+                    else -> false
+                }
             }
             .tvActivate(onClick),
     ) {

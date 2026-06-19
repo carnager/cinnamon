@@ -316,6 +316,10 @@ class Api(private val session: Session) {
         parseItems(requestArray("/api/items?libraryId=${enc(libraryId)}&limit=$limit&offset=0&sort=mtime"))
     }
 
+    suspend fun similar(itemId: Long): List<PopItem> = withContext(Dispatchers.IO) {
+        parseItems(requestArray("/api/items/$itemId/similar"))
+    }
+
     suspend fun searchMovies(query: String): List<PopItem> = withContext(Dispatchers.IO) {
         parseItems(requestItemsEnvelope("/api/search?limit=120&kind=movie&q=${enc(query)}"))
     }

@@ -1096,6 +1096,16 @@ fun PopcornApp() {
                 lastActorReturnScreen = current
                 screen = Screen.Actor(actor)
             },
+            onItem = { sim ->
+                screen = Screen.Detail(
+                    sim,
+                    current.fromShow,
+                    fromHome = current.fromHome,
+                    fromSearch = current.fromSearch,
+                    fromWatchlist = current.fromWatchlist,
+                    fromActor = current.fromActor,
+                )
+            },
         )
         is Screen.Actor -> ActorView(
             session = session,

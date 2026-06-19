@@ -985,6 +985,75 @@ WHERE id IN (`+strings.Join(placeholders, ",")+`)`, args...)
 	return out, nil
 }
 
+// ItemsByExternalIDs returns library items whose tmdb_id or imdb_id is in the
+// given sets. Used to intersect external recommendations with the local
+// library. Order is not significant; the caller re-orders by its own ranking.
+func (s *Store) ItemsByExternalIDs(ctx context.Context, kind string, tmdbIDs, imdbIDs []string) ([]Item, error) {
+	tmdbIDs = nonEmptyUniqueStrings(tmdbIDs)
+	imdbIDs = nonEmptyUniqueStrings(imdbIDs)
+	if len(tmdbIDs) == 0 && len(imdbIDs) == 0 {
+		return nil, nil
+	}
+	var conds []string
+	var args []any
+	if kind = strings.TrimSpace(kind); kind != "" {
+		conds = append(conds, "kind = ?")
+		args = append(args, kind)
+	}
+	var idConds []string
+	if len(tmdbIDs) > 0 {
+		ph := make([]string, len(tmdbIDs))
+		for i, v := range tmdbIDs {
+			ph[i] = "?"
+			args = append(args, v)
+		}
+		idConds = append(idConds, "tmdb_id IN ("+strings.Join(ph, ",")+")")
+	}
+	if len(imdbIDs) > 0 {
+		ph := make([]string, len(imdbIDs))
+		for i, v := range imdbIDs {
+			ph[i] = "?"
+			args = append(args, v)
+		}
+		idConds = append(idConds, "imdb_id IN ("+strings.Join(ph, ",")+")")
+	}
+	conds = append(conds, "("+strings.Join(idConds, " OR ")+")")
+	rows, err := s.db.QueryContext(ctx, itemSelect+` FROM media_items WHERE `+strings.Join(conds, " AND "), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Item{}
+	for rows.Next() {
+		item, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func nonEmptyUniqueStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
+}
+
 func (s *Store) AllItems(ctx context.Context) ([]Item, error) {
 	rows, err := s.db.QueryContext(ctx, itemSelect+` FROM media_items ORDER BY kind, sort_title, season_number, episode_number`)
 	if err != nil {

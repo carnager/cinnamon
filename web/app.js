@@ -10,19 +10,6 @@ const view = document.querySelector("#view");
 const libraryNav = document.querySelector("#libraryNav");
 const topbarFilters = document.querySelector("#topbarFilters");
 const search = document.querySelector("#search");
-const player = document.querySelector("#player");
-const theater = document.querySelector("#theater");
-const nowPlaying = document.querySelector("#nowPlaying");
-const bandwidth = document.querySelector("#bandwidth");
-const transcode = document.querySelector("#transcode");
-const timeline = document.querySelector("#timeline");
-const currentTimeEl = document.querySelector("#currentTime");
-const durationEl = document.querySelector("#duration");
-const playPause = document.querySelector("#playPause");
-const muteBtn = document.querySelector("#muteBtn");
-const volume = document.querySelector("#volume");
-const fullscreenBtn = document.querySelector("#fullscreenBtn");
-const closePlayerBtn = document.querySelector("#closePlayer");
 
 let libraries = [];
 let activeView = "home";
@@ -32,17 +19,11 @@ let currentPage = 1;
 const perPage = 50;
 let searchTimer = 0;
 let currentItem = null;
-let streamStart = 0;
-let draggingTimeline = false;
-let selectedAudio = "";
-let selectedSubtitle = "";
-let hls = null;
 let currentShow = null;
-let currentHLSSession = null;
 let authToken = localStorage.getItem("popcornToken") || "";
-let savedVolume = Number(localStorage.getItem("popcornVolume") || "1");
 let currentUser = null;
-let timelineTimer = 0;
+let resumeFractionMap = new Map();
+let resumeFractionDirty = false;
 let watchedItemIds = new Set();
 let mediaProgressRows = [];
 let watchedShowKeys = new Set();
@@ -55,6 +36,9 @@ let currentMinRating = 0;
 let currentSeason = null;
 let libraryGenres = [];
 let pageHasNext = false;
+let libraryGridEl = null;
+let libraryObserver = null;
+let libraryLoading = false;
 let scanPollTimer = 0;
 let lastScanSignature = "";
 let scanRefreshInFlight = false;
@@ -102,7 +86,6 @@ function setUnauthenticated(message = "") {
   loginError.textContent = message;
   loginPass.value = "";
   loginUser.focus();
-  clearInterval(timelineTimer);
   stopPlayer();
 }
 
@@ -295,6 +278,23 @@ function showKey(libraryId, title) {
   return `${String(libraryId || "").toLowerCase()}\u0000${String(title || "").trim().toLowerCase()}`;
 }
 
+function rebuildResumeFractions(rows) {
+  resumeFractionMap = new Map();
+  for (const row of rows || []) {
+    const position = Number(row?.positionMs || 0);
+    const duration = Number(row?.durationMs || 0);
+    if (row?.completed || duration <= 0 || position < 30000) continue;
+    const cutoff = Math.max(duration - 90000, 30000);
+    if (position >= cutoff) continue;
+    resumeFractionMap.set(Number(row.itemId), Math.max(0.02, Math.min(0.98, position / duration)));
+  }
+  resumeFractionDirty = false;
+}
+
+function resumeFraction(item) {
+  return resumeFractionMap.get(Number(item?.id || 0)) || 0;
+}
+
 function itemSeen(item) {
   return watchedItemIds.has(Number(item?.id || 0));
 }
@@ -320,6 +320,7 @@ async function refreshMediaState() {
   ]);
 
   mediaProgressRows = progress || [];
+  rebuildResumeFractions(mediaProgressRows);
   watchedItemIds = new Set(mediaProgressRows
     .filter((row) => row?.completed)
     .map((row) => Number(row.itemId))
@@ -404,9 +405,6 @@ async function setShowWatchlisted(show, watchlisted) {
   else watchlistShowKeys.delete(showKey(libraryId, title));
   await fetchWatchlist();
 }
-
-theater.addEventListener("mousemove", resetIdleTimer);
-theater.addEventListener("mousedown", resetIdleTimer);
 
 function renderNav() {
   appShell.classList.toggle("settings-mode", activeView === "settings");
@@ -512,9 +510,14 @@ function renderTopbarControls() {
   topbarFilters.classList.remove("empty");
   topbarFilters.append(
     topbarSelect("Sort", currentSort, [
-      ["", "Title"],
-      ["mtime", "File date"],
-      ["rating", "Rating"],
+      ["", "Name A‑Z"],
+      ["title_desc", "Name Z‑A"],
+      ["mtime", "Added newest"],
+      ["mtime_asc", "Added oldest"],
+      ["year_desc", "Year newest"],
+      ["year", "Year oldest"],
+      ["rating", "Rating high"],
+      ["rating_asc", "Rating low"],
     ], (value) => {
       currentSort = value;
       currentPage = 1;
@@ -540,12 +543,53 @@ function renderTopbarControls() {
       currentPage = 1;
       loadLibraryPage().catch(console.error);
     }),
-    topbarSelect("Genre", currentGenre, [["", "All"], ...libraryGenres.map((genre) => [genre, genre])], (value) => {
+    topbarMultiSelect("Genre", currentGenre, libraryGenres, (value) => {
       currentGenre = value;
       currentPage = 1;
       loadLibraryPage().catch(console.error);
     }),
   );
+}
+
+function topbarMultiSelect(label, value, options, onChange) {
+  const selected = new Set(String(value || "").split(",").map((g) => g.trim()).filter(Boolean));
+  const field = el("div", "topbar-filter");
+  const trigger = el("button", "topbar-filter-trigger");
+  trigger.type = "button";
+  const valueLabel = selected.size === 0 ? "All" : (selected.size === 1 ? [...selected][0] : `${selected.size} selected`);
+  trigger.append(
+    el("span", "topbar-filter-label", label),
+    el("strong", "topbar-filter-value", valueLabel),
+    el("span", "topbar-filter-caret", "▾"),
+  );
+  const menu = el("div", "topbar-filter-menu");
+  trigger.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const willOpen = !field.classList.contains("open");
+    closeTopbarMenus();
+    field.classList.toggle("open", willOpen);
+  });
+  menu.addEventListener("click", (event) => event.stopPropagation());
+  const emit = () => onChange([...selected].join(","));
+  const allBtn = el("button", selected.size === 0 ? "topbar-filter-option active" : "topbar-filter-option");
+  allBtn.type = "button";
+  allBtn.append(el("span", "topbar-filter-check", selected.size === 0 ? "✓" : ""), el("span", null, "All genres"));
+  allBtn.addEventListener("click", () => { selected.clear(); emit(); });
+  menu.append(allBtn);
+  for (const genre of options) {
+    const active = selected.has(genre);
+    const button = el("button", active ? "topbar-filter-option active" : "topbar-filter-option");
+    button.type = "button";
+    button.append(el("span", "topbar-filter-check", active ? "✓" : ""), el("span", null, genre));
+    button.addEventListener("click", () => {
+      if (selected.has(genre)) selected.delete(genre);
+      else selected.add(genre);
+      emit();
+    });
+    menu.append(button);
+  }
+  field.append(trigger, menu);
+  return field;
 }
 
 function topbarSelect(label, value, options, onChange) {
@@ -726,9 +770,10 @@ function render(skipHistory) {
   stopPlayer();
 
   const header = el("div", "view-header");
+  const genreLabel = currentGenre ? currentGenre.split(",").filter(Boolean).join(" · ") : "";
   header.append(
-    el("h1", null, currentGenre ? `${library.name} / ${currentGenre}` : library.name),
-    el("span", null, library.type === "tv" ? `${libraryItems.length} shows on this page` : `${libraryItems.length} movies on this page`),
+    el("h1", null, genreLabel ? `${library.name} / ${genreLabel}` : library.name),
+    el("span", "library-count", library.type === "tv" ? `${libraryItems.length} shows` : `${libraryItems.length} movies`),
   );
   frag.append(header);
 
@@ -738,16 +783,52 @@ function render(skipHistory) {
     return;
   }
 
-  if (library.type === "tv") {
-    renderTVShows(frag, libraryItems);
-  } else {
-    frag.append(renderGrid(libraryItems));
+  libraryGridEl = el("div", library.type === "tv" ? "grid show-grid" : "grid");
+  for (const item of libraryItems) {
+    libraryGridEl.append(library.type === "tv" ? showCard(item) : itemCard(item));
   }
-  frag.append(pagination(currentPage, pageHasNext ? currentPage + 1 : currentPage, (p) => {
-    currentPage = p;
-    loadLibraryPage().catch(console.error);
-  }));
+  frag.append(libraryGridEl);
+
+  const sentinel = el("div", "scroll-sentinel");
+  frag.append(sentinel);
   setView(frag);
+  observeLibraryScroll(sentinel);
+}
+
+function observeLibraryScroll(sentinel) {
+  if (libraryObserver) libraryObserver.disconnect();
+  if (!pageHasNext) return;
+  libraryObserver = new IntersectionObserver((entries) => {
+    if (entries.some((e) => e.isIntersecting)) loadMoreLibrary().catch(console.error);
+  }, { rootMargin: "600px 0px" });
+  libraryObserver.observe(sentinel);
+}
+
+async function loadMoreLibrary() {
+  if (libraryLoading || !pageHasNext) return;
+  const library = activeLibrary();
+  if (!library) return;
+  libraryLoading = true;
+  try {
+    currentPage += 1;
+    const offset = (currentPage - 1) * perPage;
+    const page = library.type === "tv"
+      ? await fetchShowsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating })
+      : await fetchItemsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating });
+    const items = page || [];
+    pageHasNext = items.length >= perPage;
+    if (items.length && libraryGridEl) {
+      libraryItems = libraryItems.concat(items);
+      for (const item of items) {
+        libraryGridEl.append(library.type === "tv" ? showCard(item) : itemCard(item));
+      }
+      const count = document.querySelector(".library-count");
+      if (count) count.textContent = library.type === "tv" ? `${libraryItems.length} shows` : `${libraryItems.length} movies`;
+    }
+    if (!pageHasNext && libraryObserver) libraryObserver.disconnect();
+  } finally {
+    libraryLoading = false;
+  }
 }
 
 function renderHome(skipHistory) {
@@ -984,33 +1065,48 @@ async function loadHome(skipHistory) {
   search.value = "";
   renderNav();
   setLoading();
-  const movieLibrary = libraries.find((library) => library.type === "movies");
-  const tvLibrary = libraries.find((library) => library.type === "tv");
-  await refreshMediaState();
-  const resumable = mediaProgressRows
-    .filter((row) => {
-      const position = Number(row?.positionMs || 0);
-      const duration = Number(row?.durationMs || 0);
-      return !row?.completed && duration > 0 && position >= 30000 && position < Math.max(duration - 90000, 30000);
-    })
-    .slice(0, 40);
-  const continueItems = await Promise.all(
-    resumable.map((row) => fetchItem(row.itemId).catch(() => null)),
-  );
-  const [recentMovies, movies, recentShows, shows] = await Promise.all([
-    movieLibrary ? fetchItemsPage(movieLibrary.id, { limit: 24, sort: "mtime" }) : [],
-    movieLibrary ? fetchItemsPage(movieLibrary.id, { limit: 220 }) : [],
-    tvLibrary ? fetchShowsPage(tvLibrary.id, { limit: 24, sort: "mtime" }) : [],
-    tvLibrary ? fetchShowsPage(tvLibrary.id, { limit: 220 }) : [],
-    fetchWatchlist(),
-  ]);
-  homeData.continueMovies = continueItems.filter((item) => item?.kind === "movie").slice(0, 24);
-  homeData.continueEpisodes = continueItems.filter((item) => item?.kind === "episode").slice(0, 24);
-  homeData.recentMovies = recentMovies || [];
-  homeData.movies = movies || [];
-  homeData.recentShows = recentShows || [];
-  homeData.shows = shows || [];
+
+  const payload = await api("/api/home").catch(() => null);
+  if (payload) {
+    applyHomePayload(payload);
+  } else {
+    // Fallback to per-endpoint assembly if /api/home is unavailable.
+    await refreshMediaState();
+    const movieLibrary = libraries.find((library) => library.type === "movies");
+    const tvLibrary = libraries.find((library) => library.type === "tv");
+    const [recentMovies, movies, recentShows, shows] = await Promise.all([
+      movieLibrary ? fetchItemsPage(movieLibrary.id, { limit: 24, sort: "mtime" }) : [],
+      movieLibrary ? fetchItemsPage(movieLibrary.id, { limit: 220 }) : [],
+      tvLibrary ? fetchShowsPage(tvLibrary.id, { limit: 24, sort: "mtime" }) : [],
+      tvLibrary ? fetchShowsPage(tvLibrary.id, { limit: 220 }) : [],
+      fetchWatchlist(),
+    ]);
+    homeData.continueMovies = [];
+    homeData.continueEpisodes = [];
+    homeData.recentMovies = recentMovies || [];
+    homeData.movies = movies || [];
+    homeData.recentShows = recentShows || [];
+    homeData.shows = shows || [];
+  }
   renderHome(skipHistory);
+}
+
+function applyHomePayload(payload) {
+  mediaProgressRows = payload.progress || [];
+  rebuildResumeFractions(mediaProgressRows);
+  watchedItemIds = new Set(mediaProgressRows.filter((r) => r?.completed).map((r) => Number(r.itemId)).filter(Boolean));
+  watchedShowKeys = new Set((payload.showProgress || []).filter((r) => r?.completed).map((r) => showKey(r.libraryId, r.showTitle)));
+  const watchlist = payload.watchlist || { items: [], shows: [] };
+  watchlistItemIds = new Set((watchlist.items || []).map((i) => Number(i.id)).filter(Boolean));
+  watchlistShowKeys = new Set((watchlist.shows || []).map((s) => showKey(s.libraryId, s.title)));
+  homeData.continueMovies = payload.continueMovies || [];
+  homeData.continueEpisodes = payload.continueEpisodes || [];
+  homeData.recentMovies = payload.recentMovies || [];
+  homeData.recentShows = payload.recentShows || [];
+  homeData.movies = payload.homeMovies || [];
+  homeData.shows = payload.homeShows || [];
+  homeData.watchlistMovies = (watchlist.items || []).filter((i) => i.kind === "movie");
+  homeData.watchlistShows = watchlist.shows || [];
 }
 
 async function loadLibraryPage(skipHistory) {
@@ -1019,10 +1115,12 @@ async function loadLibraryPage(skipHistory) {
   activeView = "library";
   currentShow = null;
   currentSeason = null;
+  currentPage = 1;
+  if (libraryObserver) { libraryObserver.disconnect(); libraryObserver = null; }
   search.value = "";
   renderNav();
   setLoading();
-  const offset = (currentPage - 1) * perPage;
+  const offset = 0;
   await refreshMediaState();
   const [genres, page] = await Promise.all([
     fetchLibraryGenres(library.id),
@@ -1070,8 +1168,6 @@ async function bootstrapAuth() {
 
 async function startApp() {
   await load();
-  clearInterval(timelineTimer);
-  timelineTimer = setInterval(() => updateTimeline(), 1000);
 }
 
 function cleanError(err) {
@@ -1111,17 +1207,11 @@ async function navigate(state, replaceURL = false) {
     await renderUsers(true);
   } else if (state.view === "library") {
     await loadLibraryPage(true);
-  } else if (state.view === "show" && state.showTitle) {
+  } else if ((state.view === "show" || state.view === "season") && state.showTitle) {
     activeView = "library";
     renderNav();
     const show = await fetchShowSummary(state.libraryId || activeLibraryId, state.showTitle);
-    if (show) await openShow(show, true);
-    else await loadLibraryPage(true);
-  } else if (state.view === "season" && state.showTitle) {
-    activeView = "library";
-    renderNav();
-    const show = await fetchShowSummary(state.libraryId || activeLibraryId, state.showTitle);
-    if (show) await openSeason(show, Number(state.season || 0), true);
+    if (show) await openShow(show, true, state.season != null ? Number(state.season) : undefined);
     else await loadLibraryPage(true);
   } else if (state.view === "detail" && state.itemId) {
     activeView = "library";
@@ -1171,6 +1261,7 @@ function routeFromLocation() {
   if (parts[2] === "show" && parts[3]) {
     state.view = "show";
     state.showTitle = parts.slice(3).join("/");
+    if (params.has("season")) state.season = Number(params.get("season") || "0");
   } else if (parts[2] === "season" && parts[3]) {
     state.view = "season";
     state.season = Number(parts[3]);
@@ -1194,10 +1285,8 @@ function urlForState(state) {
   else if (state.view === "settings") path = "/settings";
   else if (state.view === "users") path = "/settings/users";
   else if (libraryId) path = `/library/${libraryId}`;
-  if (state.view === "show" && state.showTitle) {
+  if ((state.view === "show" || state.view === "season") && state.showTitle) {
     path += `/show/${encodeURIComponent(state.showTitle)}`;
-  } else if (state.view === "season" && state.showTitle) {
-    path += `/season/${encodeURIComponent(String(state.season || 0))}/${encodeURIComponent(state.showTitle)}`;
   } else if (state.view === "detail" && state.itemId) {
     path += `/item/${encodeURIComponent(String(state.itemId))}`;
   }
@@ -1207,6 +1296,7 @@ function urlForState(state) {
   if (state.view === "library" && state.sort) params.set("sort", state.sort);
   if (state.view === "library" && state.seen) params.set("seen", state.seen);
   if (state.view === "library" && state.minRating) params.set("minRating", String(state.minRating));
+  if ((state.view === "show" || state.view === "season") && state.season !== undefined && state.season !== null) params.set("season", String(state.season));
   if (state.view === "detail" && state.showTitle) params.set("show", state.showTitle);
   if (state.view === "detail" && state.season !== undefined && state.season !== null) params.set("season", String(state.season));
   if (state.q) params.set("q", state.q);
@@ -1260,44 +1350,6 @@ search.addEventListener("input", () => {
   }, 180);
 });
 
-timeline.addEventListener("input", () => {
-  draggingTimeline = true;
-  updateTimeline(Number(timeline.value));
-});
-
-timeline.addEventListener("change", () => {
-  draggingTimeline = false;
-  seekTo(Number(timeline.value));
-});
-
-playPause.addEventListener("click", () => {
-  if (!currentItem) return;
-  if (player.paused) player.play().catch(() => {});
-  else player.pause();
-  updateTimeline();
-});
-
-player.addEventListener("click", () => playPause.click());
-player.addEventListener("timeupdate", () => updateTimeline());
-player.addEventListener("loadedmetadata", () => updateTimeline());
-player.addEventListener("play", () => { updateTimeline(); resetIdleTimer(); });
-player.addEventListener("pause", () => { updateTimeline(); resetIdleTimer(); });
-player.addEventListener("ended", () => updateTimeline());
-
-closePlayerBtn.addEventListener("click", () => stopPlayer());
-
-fullscreenBtn.addEventListener("click", () => {
-  if (document.fullscreenElement) {
-    document.exitFullscreen().catch(() => {});
-  } else {
-    theater.requestFullscreen().catch(() => {});
-  }
-});
-
-document.addEventListener("fullscreenchange", () => {
-  fullscreenBtn.textContent = document.fullscreenElement ? "Exit FS" : "Fullscreen";
-});
-
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".topbar-filter")) {
     closeTopbarMenus();
@@ -1308,64 +1360,11 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && userPanel.querySelector("details[open]")) {
     e.preventDefault();
     closeUserMenu();
-    return;
-  }
-  // Esc closes theater (if not in native fullscreen — browser handles that)
-  if (e.key === "Escape" && !theater.classList.contains("hidden") && !document.fullscreenElement) {
-    e.preventDefault();
-    stopPlayer();
-  }
-  // Space toggles play/pause when theater is open
-  if (e.key === " " && !theater.classList.contains("hidden")) {
-    e.preventDefault();
-    playPause.click();
-  }
-  // F for fullscreen when theater is open
-  if (e.key === "f" && !theater.classList.contains("hidden") && document.activeElement?.tagName !== "INPUT") {
-    e.preventDefault();
-    fullscreenBtn.click();
   }
 });
 
 document.addEventListener("click", (e) => {
   if (!userPanel.contains(e.target)) closeUserMenu();
-});
-
-updateBandwidthVisibility();
-player.volume = Number.isFinite(savedVolume) ? Math.max(0, Math.min(1, savedVolume)) : 1;
-updateVolumeUI();
-
-volume.addEventListener("input", () => {
-  player.volume = Number(volume.value);
-  player.muted = player.volume === 0;
-  if (player.volume > 0) {
-    savedVolume = player.volume;
-    localStorage.setItem("popcornVolume", String(savedVolume));
-  }
-  updateVolumeUI();
-});
-
-muteBtn.addEventListener("click", () => {
-  if (player.muted || player.volume === 0) {
-    player.muted = false;
-    player.volume = savedVolume > 0 ? savedVolume : 1;
-  } else {
-    savedVolume = player.volume;
-    localStorage.setItem("popcornVolume", String(savedVolume));
-    player.muted = true;
-  }
-  updateVolumeUI();
-});
-
-player.addEventListener("volumechange", updateVolumeUI);
-
-bandwidth.addEventListener("change", () => {
-  if (currentItem && transcode.checked) play(currentItem, effectiveTime());
-});
-
-transcode.addEventListener("change", () => {
-  updateBandwidthVisibility();
-  if (currentItem) play(currentItem, effectiveTime());
 });
 
 bootstrapAuth().catch(console.error);

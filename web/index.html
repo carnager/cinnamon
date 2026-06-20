@@ -45,31 +45,49 @@
     <div id="theater" class="theater hidden">
       <div class="theater-inner">
         <video id="player" playsinline></video>
-        <div class="theater-controls">
-          <button id="playPause" class="theater-btn" type="button" aria-label="Play">Play</button>
-          <span id="currentTime" class="theater-time">0:00</span>
-          <input id="timeline" class="theater-timeline" type="range" min="0" max="0" value="0" step="1">
-          <span id="duration" class="theater-time">0:00</span>
-          <div id="nowPlaying" class="theater-title"></div>
-          <div class="theater-volume">
-            <button id="muteBtn" class="theater-btn theater-mute" type="button" aria-label="Mute">Vol</button>
-            <input id="volume" class="theater-volume-slider" type="range" min="0" max="1" value="1" step="0.01" aria-label="Volume">
+        <div id="playerStatus" class="player-status hidden"><span class="player-spinner"></span><span id="playerStatusText"></span></div>
+        <div id="upNext" class="up-next hidden"></div>
+        <div class="player-ui">
+          <div class="player-top">
+            <button id="closePlayer" class="pbtn pbtn-ghost" type="button" aria-label="Close">‹ Back</button>
+            <div id="nowPlaying" class="player-title"></div>
           </div>
-          <div class="theater-playback-opts">
-            <label class="theater-toggle" title="Transcode">
-              <input id="transcode" type="checkbox">
-              <span>Transcode</span>
-            </label>
-            <select id="bandwidth" class="theater-select" title="Bitrate">
-              <option value="1500">1.5 Mbps</option>
-              <option value="3000">3 Mbps</option>
-              <option value="6000" selected>6 Mbps</option>
-              <option value="12000">12 Mbps</option>
-              <option value="20000">20 Mbps</option>
-            </select>
+          <button id="centerToggle" class="player-center-toggle" type="button" aria-label="Play/Pause"></button>
+          <div class="player-bottom">
+            <div class="seek-row">
+              <span id="currentTime" class="player-time">0:00</span>
+              <div class="seekbar">
+                <div id="seekBuffered" class="seek-buffered"></div>
+                <div id="seekPlayed" class="seek-played"></div>
+                <input id="timeline" class="seek-input" type="range" min="0" max="0" value="0" step="1" aria-label="Seek">
+              </div>
+              <span id="duration" class="player-time">0:00</span>
+            </div>
+            <div class="control-row">
+              <button id="playPause" class="pbtn pbtn-icon" type="button" aria-label="Play"></button>
+              <button id="rewBtn" class="pbtn pbtn-icon" type="button" aria-label="Back 10 seconds" title="Back 10s"></button>
+              <button id="ffwdBtn" class="pbtn pbtn-icon" type="button" aria-label="Forward 30 seconds" title="Forward 30s"></button>
+              <div class="control-volume">
+                <button id="muteBtn" class="pbtn pbtn-icon" type="button" aria-label="Mute"></button>
+                <input id="volume" class="volume-slider" type="range" min="0" max="1" value="1" step="0.01" aria-label="Volume">
+              </div>
+              <div class="control-spacer"></div>
+              <button id="nextEpBtn" class="pbtn pbtn-text hidden" type="button" aria-label="Next episode">Next ›</button>
+              <div class="menu-anchor">
+                <button id="audioBtn" class="pbtn pbtn-text" type="button" aria-haspopup="true" aria-expanded="false">Audio</button>
+                <div id="audioMenu" class="player-menu hidden"></div>
+              </div>
+              <div class="menu-anchor">
+                <button id="subsBtn" class="pbtn pbtn-text" type="button" aria-haspopup="true" aria-expanded="false">Subtitles</button>
+                <div id="subsMenu" class="player-menu hidden"></div>
+              </div>
+              <div class="menu-anchor">
+                <button id="qualityBtn" class="pbtn pbtn-text" type="button" aria-haspopup="true" aria-expanded="false">Auto</button>
+                <div id="qualityMenu" class="player-menu hidden"></div>
+              </div>
+              <button id="fullscreenBtn" class="pbtn pbtn-icon" type="button" aria-label="Fullscreen"></button>
+            </div>
           </div>
-          <button id="fullscreenBtn" class="theater-btn" type="button" aria-label="Fullscreen">Fullscreen</button>
-          <button id="closePlayer" class="theater-btn" type="button" aria-label="Close">Close</button>
         </div>
       </div>
     </div>

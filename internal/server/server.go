@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -922,6 +923,10 @@ func logging(log *slog.Logger, next http.Handler) http.Handler {
 	})
 }
 
+// htmlAssetRef matches local css/js references in served HTML so they can be
+// stamped with the build version for cache busting.
+var htmlAssetRef = regexp.MustCompile(`(href|src)="(/[^"?]+\.(?:css|js))"`)
+
 func popcornWebFiles(mount string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
@@ -946,6 +951,15 @@ func popcornWebFiles(mount string) http.Handler {
 		}
 		if strings.HasSuffix(path, ".html") {
 			w.Header().Set("Cache-Control", "no-store")
+			// Stamp asset URLs with the build version so a new deploy
+			// invalidates the browser cache without renaming files.
+			if data, err := web.Files.ReadFile(path); err == nil {
+				ver := url.QueryEscape(version.Version)
+				rewritten := htmlAssetRef.ReplaceAll(data, []byte(`${1}="${2}?v=`+ver+`"`))
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				_, _ = w.Write(rewritten)
+				return
+			}
 		} else {
 			w.Header().Set("Cache-Control", "public, max-age=86400")
 		}

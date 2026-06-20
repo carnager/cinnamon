@@ -38,6 +38,16 @@ function ratingBadge(rating, className) {
   return el("div", className, `\u2605 ${Number(rating).toFixed(1)}`);
 }
 
+function posterProgressBar(item) {
+  const fraction = typeof resumeFraction === "function" ? resumeFraction(item) : 0;
+  if (!fraction) return null;
+  const wrap = el("div", "poster-progress");
+  const fill = el("div", "poster-progress-fill");
+  fill.style.width = `${Math.round(fraction * 100)}%`;
+  wrap.append(fill);
+  return wrap;
+}
+
 function sourceRatingBadge(label, value) {
   const badge = el("span", "source-rating");
   badge.append(el("span", "source-rating-label", label), el("span", "source-rating-value", value));
@@ -64,6 +74,8 @@ function itemCard(item) {
     overlay.append(ratingBadge(item.rating, "overlay-rating"));
   }
   poster.append(overlay);
+  const progress = posterProgressBar(item);
+  if (progress) poster.append(progress);
 
   const title = el("div", "title", item.kind === "episode" ? (item.episodeTitle || item.title) : item.title);
   const meta = el("div", "meta", metaText);
@@ -773,7 +785,49 @@ function episodeRow(episode) {
   return row;
 }
 
-/* ── Detail View ── */
+/* \u2500\u2500 Episode Card (16:9 still) \u2500\u2500 */
+function episodeCard(episode) {
+  const card = el("div", "episode-card");
+  const open = () => openDetail(episode, false, { show: currentShow, season: currentSeason }).catch(console.error);
+
+  const still = el("button", "ep-still");
+  still.type = "button";
+  still.addEventListener("click", open);
+  if (episode.backdropPath) {
+    still.style.backgroundImage = `url(${imageURL(episode, "backdrop")})`;
+  } else if (episode.posterPath) {
+    still.style.backgroundImage = `url(${imageURL(episode, "poster")})`;
+  }
+  still.append(el("span", "ep-still-badge", `E${String(episode.episodeNumber || 0).padStart(2, "0")}`));
+  if (episode.rating) still.append(ratingBadge(episode.rating, "poster-rating"));
+  const badges = posterBadges({ seen: itemSeen(episode), watchlisted: itemWatchlisted(episode) });
+  if (badges) still.append(badges);
+  const playOverlay = el("button", "ep-play-overlay");
+  playOverlay.type = "button";
+  playOverlay.setAttribute("aria-label", "Play episode");
+  const epGlyph = el("span", "ep-play-glyph");
+  epGlyph.innerHTML = ICONS.play;
+  playOverlay.append(epGlyph);
+  playOverlay.addEventListener("click", (e) => { e.stopPropagation(); play(episode, { startMs: 0 }); });
+  still.append(playOverlay);
+  const progress = posterProgressBar(episode);
+  if (progress) still.append(progress);
+
+  const info = el("button", "ep-card-info");
+  info.type = "button";
+  info.addEventListener("click", open);
+  const code = `S${String(episode.seasonNumber || 0).padStart(2, "0")}E${String(episode.episodeNumber || 0).padStart(2, "0")}`;
+  info.append(
+    el("div", "ep-card-title", episode.episodeTitle || episode.title),
+    el("div", "ep-card-meta", [code, fmtDuration(episode.durationMs)].filter(Boolean).join(" \u00b7 ")),
+  );
+  if (episode.overview) info.append(el("div", "ep-card-overview", episode.overview));
+
+  card.append(still, info);
+  return card;
+}
+
+/* ── Detail View (movie / episode) ── */
 async function openDetail(item, skipHistory, parent = {}) {
   currentItem = item;
   if (item.kind === "episode") {
@@ -781,23 +835,30 @@ async function openDetail(item, skipHistory, parent = {}) {
     if (parent.season !== undefined && parent.season !== null) currentSeason = Number(parent.season || 0);
     else currentSeason = currentSeason ?? Number(item.seasonNumber || 0);
   }
-  selectedAudio = "";
-  selectedSubtitle = "";
-  const [streams, externalRatings] = await Promise.all([
-    api(`/api/items/${item.id}/streams`),
-    api(`/api/items/${item.id}/ratings`).catch(() => null),
-  ]);
-  const audioStreams = streams.filter((s) => s.type === "audio");
-  const subtitleStreams = streams.filter((s) => s.type === "subtitle");
-  const defaultAudio = audioStreams.find((s) => s.default) || audioStreams[0];
-  if (defaultAudio) selectedAudio = String(defaultAudio.index);
-
   stopPlayer();
+  setLoading();
+
+  const [fresh, streams, externalRatings, sidecars, progress, similar] = await Promise.all([
+    fetchItem(item.id).catch(() => null),
+    api(`/api/items/${item.id}/streams`).catch(() => []),
+    api(`/api/items/${item.id}/ratings`).catch(() => null),
+    api(`/api/items/${item.id}/sidecars`).catch(() => null),
+    api(`/api/items/${item.id}/progress`).catch(() => null),
+    item.kind === "movie" ? api(`/api/items/${item.id}/similar`).catch(() => []) : Promise.resolve([]),
+  ]);
+  const d = Object.assign({}, item, fresh || {});
+  const audioStreams = (streams || []).filter((s) => s.type === "audio");
+  const subtitleStreams = (streams || []).filter((s) => s.type === "subtitle");
+  const chosenAudio = (audioStreams.find((s) => s.default) || audioStreams[0]);
+  let chosenAudioIdx = chosenAudio ? chosenAudio.index : null;
+  let chosenSubIdx = null;
+
+  const resumeMs = (progress && !progress.completed && progress.positionMs > 30000) ? progress.positionMs : 0;
+
   if (!skipHistory) {
     const detailState = { view: "detail", libraryId: activeLibraryId, itemId: item.id };
     if (item.kind === "episode") {
-      const showTitle = currentShow?.title === item.showTitle ? currentShow.title : item.showTitle || "";
-      detailState.showTitle = showTitle;
+      detailState.showTitle = (currentShow?.title === item.showTitle ? currentShow.title : item.showTitle) || "";
       detailState.season = currentSeason ?? Number(item.seasonNumber || 0);
     }
     pushState(detailState);
@@ -806,113 +867,218 @@ async function openDetail(item, skipHistory, parent = {}) {
   const frag = document.createDocumentFragment();
   const library = activeLibrary();
 
-  // Breadcrumb
   const crumbs = [{ label: library?.name || "Library", action: () => loadLibraryPage().catch(console.error) }];
   if (item.kind === "episode" && currentShow) {
-    crumbs.push({ label: currentShow.title, action: () => openShow(currentShow).catch(console.error) });
-    if (currentSeason !== null) {
-      crumbs.push({ label: currentSeason ? `Season ${currentSeason}` : "Specials", action: () => openSeason(currentShow, currentSeason).catch(console.error) });
-    }
+    crumbs.push({ label: currentShow.title, action: () => openShow(currentShow, false, currentSeason).catch(console.error) });
   }
-  crumbs.push({ label: item.kind === "episode" ? (item.episodeTitle || item.title) : item.title });
+  crumbs.push({ label: item.kind === "episode" ? (d.episodeTitle || d.title) : d.title });
   frag.append(makeBreadcrumb(crumbs));
 
-  // Hero backdrop
-  if (item.backdropPath) {
+  if (d.backdropPath) {
     const hero = el("div", "detail-hero");
     const bd = el("div", "detail-backdrop");
-    bd.style.backgroundImage = `url(${imageURL(item, "backdrop")})`;
+    bd.style.backgroundImage = `url(${imageURL(d, "backdrop")})`;
     hero.append(bd, el("div", "detail-backdrop-overlay"));
     frag.append(hero);
   }
 
-  // Detail layout
   const detail = el("article", "detail");
-  const poster = posterBlock(item, item.title, { seen: itemSeen(item), watchlisted: itemWatchlisted(item) });
+  const posterCol = el("div", "detail-poster-col");
+  const poster = posterBlock(d, d.title, { seen: itemSeen(d), watchlisted: itemWatchlisted(d) });
   poster.classList.add("detail-poster");
+  posterCol.append(poster);
+  const posterGenres = genreList(d.genres).slice(0, 3);
+  if (posterGenres.length) {
+    const g = el("div", "detail-poster-genres");
+    for (const genre of posterGenres) g.append(el("span", "poster-genre", genre));
+    posterCol.append(g);
+  }
 
   const body = el("div", "detail-body");
-  body.append(el("h1", null, item.title));
+  const titleText = item.kind === "episode" ? (d.episodeTitle || d.title) : d.title;
+  body.append(el("h1", null, titleText));
+  if (d.originalTitle && d.originalTitle !== titleText) body.append(el("div", "detail-original-title", d.originalTitle));
 
-  // Meta line
-  const meta = el("div", "detail-meta");
-  const parts = detailMetaParts(item);
-  parts.forEach((part, i) => {
-    if (i > 0) meta.append(el("span", "meta-dot"));
-    meta.append(el("span", null, part));
-  });
-  const hasSourceRatings = Boolean(externalRatings?.imdbRating || externalRatings?.tmdbRating || externalRatings?.rottenTomatoesRating);
-  if (item.rating && !hasSourceRatings) {
-    meta.append(el("span", "detail-rating", `\u2605 ${Number(item.rating).toFixed(1)}`));
-  }
-  if (externalRatings?.imdbRating) {
-    meta.append(sourceRatingBadge("IMDb", Number(externalRatings.imdbRating).toFixed(1)));
-  }
-  if (externalRatings?.tmdbRating) {
-    meta.append(sourceRatingBadge("TMDb", Number(externalRatings.tmdbRating).toFixed(1)));
-  }
-  if (externalRatings?.rottenTomatoesRating) {
-    meta.append(sourceRatingBadge("RT", `${externalRatings.rottenTomatoesRating}%`));
-  }
-  body.append(meta);
+  body.append(detailMetaLine(d));
+  body.append(detailRatingsRow(d, externalRatings));
 
-  // Genres
-  if (item.genres) {
-    const genreList = item.genres.split(/[,/]/).map((g) => g.trim()).filter(Boolean);
-    if (genreList.length) {
-      const genres = el("div", "detail-genres");
-      for (const g of genreList) genres.append(el("span", "genre-pill", g));
-      body.append(genres);
+  const allGenres = genreList(d.genres);
+  if (allGenres.length) {
+    const genres = el("div", "detail-genres");
+    for (const g of allGenres) genres.append(el("span", "genre-pill", g));
+    body.append(genres);
+  }
+
+  if (d.overview || d.tagline) body.append(overviewPanel(d));
+
+  // Inline track selectors used as playback defaults.
+  if (audioStreams.length > 1 || subtitleStreams.length) {
+    const selectors = el("div", "stream-selectors");
+    if (audioStreams.length) {
+      selectors.append(selectField("Audio", audioStreams, String(chosenAudioIdx ?? ""), (v) => { chosenAudioIdx = v === "" ? null : Number(v); }));
     }
+    if (subtitleStreams.length) {
+      selectors.append(selectField("Subtitles", subtitleStreams, "", (v) => { chosenSubIdx = v === "" ? null : Number(v); }, true));
+    }
+    body.append(selectors);
   }
 
-  // Overview
-  if (item.overview || item.tagline) {
-    body.append(el("p", "overview", item.overview || item.tagline));
-  }
-
-  // Stream selectors
-  const selectors = el("div", "stream-selectors");
-  selectors.append(
-    selectField("Audio", audioStreams, selectedAudio, (v) => { selectedAudio = v; }),
-    selectField("Subtitles", subtitleStreams, selectedSubtitle, (v) => { selectedSubtitle = v; }, true),
-  );
-  body.append(selectors);
-
-  // Play button
   const actions = el("div", "detail-actions");
-  const playBtn = el("button", "primary detail-play", "Play");
-  playBtn.type = "button";
-  playBtn.addEventListener("click", () => play(item));
-  const seenBtn = toggleActionButton({
-    active: itemSeen(item),
-    activeLabel: "Seen",
-    inactiveLabel: "Mark Seen",
-    onToggle: (seen) => setItemSeen(item, seen),
-  });
-  const watchlistBtn = toggleActionButton({
-    active: itemWatchlisted(item),
-    activeLabel: "In Watchlist",
-    inactiveLabel: "Add Watchlist",
-    onToggle: (watchlisted) => setItemWatchlisted(item, watchlisted),
-  });
-  actions.append(playBtn, seenBtn, watchlistBtn);
+  const playOpts = () => ({ audioIndex: chosenAudioIdx, subtitleIndex: chosenSubIdx });
+  if (resumeMs) {
+    const resumeBtn = el("button", "primary detail-play", `Resume · ${fmtClock(resumeMs / 1000)}`);
+    resumeBtn.type = "button";
+    resumeBtn.addEventListener("click", () => play(d, Object.assign({ startMs: resumeMs }, playOpts())));
+    const fromStart = el("button", "secondary detail-play-secondary", "Play from start");
+    fromStart.type = "button";
+    fromStart.addEventListener("click", () => play(d, Object.assign({ startMs: 0 }, playOpts())));
+    actions.append(resumeBtn, fromStart);
+  } else {
+    const playBtn = el("button", "primary detail-play", "Play");
+    playBtn.type = "button";
+    playBtn.addEventListener("click", () => play(d, Object.assign({ startMs: 0 }, playOpts())));
+    actions.append(playBtn);
+  }
+
+  const trailerBtn = el("button", "secondary", "Trailer");
+  trailerBtn.type = "button";
+  trailerBtn.addEventListener("click", () => { if (sidecars?.trailer) playTrailer(d); else youtubeTrailerSearch(d); });
+  actions.append(trailerBtn);
+
+  actions.append(
+    toggleActionButton({
+      active: itemSeen(d),
+      activeLabel: "Seen",
+      inactiveLabel: "Mark Seen",
+      onToggle: (seen) => setItemSeen(d, seen),
+    }),
+    toggleActionButton({
+      active: itemWatchlisted(d),
+      activeLabel: "In Watchlist",
+      inactiveLabel: "Add Watchlist",
+      onToggle: (watchlisted) => setItemWatchlisted(d, watchlisted),
+    }),
+  );
   body.append(actions);
 
-  detail.append(poster, body);
+  detail.append(posterCol, body);
   frag.append(detail);
-  if (item.actors?.length) {
-    frag.append(castShelf(item.actors));
+  if (d.actors?.length) frag.append(castShelf(d.actors));
+  if (similar && similar.length) {
+    const section = el("section", "cast-shelf similar-shelf");
+    section.append(sectionTitle("More like this", `${similar.length}`));
+    section.append(renderShelfGrid(similar.slice(0, 18)));
+    frag.append(section);
   }
   setView(frag);
 }
 
-/* ── Show View ── */
-async function openShow(show, skipHistory) {
+function detailMetaLine(d) {
+  const meta = el("div", "detail-meta");
+  const parts = [];
+  if (d.kind === "episode") {
+    if (d.showTitle) parts.push(d.showTitle);
+    if (d.seasonNumber || d.episodeNumber) parts.push(`S${String(d.seasonNumber || 0).padStart(2, "0")}E${String(d.episodeNumber || 0).padStart(2, "0")}`);
+  } else if (d.year) {
+    parts.push(String(d.year));
+  }
+  if (d.durationMs) { parts.push(fmtDuration(d.durationMs)); parts.push(fmtEndsAround(d.durationMs)); }
+  parts.forEach((part, i) => {
+    if (i > 0) meta.append(el("span", "meta-dot"));
+    meta.append(el("span", null, part));
+  });
+  if (d.officialRating) meta.append(el("span", "content-rating-chip", d.officialRating));
+  for (const chip of techChips(d)) meta.append(chip);
+  return meta;
+}
+
+function techChips(d) {
+  const chips = [];
+  const res = resolutionLabel(d.height);
+  if (res) chips.push(el("span", "tech-chip", res));
+  if (d.videoCodec) chips.push(el("span", "tech-chip", String(d.videoCodec).toUpperCase()));
+  return chips;
+}
+
+function resolutionLabel(height) {
+  const h = Number(height || 0);
+  if (h <= 0) return "";
+  if (h >= 2000) return "4K";
+  if (h >= 1000) return "1080p";
+  if (h >= 700) return "720p";
+  return `${h}p`;
+}
+
+function detailRatingsRow(d, ext) {
+  const row = el("div", "detail-ratings");
+  let any = false;
+  if (ext?.imdbRating) { row.append(sourceRatingBadge("IMDb", Number(ext.imdbRating).toFixed(1))); any = true; }
+  if (ext?.tmdbRating) { row.append(sourceRatingBadge("TMDb", Number(ext.tmdbRating).toFixed(1))); any = true; }
+  if (ext?.rottenTomatoesRating) { row.append(sourceRatingBadge("RT", `${ext.rottenTomatoesRating}%`)); any = true; }
+  if (ext?.metacriticRating) { row.append(sourceRatingBadge("MC", String(ext.metacriticRating))); any = true; }
+  if (!any && d.rating) row.append(sourceRatingBadge("NFO", Number(d.rating).toFixed(1)));
+  return row;
+}
+
+function genreList(value) {
+  return String(value || "").split(/[,/]/).map((g) => g.trim()).filter(Boolean);
+}
+
+function overviewPanel(d) {
+  const panel = el("button", "overview overview-clickable");
+  panel.type = "button";
+  if (d.tagline) panel.append(el("span", "overview-tagline", d.tagline));
+  panel.append(el("span", "overview-text", d.overview || d.tagline || ""));
+  panel.addEventListener("click", () => openFullText(d));
+  return panel;
+}
+
+function openFullText(d) {
+  const overlay = el("div", "modal-overlay");
+  const dialog = el("div", "modal-dialog");
+  dialog.append(el("h2", null, d.kind === "episode" ? (d.episodeTitle || d.title) : d.title));
+  if (d.tagline) dialog.append(el("p", "modal-tagline", d.tagline));
+  if (d.overview) dialog.append(el("p", "modal-overview", d.overview));
+  const facts = [
+    ["Director", listText(d.directors)],
+    ["Writers", listText(d.writers)],
+    ["Studios", listText(d.studios)],
+    ["Country", listText(d.countries)],
+  ].filter(([, v]) => v);
+  if (facts.length) {
+    const dl = el("dl", "modal-facts");
+    for (const [k, v] of facts) { dl.append(el("dt", null, k), el("dd", null, v)); }
+    dialog.append(dl);
+  }
+  const close = el("button", "secondary modal-close", "Close");
+  close.type = "button";
+  const dismiss = () => overlay.remove();
+  close.addEventListener("click", dismiss);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) dismiss(); });
+  document.addEventListener("keydown", function onKey(e) { if (e.key === "Escape") { dismiss(); document.removeEventListener("keydown", onKey); } });
+  dialog.append(close);
+  overlay.append(dialog);
+  document.body.append(overlay);
+}
+
+function listText(value) {
+  if (Array.isArray(value)) return value.filter(Boolean).join(", ");
+  return String(value || "").split(/[,/]/).map((s) => s.trim()).filter(Boolean).join(", ");
+}
+
+/* ── Show View (inline seasons + episodes) ── */
+async function openShow(show, skipHistory, initialSeason) {
   currentShow = show;
-  currentSeason = null;
   stopPlayer();
-  if (!skipHistory) pushState({ view: "show", libraryId: show.libraryId || activeLibraryId, showTitle: show.title });
+  setLoading();
+
+  const libraryId = show.libraryId || activeLibraryId;
+  const seasons = await api(`/api/tv/seasons?libraryId=${encodeURIComponent(libraryId)}&showTitle=${encodeURIComponent(show.title)}`).catch(() => groupSeasons(show.episodes || []));
+  const seasonNumbers = seasons.map((s) => Number(s.seasonNumber ?? s.number ?? 0));
+  let activeSeason = initialSeason != null && seasonNumbers.includes(Number(initialSeason))
+    ? Number(initialSeason)
+    : (seasonNumbers.find((n) => n > 0) ?? seasonNumbers[0] ?? 0);
+  currentSeason = activeSeason;
 
   const frag = document.createDocumentFragment();
   const library = activeLibrary();
@@ -922,131 +1088,98 @@ async function openShow(show, skipHistory) {
     { label: show.title },
   ]));
 
-  // Hero backdrop
-  const backdrop = showBackdropSource(show);
   if (show.backdropItemId) {
     const hero = el("div", "detail-hero");
     const bd = el("div", "detail-backdrop");
-    bd.style.backgroundImage = `url(${imageURL(backdrop, "backdrop")})`;
+    bd.style.backgroundImage = `url(${imageURL(showBackdropSource(show), "backdrop")})`;
     hero.append(bd, el("div", "detail-backdrop-overlay"));
     frag.append(hero);
   }
 
-  // Show header
   const header = el("div", "show-detail");
   const poster = posterBlock(showPosterSource(show), show.title, { seen: showSeen(show), watchlisted: showWatchlisted(show) });
   poster.classList.add("detail-poster");
 
   const body = el("div", "detail-body");
   body.append(el("h1", null, show.title));
+  const meta = el("div", "detail-meta");
+  meta.append(el("span", null, showCountText(show)));
+  if (showRating(show)) meta.append(el("span", "meta-dot"), el("span", "content-rating-chip", `★ ${Number(showRating(show)).toFixed(1)}`));
+  body.append(meta);
 
-  body.append(el("div", "detail-meta", showCountText(show)));
-
-  if (show.overview) body.append(el("p", "overview", show.overview));
-
-  // Genre pills
-  if (show.genres) {
-    const genreList = show.genres.split(/[,/]/).map((g) => g.trim()).filter(Boolean);
-    if (genreList.length) {
-      const genres = el("div", "detail-genres");
-      for (const g of genreList) genres.append(el("span", "genre-pill", g));
-      body.append(genres);
-    }
+  const allGenres = genreList(show.genres);
+  if (allGenres.length) {
+    const genres = el("div", "detail-genres");
+    for (const g of allGenres) genres.append(el("span", "genre-pill", g));
+    body.append(genres);
   }
+  if (show.overview) body.append(overviewPanel(show));
 
   const actions = el("div", "detail-actions");
   actions.append(
-    toggleActionButton({
-      active: showSeen(show),
-      activeLabel: "Seen",
-      inactiveLabel: "Mark Seen",
-      onToggle: (seen) => setShowSeen(show, seen),
-    }),
-    toggleActionButton({
-      active: showWatchlisted(show),
-      activeLabel: "In Watchlist",
-      inactiveLabel: "Add Watchlist",
-      onToggle: (watchlisted) => setShowWatchlisted(show, watchlisted),
-    }),
+    toggleActionButton({ active: showSeen(show), activeLabel: "Seen", inactiveLabel: "Mark Seen", onToggle: (seen) => setShowSeen(show, seen) }),
+    toggleActionButton({ active: showWatchlisted(show), activeLabel: "In Watchlist", inactiveLabel: "Add Watchlist", onToggle: (w) => setShowWatchlisted(show, w) }),
   );
   body.append(actions);
-
   header.append(poster, body);
   frag.append(header);
-  if (show.actors?.length) {
-    frag.append(castShelf(show.actors));
+
+  if (show.actors?.length) frag.append(castShelf(show.actors));
+
+  // Season selector + inline episode area.
+  const seasonWrap = el("div", "season-browser");
+  const episodeArea = el("div", "episode-area");
+  if (seasons.length > 1) {
+    const selector = el("div", "season-selector");
+    const setActiveSeason = (num, btn) => {
+      activeSeason = num;
+      currentSeason = num;
+      selector.querySelectorAll(".season-pill").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      loadShowEpisodes(show, num, episodeArea);
+      pushState({ view: "show", libraryId, showTitle: show.title, season: num }, true);
+    };
+    for (const season of seasons) {
+      const num = Number(season.seasonNumber ?? season.number ?? 0);
+      const label = season.title || (num ? `Season ${num}` : "Specials");
+      const pill = el("button", num === activeSeason ? "season-pill active" : "season-pill");
+      pill.type = "button";
+      pill.append(el("span", "season-pill-label", label), el("span", "season-pill-count", `${season.episodeCount || season.episodes?.length || 0}`));
+      pill.addEventListener("click", () => setActiveSeason(num, pill));
+      selector.append(pill);
+    }
+    seasonWrap.append(selector);
   }
-  frag.append(await seasonBrowser(show));
+  seasonWrap.append(episodeArea);
+  frag.append(seasonWrap);
+
+  if (!skipHistory) pushState({ view: "show", libraryId, showTitle: show.title, season: activeSeason });
   setView(frag);
+  await loadShowEpisodes(show, activeSeason, episodeArea);
 }
 
-/* ── Season Browser ── */
-async function seasonBrowser(show) {
-  const wrap = el("div", "season-browser");
-  const seasons = await api(`/api/tv/seasons?libraryId=${encodeURIComponent(show.libraryId || activeLibraryId)}&showTitle=${encodeURIComponent(show.title)}`).catch(() => groupSeasons(show.episodes || []));
-  const grid = el("div", "season-grid");
-
-  for (const season of seasons) {
-    grid.append(seasonCard(show, season));
-  }
-
-  wrap.append(sectionTitle("Seasons", `${seasons.length}`), grid);
-  return wrap;
-}
-
-function seasonCard(show, season) {
-  const seasonNumber = Number(season.seasonNumber ?? season.number ?? 0);
-  const label = season.title || (seasonNumber ? `Season ${seasonNumber}` : "Specials");
-  const card = el("button", "season-card");
-  card.type = "button";
-  card.addEventListener("click", () => openSeason(show, seasonNumber).catch(console.error));
-
-  const poster = el("div", "season-poster");
-  const posterID = season.posterItemId || season.posterItemID || season.id;
-  if (posterID) {
-    poster.style.backgroundImage = `url(/api/items/${posterID}/image/season?v=${encodeURIComponent(`${posterID}-${season.posterMtimeUnix || 0}`)})`;
-  } else {
-    poster.textContent = String(seasonNumber || "*");
-  }
-  if (season.rating) poster.append(ratingBadge(season.rating, "poster-rating"));
-  card.append(
-    poster,
-    el("div", "season-title", label),
-    el("div", "season-meta", `${season.episodeCount || season.episodes?.length || 0} episodes${season.durationMs ? ` \u00b7 ${fmtDuration(season.durationMs)}` : ""}`),
-  );
-  return card;
-}
-
-async function openSeason(show, seasonNumber, skipHistory) {
-  currentShow = show;
-  currentSeason = Number(seasonNumber || 0);
-  stopPlayer();
-  if (!skipHistory) pushState({ view: "season", libraryId: show.libraryId || activeLibraryId, showTitle: show.title, season: currentSeason });
-
-  const episodes = await api(`/api/tv/episodes?libraryId=${encodeURIComponent(show.libraryId || activeLibraryId)}&showTitle=${encodeURIComponent(show.title)}&season=${encodeURIComponent(String(currentSeason))}`);
-  const frag = document.createDocumentFragment();
-  const library = activeLibrary();
-  const seasonLabel = currentSeason ? `Season ${currentSeason}` : "Specials";
-  frag.append(makeBreadcrumb([
-    { label: library?.name || "Library", action: () => loadLibraryPage().catch(console.error) },
-    { label: show.title, action: () => openShow(show).catch(console.error) },
-    { label: seasonLabel },
-  ]));
-  const header = el("div", "view-header");
-  const seasonSeen = episodes.length > 0 && episodes.every((episode) => itemSeen(episode));
+async function loadShowEpisodes(show, seasonNumber, container) {
+  container.innerHTML = "";
+  container.append(el("div", "empty", "Loading episodes…"));
+  const libraryId = show.libraryId || activeLibraryId;
+  const episodes = await api(`/api/tv/episodes?libraryId=${encodeURIComponent(libraryId)}&showTitle=${encodeURIComponent(show.title)}&season=${encodeURIComponent(String(seasonNumber))}`).catch(() => []);
+  container.innerHTML = "";
+  const seasonLabel = seasonNumber ? `Season ${seasonNumber}` : "Specials";
+  const header = el("div", "section-header");
+  const allSeen = episodes.length > 0 && episodes.every((e) => itemSeen(e));
   const seasonActions = el("div", "view-header-actions");
   seasonActions.append(toggleActionButton({
-    active: seasonSeen,
+    active: allSeen,
     activeLabel: "Season Seen",
     inactiveLabel: "Mark Season Seen",
-    onToggle: (seen) => setSeasonSeen(show, currentSeason, seen, episodes),
+    onToggle: (seen) => setSeasonSeen(show, seasonNumber, seen, episodes),
   }));
-  header.append(el("h1", null, `${show.title} / ${seasonLabel}`), el("span", null, `${episodes.length} episodes`), seasonActions);
-  frag.append(header);
-  const list = el("div", "episode-list season-episode-list");
-  for (const episode of episodes) list.append(episodeRow(episode));
-  frag.append(list);
-  setView(frag);
+  header.append(el("h2", null, seasonLabel), el("span", null, `${episodes.length} episodes`), seasonActions);
+  container.append(header);
+  if (!episodes.length) { container.append(el("div", "empty", "No episodes found")); return; }
+  const grid = el("div", "episode-grid");
+  for (const episode of episodes) grid.append(episodeCard(episode));
+  container.append(grid);
 }
 
 function groupSeasons(episodes) {
@@ -1058,7 +1191,7 @@ function groupSeasons(episodes) {
   }
   return [...seasons.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([number, eps]) => ({ number, episodes: eps }));
+    .map(([number, eps]) => ({ number, seasonNumber: number, episodes: eps, episodeCount: eps.length }));
 }
 
 /* ── Helpers ── */

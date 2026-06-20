@@ -556,7 +556,7 @@ func hlsOwnerFromProfile(profile PlaybackProfile) string {
 
 func preferFullTranscodeForAudioTranscode(profile PlaybackProfile) bool {
 	switch strings.ToLower(strings.TrimSpace(profile.Client)) {
-	case "android-tv", "android-phone":
+	case "android-tv", "android-phone", "web":
 		return true
 	default:
 		return false

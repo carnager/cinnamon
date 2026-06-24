@@ -214,6 +214,7 @@ type ShowProgress struct {
 	CompletedCount   int    `json:"completedCount"`
 	Completed        bool   `json:"completed"`
 	HasAnyCompletion bool   `json:"hasAnyCompletion"`
+	LastWatched      string `json:"lastWatched,omitempty"`
 }
 
 type TraktAccount struct {

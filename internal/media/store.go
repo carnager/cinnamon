@@ -1822,13 +1822,14 @@ func (s *Store) ListShowProgress(ctx context.Context, userID int64) ([]ShowProgr
 SELECT mi.library_id,
 	COALESCE(mi.show_title, ''),
 	COUNT(*),
-	COALESCE(SUM(CASE WHEN p.completed = 1 THEN 1 ELSE 0 END), 0)
+	COALESCE(SUM(CASE WHEN p.completed = 1 THEN 1 ELSE 0 END), 0),
+	COALESCE(MAX(p.updated_at), '')
 FROM media_items mi
 LEFT JOIN playback_progress p ON p.item_id = mi.id AND p.user_id = ?
 WHERE mi.kind = 'episode'
 AND mi.show_title IS NOT NULL AND mi.show_title != ''
 GROUP BY mi.library_id, mi.show_title
-ORDER BY mi.library_id, mi.show_title`, userID)
+ORDER BY MAX(p.updated_at) IS NULL, MAX(p.updated_at) DESC, mi.library_id, mi.show_title`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -1836,7 +1837,7 @@ ORDER BY mi.library_id, mi.show_title`, userID)
 	out := []ShowProgress{}
 	for rows.Next() {
 		var progress ShowProgress
-		if err := rows.Scan(&progress.LibraryID, &progress.ShowTitle, &progress.EpisodeCount, &progress.CompletedCount); err != nil {
+		if err := rows.Scan(&progress.LibraryID, &progress.ShowTitle, &progress.EpisodeCount, &progress.CompletedCount, &progress.LastWatched); err != nil {
 			return nil, err
 		}
 		progress.Completed = progress.EpisodeCount > 0 && progress.CompletedCount >= progress.EpisodeCount

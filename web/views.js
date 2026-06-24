@@ -919,13 +919,22 @@ async function openDetail(item, skipHistory, parent = {}) {
   }
 
   const frag = document.createDocumentFragment();
-  const library = activeLibrary();
+  const isEpisode = item.kind === "episode";
+  // Resolve the breadcrumb from the item's own library/show, not the globally
+  // active library — otherwise opening a TV episode from the home Continue row
+  // (while the Movies library is active) labels the crumb "Movies".
+  const itemLibraryId = d.libraryId || item.libraryId;
+  const library = (isEpisode && libraryById(itemLibraryId)) || activeLibrary();
 
-  const crumbs = [{ label: library?.name || "Library", action: () => loadLibraryPage().catch(console.error) }];
-  if (item.kind === "episode" && currentShow) {
-    crumbs.push({ label: currentShow.title, action: () => openShow(currentShow, false, currentSeason).catch(console.error) });
+  const crumbs = [{ label: library?.name || "Library", action: () => goToLibrary(library?.id).catch(console.error) }];
+  if (isEpisode) {
+    const showTitle = (currentShow?.title) || d.showTitle || item.showTitle;
+    if (showTitle) {
+      const showRef = currentShow && currentShow.title === showTitle ? currentShow : { libraryId: itemLibraryId, title: showTitle };
+      crumbs.push({ label: showTitle, action: () => openShow(showRef, false, currentSeason ?? Number(item.seasonNumber || 0)).catch(console.error) });
+    }
   }
-  crumbs.push({ label: item.kind === "episode" ? (d.episodeTitle || d.title) : d.title });
+  crumbs.push({ label: isEpisode ? (d.episodeTitle || d.title) : d.title });
   frag.append(makeBreadcrumb(crumbs));
 
   const detail = el("article", "detail");
@@ -1125,10 +1134,10 @@ async function openShow(show, skipHistory, initialSeason) {
   currentSeason = activeSeason;
 
   const frag = document.createDocumentFragment();
-  const library = activeLibrary();
+  const library = libraryById(show.libraryId) || activeLibrary();
 
   frag.append(makeBreadcrumb([
-    { label: library?.name || "Library", action: () => loadLibraryPage().catch(console.error) },
+    { label: library?.name || "Library", action: () => goToLibrary(library?.id).catch(console.error) },
     { label: show.title },
   ]));
 

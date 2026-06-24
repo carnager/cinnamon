@@ -274,6 +274,28 @@ function activeLibrary() {
   return libraries.find((library) => library.id === activeLibraryId) || libraries[0];
 }
 
+function libraryById(id) {
+  return libraries.find((library) => library.id === id);
+}
+
+// Navigate to a library's grid, resetting filters/show context. Used by the
+// library nav and by breadcrumbs that may point at a different library than the
+// one currently active (e.g. opening a TV episode from the home Continue row).
+function goToLibrary(libraryId, skipHistory) {
+  search.value = "";
+  activeView = "library";
+  if (libraryId) activeLibraryId = libraryId;
+  currentPage = 1;
+  currentShow = null;
+  currentSeason = null;
+  currentGenre = "";
+  currentSort = "";
+  currentSeenStatus = "";
+  currentMinRating = 0;
+  renderNav();
+  return loadLibraryPage(skipHistory);
+}
+
 function showKey(libraryId, title) {
   return `${String(libraryId || "").toLowerCase()}\u0000${String(title || "").trim().toLowerCase()}`;
 }
@@ -428,18 +450,7 @@ function renderNav() {
 
   for (const library of libraries) {
     libraryNav.append(navLink(library.name, activeView === "library" && library.id === activeLibraryId, () => {
-      search.value = "";
-      activeView = "library";
-      activeLibraryId = library.id;
-      currentPage = 1;
-      currentShow = null;
-      currentSeason = null;
-      currentGenre = "";
-      currentSort = "";
-      currentSeenStatus = "";
-      currentMinRating = 0;
-      renderNav();
-      loadLibraryPage().catch(console.error);
+      goToLibrary(library.id).catch(console.error);
     }));
   }
 

@@ -278,6 +278,9 @@ func (s *Scanner) addScanFile(ctx context.Context, lib config.Library, path stri
 	if _, ok := videoExts[strings.ToLower(filepath.Ext(path))]; !ok {
 		return nil
 	}
+	if isLibraryRootFile(lib, path) {
+		return nil
+	}
 	if lib.Type == "movies" && isAuxiliaryVideo(path) {
 		return nil
 	}
@@ -305,6 +308,19 @@ func (s *Scanner) addScanFile(ctx context.Context, lib config.Library, path stri
 	}
 	jobs[abs] = scanJob{path: abs, info: info}
 	return nil
+}
+
+// isLibraryRootFile reports whether path is a file sitting directly in the
+// library root (rather than inside a sub-folder). Such files are transient — a
+// freshly added release that an external renamer will move into its own folder —
+// so the scanner never imports them. Only files inside sub-folders become items,
+// which also avoids leaving an orphaned row behind once the file is moved.
+func isLibraryRootFile(lib config.Library, path string) bool {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = filepath.Clean(path)
+	}
+	return filepath.Dir(abs) == filepath.Clean(lib.Path)
 }
 
 func (s *Scanner) scanFileChanged(lib config.Library, path string, info os.FileInfo, existing Item) bool {
@@ -444,6 +460,10 @@ func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
 		}
 		stats.filesSeen.Add(1)
 		if _, ok := videoExts[strings.ToLower(filepath.Ext(path))]; !ok {
+			return nil
+		}
+		if isLibraryRootFile(lib, path) {
+			s.log.Debug("scan root-level file skipped", "library", lib.ID, "path", path)
 			return nil
 		}
 		if lib.Type == "movies" && isAuxiliaryVideo(path) {

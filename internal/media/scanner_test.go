@@ -384,6 +384,33 @@ func TestScanPathsPrunesDeletedFilesInDir(t *testing.T) {
 	}
 }
 
+func TestScanPathsIgnoresRootLevelFile(t *testing.T) {
+	store, ctx := newTestStore(t)
+	root := t.TempDir()
+	libDir := filepath.Join(root, "Movies")
+	mustMkdirAll(t, libDir)
+
+	// A freshly added release dropped directly in the library root. An external
+	// renamer will move it into its own folder shortly; the scanner must not
+	// import the transient root-level file (which would otherwise be orphaned).
+	rootVideo := filepath.Join(libDir, "Some.Movie.2026.1080p.WEB.h264-GROUP.mkv")
+	mustWrite(t, rootVideo, "fake video")
+	mustChtimes(t, rootVideo, 1000)
+
+	scanner := NewScanner(config.Config{FFprobePath: "ffprobe"}, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := scanner.ScanPaths(ctx, config.Library{ID: "movies", Type: "movies", Path: libDir}, []string{rootVideo}); err != nil {
+		t.Fatalf("scan root-level file: %v", err)
+	}
+
+	items, err := store.AllItems(ctx)
+	if err != nil {
+		t.Fatalf("list items: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("items = %#v, want none (root-level file ignored)", items)
+	}
+}
+
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {

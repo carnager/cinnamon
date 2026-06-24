@@ -139,6 +139,7 @@ func TestHLSPlanArgsFullTranscodeUsesHardwareCodecArgs(t *testing.T) {
 	plan := PlaybackPlan{
 		Selected:      PlaybackSelection{VideoIndex: 0, AudioIndex: &audio},
 		BandwidthKbps: 5000,
+		Item:          media.Item{VideoCodec: "h264"},
 		Outputs: PlaybackOutputs{
 			Video: PlaybackOutputStream{Codec: "h264"},
 			Audio: PlaybackOutputStream{Codec: "aac"},
@@ -147,6 +148,36 @@ func TestHLSPlanArgsFullTranscodeUsesHardwareCodecArgs(t *testing.T) {
 	args := hlsPlanArgs(config.Config{HWAccel: "qsv"}, "/media/movie.mkv", "/tmp/seg_%05d.m4s", "/tmp/index.m3u8", plan)
 	if !containsPair(args, "-c:v", "h264_qsv") || !containsPair(args, "-c:a", "aac") {
 		t.Fatalf("args = %v, want qsv h264/aac", args)
+	}
+	// A QSV-decodable source uses GPU decode + the vpp_qsv filter.
+	if !containsPair(args, "-hwaccel", "qsv") || !containsPair(args, "-vf", "vpp_qsv=format=nv12") {
+		t.Fatalf("args = %v, want qsv hardware decode + vpp_qsv", args)
+	}
+}
+
+func TestHLSPlanArgsSoftwareDecodesQSVUnsupportedSource(t *testing.T) {
+	audio := 1
+	// MPEG-4 ASP (DivX/Xvid) cannot be hardware-decoded by QSV; forcing it emits
+	// broken timestamps and produces no output. The transcoder must fall back to
+	// software decode while still encoding with h264_qsv.
+	plan := PlaybackPlan{
+		Selected:      PlaybackSelection{VideoIndex: 0, AudioIndex: &audio},
+		BandwidthKbps: 5000,
+		Item:          media.Item{VideoCodec: "mpeg4"},
+		Outputs: PlaybackOutputs{
+			Video: PlaybackOutputStream{Codec: "h264"},
+			Audio: PlaybackOutputStream{Codec: "aac"},
+		},
+	}
+	args := hlsPlanArgs(config.Config{HWAccel: "qsv"}, "/media/movie.mkv", "/tmp/seg_%05d.m4s", "/tmp/index.m3u8", plan)
+	if containsPair(args, "-hwaccel", "qsv") {
+		t.Fatalf("args = %v, want software decode (no -hwaccel qsv)", args)
+	}
+	if containsPair(args, "-vf", "vpp_qsv=format=nv12") {
+		t.Fatalf("args = %v, want CPU format conversion, not vpp_qsv", args)
+	}
+	if !containsPair(args, "-vf", "format=nv12") || !containsPair(args, "-c:v", "h264_qsv") {
+		t.Fatalf("args = %v, want format=nv12 + h264_qsv", args)
 	}
 }
 

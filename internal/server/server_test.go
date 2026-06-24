@@ -31,7 +31,7 @@ func TestTranscodeSeekArgsUsesAccurateOutputSeekNearStart(t *testing.T) {
 func TestHLSArgsPlaceSeekAroundInputAndMapRequestedTracks(t *testing.T) {
 	audio := 4
 	subtitle := 7
-	args := hlsArgs(config.Config{}, "/media/movie.mkv", "/tmp/seg_%05d.m4s", "/tmp/index.m3u8", 5000, 120.5, &audio, &subtitle)
+	args := hlsArgs(config.Config{}, "/media/movie.mkv", "/tmp/seg_%05d.m4s", "/tmp/index.m3u8", 5000, 120.5, &audio, &subtitle, "h264")
 	inputIndex := indexOf(args, "-i")
 	if inputIndex < 0 {
 		t.Fatalf("missing -i in args: %v", args)

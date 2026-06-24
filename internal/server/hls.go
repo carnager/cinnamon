@@ -118,7 +118,7 @@ func (a *App) transcode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "media unavailable", http.StatusNotFound)
 		return
 	}
-	args := transcodeArgs(a.cfg, path, bandwidth, start, audio, subtitle)
+	args := transcodeArgs(a.cfg, path, bandwidth, start, audio, subtitle, item.VideoCodec)
 	w.Header().Set("Content-Type", "video/mp4")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Popcorn-Start", strconv.FormatFloat(start, 'f', 3, 64))
@@ -359,7 +359,7 @@ func (a *App) ensureHLSSession(ctx context.Context, sessionID string, userID int
 	if path == "" {
 		return nil, fmt.Errorf("media unavailable")
 	}
-	args := hlsArgs(a.cfg, path, "", "", bandwidth, start, audio, subtitle)
+	args := hlsArgs(a.cfg, path, "", "", bandwidth, start, audio, subtitle, item.VideoCodec)
 	return a.ensureHLSSessionWithArgs(ctx, sessionID, userID, hlsSessionOwner(sessionID), item.ID, start, bandwidth, args)
 }
 
@@ -552,12 +552,12 @@ func isTextSubtitleCodec(codec string) bool {
 	}
 }
 
-func transcodeArgs(cfg config.Config, input string, bandwidth int, start float64, audio, subtitle *int) []string {
+func transcodeArgs(cfg config.Config, input string, bandwidth int, start float64, audio, subtitle *int, videoCodec string) []string {
 	videoRate, audioRate := transcodeRates(bandwidth)
 	args := []string{"-hide_banner", "-loglevel", "warning"}
 	inputSeek, outputSeek := transcodeSeekArgs(start)
 	args = append(args, inputSeek...)
-	args = append(args, hwInputArgs(cfg.HWAccel)...)
+	args = append(args, hwInputArgs(cfg.HWAccel, videoCodec)...)
 	args = append(args, "-i", input)
 	args = append(args, outputSeek...)
 	args = append(args, "-map", "0:v:0")
@@ -572,7 +572,7 @@ func transcodeArgs(cfg config.Config, input string, bandwidth int, start float64
 		args = append(args, "-sn")
 	}
 	args = append(args, "-dn")
-	args = append(args, hwCodecArgs(cfg.HWAccel, cfg.HWDevice)...)
+	args = append(args, hwCodecArgs(cfg.HWAccel, cfg.HWDevice, videoCodec)...)
 	args = append(args,
 		"-b:v", fmt.Sprintf("%dk", videoRate),
 		"-maxrate", fmt.Sprintf("%dk", videoRate),
@@ -588,12 +588,12 @@ func transcodeArgs(cfg config.Config, input string, bandwidth int, start float64
 	return args
 }
 
-func hlsArgs(cfg config.Config, input, segmentPattern, playlist string, bandwidth int, start float64, audio, subtitle *int) []string {
+func hlsArgs(cfg config.Config, input, segmentPattern, playlist string, bandwidth int, start float64, audio, subtitle *int, videoCodec string) []string {
 	videoRate, audioRate := transcodeRates(bandwidth)
 	args := []string{"-hide_banner", "-loglevel", "warning"}
 	inputSeek, outputSeek := transcodeSeekArgs(start)
 	args = append(args, inputSeek...)
-	args = append(args, hwInputArgs(cfg.HWAccel)...)
+	args = append(args, hwInputArgs(cfg.HWAccel, videoCodec)...)
 	args = append(args, "-i", input)
 	args = append(args, outputSeek...)
 	args = append(args, "-map", "0:v:0")
@@ -608,7 +608,7 @@ func hlsArgs(cfg config.Config, input, segmentPattern, playlist string, bandwidt
 		args = append(args, "-sn")
 	}
 	args = append(args, "-dn")
-	args = append(args, hwCodecArgs(cfg.HWAccel, cfg.HWDevice)...)
+	args = append(args, hwCodecArgs(cfg.HWAccel, cfg.HWDevice, videoCodec)...)
 	args = append(args,
 		"-b:v", fmt.Sprintf("%dk", videoRate),
 		"-maxrate", fmt.Sprintf("%dk", videoRate),
@@ -645,7 +645,7 @@ func hlsPlanArgs(cfg config.Config, input, segmentPattern, playlist string, plan
 	inputSeek, outputSeek := transcodeSeekArgs(start)
 	args = append(args, inputSeek...)
 	if plan.Outputs.Video.Codec != "copy" {
-		args = append(args, hwInputArgs(cfg.HWAccel)...)
+		args = append(args, hwInputArgs(cfg.HWAccel, plan.Item.VideoCodec)...)
 	}
 	args = append(args, "-i", input)
 	args = append(args, outputSeek...)
@@ -667,7 +667,7 @@ func hlsPlanArgs(cfg config.Config, input, segmentPattern, playlist string, plan
 	case "copy":
 		args = append(args, "-c:v", "copy")
 	default:
-		args = append(args, hwCodecArgs(cfg.HWAccel, cfg.HWDevice)...)
+		args = append(args, hwCodecArgs(cfg.HWAccel, cfg.HWDevice, plan.Item.VideoCodec)...)
 		args = append(args,
 			"-b:v", fmt.Sprintf("%dk", videoRate),
 			"-maxrate", fmt.Sprintf("%dk", videoRate),
@@ -899,14 +899,34 @@ func probeStreams(ctx context.Context, ffprobe, path string) ([]streamInfo, erro
 	return outStreams, nil
 }
 
-func hwInputArgs(mode string) []string {
+// qsvCanDecode reports whether Intel Quick Sync can hardware-decode the given
+// source video codec. Codecs outside this set — notably MPEG-4 ASP (DivX/Xvid),
+// WMV and other legacy formats — either fail QSV decode or emit broken
+// timestamps (a flood of "non monotonically increasing dts"), so the transcoder
+// never produces output. Those must be decoded in software while still encoding
+// on the GPU.
+func qsvCanDecode(videoCodec string) bool {
+	switch normalizeCodec(videoCodec) {
+	case "h264", "hevc", "mpeg2video", "vc1", "vp8", "vp9", "av1", "mjpeg":
+		return true
+	default:
+		return false
+	}
+}
+
+func hwInputArgs(mode, videoCodec string) []string {
 	switch strings.ToLower(mode) {
 	case "none", "":
 		return nil
 	case "vaapi":
 		return nil
 	case "qsv":
-		return []string{"-hwaccel", "qsv", "-hwaccel_output_format", "qsv"}
+		// Only force QSV hardware decode for codecs it can actually decode;
+		// otherwise fall back to software decode (the encoder stays on the GPU).
+		if qsvCanDecode(videoCodec) {
+			return []string{"-hwaccel", "qsv", "-hwaccel_output_format", "qsv"}
+		}
+		return nil
 	case "cuda", "nvenc", "auto":
 		return []string{"-hwaccel", "auto"}
 	default:
@@ -914,7 +934,7 @@ func hwInputArgs(mode string) []string {
 	}
 }
 
-func hwCodecArgs(mode, device string) []string {
+func hwCodecArgs(mode, device, videoCodec string) []string {
 	switch strings.ToLower(mode) {
 	case "nvenc", "cuda":
 		return []string{"-c:v", "h264_nvenc", "-preset", "p4"}
@@ -923,7 +943,12 @@ func hwCodecArgs(mode, device string) []string {
 		// GPU; h264_qsv rejects 10-bit input outright. forced_idr makes the encoder
 		// honor force_key_frames as IDR frames — without it segments grow to the
 		// encoder's default GOP (~10s) instead of the requested hls_time.
-		return []string{"-vf", "vpp_qsv=format=nv12", "-c:v", "h264_qsv", "-preset", "veryfast", "-forced_idr", "1"}
+		if qsvCanDecode(videoCodec) {
+			return []string{"-vf", "vpp_qsv=format=nv12", "-c:v", "h264_qsv", "-preset", "veryfast", "-forced_idr", "1"}
+		}
+		// Software-decoded source: frames are in system memory, so convert to NV12
+		// on the CPU and let h264_qsv upload them (vpp_qsv requires QSV frames).
+		return []string{"-vf", "format=nv12", "-c:v", "h264_qsv", "-preset", "veryfast", "-forced_idr", "1"}
 	case "vaapi":
 		args := []string{}
 		if device != "" {

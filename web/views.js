@@ -921,10 +921,11 @@ async function openDetail(item, skipHistory, parent = {}) {
   const frag = document.createDocumentFragment();
   const isEpisode = item.kind === "episode";
   // Resolve the breadcrumb from the item's own library/show, not the globally
-  // active library — otherwise opening a TV episode from the home Continue row
-  // (while the Movies library is active) labels the crumb "Movies".
+  // active library — otherwise opening an item from the home shelves (where the
+  // active library may be anything) mislabels the crumb, e.g. a movie reading
+  // "TV Shows" or an episode reading "Movies".
   const itemLibraryId = d.libraryId || item.libraryId;
-  const library = (isEpisode && libraryById(itemLibraryId)) || activeLibrary();
+  const library = libraryById(itemLibraryId) || activeLibrary();
 
   const crumbs = [{ label: library?.name || "Library", action: () => goToLibrary(library?.id).catch(console.error) }];
   if (isEpisode) {

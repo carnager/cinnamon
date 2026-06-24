@@ -25,18 +25,63 @@ func (a *App) itemSimilar(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) similarItems(ctx context.Context, item media.Item) []media.Item {
-	out := []media.Item{}
 	if item.Kind != "movie" || !a.tmdbConfigured() {
-		return out
+		return []media.Item{}
 	}
 	tmdbID := strings.TrimSpace(item.TMDbID)
 	if tmdbID == "" {
 		tmdbID = a.tmdbMovieIDFromIMDb(ctx, item.IMDbID)
 	}
 	if tmdbID == "" {
-		return out
+		return []media.Item{}
 	}
-	ranked := a.fetchTMDbSimilarMovieIDs(ctx, tmdbID)
+	// Prefer TMDb's curated /recommendations list — that is what the TMDb movie
+	// page actually shows. Only fall back to the looser, genre-based /similar
+	// list when none of the recommendations are in the library, otherwise the
+	// row gets padded with unrelated same-genre blockbusters (e.g. Harry Potter
+	// showing up under a Ghibli film).
+	out := a.libraryItemsForTMDbMovieIDs(ctx, item.ID, a.fetchTMDbMovieList(ctx, "/3/movie/"+tmdbID+"/recommendations"))
+	if len(out) == 0 {
+		out = a.libraryItemsForTMDbMovieIDs(ctx, item.ID, a.fetchTMDbMovieList(ctx, "/3/movie/"+tmdbID+"/similar"))
+	}
+	return out
+}
+
+// fetchTMDbMovieList returns the de-duplicated TMDb movie ids from a list
+// endpoint (recommendations or similar), kept in ranked order. It walks several
+// pages because owned titles can sit past the first page of 20 results.
+func (a *App) fetchTMDbMovieList(ctx context.Context, path string) []string {
+	const maxPages = 5
+	var ids []string
+	seen := map[int]bool{}
+	for page := 1; page <= maxPages; page++ {
+		var res struct {
+			Page       int `json:"page"`
+			TotalPages int `json:"total_pages"`
+			Results    []struct {
+				ID int `json:"id"`
+			} `json:"results"`
+		}
+		if err := a.tmdbGet(ctx, path, url.Values{"page": {strconv.Itoa(page)}}, &res); err != nil {
+			break
+		}
+		for _, item := range res.Results {
+			if item.ID > 0 && !seen[item.ID] {
+				seen[item.ID] = true
+				ids = append(ids, strconv.Itoa(item.ID))
+			}
+		}
+		if len(res.Results) == 0 || page >= res.TotalPages {
+			break
+		}
+	}
+	return ids
+}
+
+// libraryItemsForTMDbMovieIDs intersects ranked TMDb ids with library movies,
+// preserving rank order and excluding the source item. Capped at 24.
+func (a *App) libraryItemsForTMDbMovieIDs(ctx context.Context, excludeID int64, ranked []string) []media.Item {
+	out := []media.Item{}
 	if len(ranked) == 0 {
 		return out
 	}
@@ -50,7 +95,7 @@ func (a *App) similarItems(ctx context.Context, item media.Item) []media.Item {
 			byTMDb[id] = it
 		}
 	}
-	seen := map[int64]bool{item.ID: true}
+	seen := map[int64]bool{excludeID: true}
 	for _, id := range ranked {
 		it, ok := byTMDb[id]
 		if !ok || seen[it.ID] {
@@ -63,33 +108,6 @@ func (a *App) similarItems(ctx context.Context, item media.Item) []media.Item {
 		}
 	}
 	return out
-}
-
-// fetchTMDbSimilarMovieIDs returns TMDb movie ids related to tmdbID, preferring
-// the curated /recommendations list and topping up with /similar, de-duplicated
-// and kept in ranked order.
-func (a *App) fetchTMDbSimilarMovieIDs(ctx context.Context, tmdbID string) []string {
-	var ids []string
-	seen := map[int]bool{}
-	collect := func(path string) {
-		var res struct {
-			Results []struct {
-				ID int `json:"id"`
-			} `json:"results"`
-		}
-		if err := a.tmdbGet(ctx, path, url.Values{"page": {"1"}}, &res); err != nil {
-			return
-		}
-		for _, item := range res.Results {
-			if item.ID > 0 && !seen[item.ID] {
-				seen[item.ID] = true
-				ids = append(ids, strconv.Itoa(item.ID))
-			}
-		}
-	}
-	collect("/3/movie/" + tmdbID + "/recommendations")
-	collect("/3/movie/" + tmdbID + "/similar")
-	return ids
 }
 
 // tmdbMovieIDFromIMDb resolves a TMDb movie id from an IMDb id for the rare

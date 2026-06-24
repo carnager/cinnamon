@@ -123,6 +123,11 @@ fun PlayerScreen(
         onPlayNext(next)
     }
 
+    // Matches the render condition for the Up Next overlay (see the Box below).
+    // The OSD key bridge and focus handling use this to yield to the card.
+    fun upNextCardVisible(): Boolean =
+        nextEpisode != null && upNextSecondsLeft != null && !upNextDismissed && !advancingToNext
+
     LaunchedEffect(item.id, session) {
         val active = session ?: return@LaunchedEffect
         runCatching { Api(active).streams(item.id) }
@@ -667,6 +672,12 @@ fun PlayerScreen(
                     logClient("player-osd-back-up", event)
                     true
                 }
+                upNextCardVisible() -> {
+                    // The Up Next card owns the screen during its countdown. Don't
+                    // consume D-pad/Enter as playback controls; let them fall through
+                    // to the Compose overlay so its buttons can be focused and pressed.
+                    false
+                }
                 isHiddenSeekKey(event.keyCode) && !playerView.isControllerFullyVisible && playerView.findViewWithTag<View>(NativeTrackMenuTag) == null -> {
                     if (event.action == AndroidKeyEvent.ACTION_UP) {
                         pressedSeekKeys.remove(event.keyCode)
@@ -1086,6 +1097,23 @@ fun PlayerScreen(
         playerView.showController()
         focusPlayerControl()
         scheduleControllerAutoHide()
+    }
+
+    // The embedded PlayerView holds Android View focus during playback. While the
+    // Up Next card is visible, block the player from holding/reclaiming focus and
+    // release it so the Compose overlay's buttons can take focus from the D-pad.
+    val upNextVisible = nextEpisode != null && upNextSecondsLeft != null && !upNextDismissed && !advancingToNext
+    LaunchedEffect(upNextVisible) {
+        if (upNextVisible) {
+            playerView.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+            playerView.isFocusable = false
+            playerView.clearFocus()
+            delay(120)
+            runCatching { upNextFocus.requestFocus() }
+        } else {
+            playerView.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+            playerView.isFocusable = true
+        }
     }
 
     Box(

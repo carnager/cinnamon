@@ -1,6 +1,7 @@
 package dev.popcorn.companion
 
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Bundle
@@ -120,6 +121,7 @@ import coil.compose.AsyncImage
 import com.google.zxing.client.android.Intents
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -128,6 +130,7 @@ import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.session.MediaSession
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
@@ -335,6 +338,11 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
             .setAllowCrossProtocolRedirects(true)
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
+            // Keep streaming with the screen off (CPU + Wi-Fi stay awake), pause
+            // when headphones are unplugged, and respect audio focus.
+            .setWakeMode(C.WAKE_MODE_NETWORK)
+            .setHandleAudioBecomingNoisy(true)
+            .setAudioAttributes(AudioAttributes.DEFAULT, /* handleAudioFocus= */ true)
             .build()
     }
     val movieLib = libraries.firstOrNull { it.type == "movies" }
@@ -464,6 +472,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     fun stopPhonePlayback() {
         savePhoneProgress(final = false)
         localPlayer.stop()
+        context.stopService(Intent(context, PlaybackService::class.java))
         phoneHlsSession?.let { sessionId ->
             scope.launch { runCatching { api.stopHls(sessionId) } }
         }
@@ -522,6 +531,10 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         localPlayer.prepare()
         if (!plan.usesHls && target > 0) localPlayer.seekTo(target)
         localPlayer.playWhenReady = true
+        // Promote to a media foreground service so playback keeps running with the
+        // screen off / app backgrounded. Safe here: playback is user-initiated, so
+        // the app is in the foreground.
+        runCatching { context.startService(Intent(context, PlaybackService::class.java)) }
     }
 
     fun loadPhonePlayback(item: PopItem, audioIndex: Int?, subtitleIndex: Int?, bandwidthKbps: Int?, startMs: Long, forceMode: String = "auto") {
@@ -577,7 +590,16 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
             }
         }
         localPlayer.addListener(listener)
+        // Publish the player as a MediaSession. The media foreground service is
+        // started only while something is actually playing (see applyPhonePlan /
+        // stopPhonePlayback), so playback survives screen-off / app-switch without
+        // keeping the process (and its polling) alive when idle.
+        val mediaSession = MediaSession.Builder(context, localPlayer).build()
+        PlaybackHolder.session = mediaSession
         onDispose {
+            context.stopService(Intent(context, PlaybackService::class.java))
+            PlaybackHolder.session = null
+            mediaSession.release()
             localPlayer.removeListener(listener)
             localPlayer.release()
         }

@@ -140,6 +140,60 @@ function renderGrid(items) {
   return grid;
 }
 
+/* ── Home hero (static featured) ── */
+function homeHero(item) {
+  const isShow = !item.kind && (item.episodeCount != null || item.seasonCount != null);
+  const hero = el("section", "home-hero");
+
+  const bg = el("div", "home-hero-bg");
+  const backdropSrc = isShow ? showBackdropSource(item) : item;
+  if (backdropSrc.backdropItemId || backdropSrc.backdropPath) {
+    const img = document.createElement("img");
+    img.src = imageURL(backdropSrc, "backdrop");
+    bg.append(img);
+  }
+  hero.append(bg);
+
+  const content = el("div", "home-hero-content");
+  content.append(el("div", "home-hero-kick", item.kind === "episode" ? "Continue watching" : (isShow ? "Featured series" : "Featured")));
+  content.append(el("h1", "home-hero-title", item.kind === "episode" ? (item.showTitle || item.title) : item.title));
+
+  const meta = el("div", "hmeta");
+  const rating = item.rating || (isShow ? showRating(item) : 0);
+  if (rating) meta.append(el("span", "hstar", `★ ${Number(rating).toFixed(1)}`));
+  const parts = [];
+  if (item.kind === "episode") {
+    if (item.seasonNumber || item.episodeNumber) parts.push(`S${String(item.seasonNumber || 0).padStart(2, "0")}E${String(item.episodeNumber || 0).padStart(2, "0")}`);
+  } else if (item.year) parts.push(String(item.year));
+  if (isShow) parts.push(showCountText(item));
+  if (item.durationMs) parts.push(fmtDuration(item.durationMs));
+  parts.forEach((p) => { if (meta.childElementCount) meta.append(el("span", "dot-sep")); meta.append(el("span", null, p)); });
+  content.append(meta);
+
+  if (item.overview) content.append(el("p", "home-hero-syn", item.overview));
+
+  const actions = el("div", "home-hero-actions");
+  if (isShow) {
+    const view = el("button", "primary", "View show");
+    view.type = "button";
+    view.addEventListener("click", () => openShow(item).catch(console.error));
+    actions.append(view);
+  } else {
+    const resuming = typeof resumeFraction === "function" && resumeFraction(item) > 0;
+    const playBtn = el("button", "primary", resuming ? "▶ Resume" : "▶ Play");
+    playBtn.type = "button";
+    playBtn.addEventListener("click", () => play(item));
+    const info = el("button", "secondary", "More info");
+    info.type = "button";
+    info.addEventListener("click", () => openDetail(item).catch(console.error));
+    actions.append(playBtn, info);
+  }
+  content.append(actions);
+  hero.append(content);
+  return hero;
+}
+
+
 async function renderUsers(skipHistory, selectedUserId = 0) {
   stopPlayer();
   activeView = "settings";
@@ -874,14 +928,6 @@ async function openDetail(item, skipHistory, parent = {}) {
   crumbs.push({ label: item.kind === "episode" ? (d.episodeTitle || d.title) : d.title });
   frag.append(makeBreadcrumb(crumbs));
 
-  if (d.backdropPath) {
-    const hero = el("div", "detail-hero");
-    const bd = el("div", "detail-backdrop");
-    bd.style.backgroundImage = `url(${imageURL(d, "backdrop")})`;
-    hero.append(bd, el("div", "detail-backdrop-overlay"));
-    frag.append(hero);
-  }
-
   const detail = el("article", "detail");
   const posterCol = el("div", "detail-poster-col");
   const poster = posterBlock(d, d.title, { seen: itemSeen(d), watchlisted: itemWatchlisted(d) });
@@ -965,10 +1011,8 @@ async function openDetail(item, skipHistory, parent = {}) {
   frag.append(detail);
   if (d.actors?.length) frag.append(castShelf(d.actors));
   if (similar && similar.length) {
-    const section = el("section", "cast-shelf similar-shelf");
-    section.append(sectionTitle("More like this", `${similar.length}`));
-    section.append(renderShelfGrid(similar.slice(0, 18)));
-    frag.append(section);
+    frag.append(sectionTitle("More like this", `${similar.length}`));
+    frag.append(renderGrid(similar.slice(0, 24)));
   }
   setView(frag);
 }
@@ -1087,14 +1131,6 @@ async function openShow(show, skipHistory, initialSeason) {
     { label: library?.name || "Library", action: () => loadLibraryPage().catch(console.error) },
     { label: show.title },
   ]));
-
-  if (show.backdropItemId) {
-    const hero = el("div", "detail-hero");
-    const bd = el("div", "detail-backdrop");
-    bd.style.backgroundImage = `url(${imageURL(showBackdropSource(show), "backdrop")})`;
-    hero.append(bd, el("div", "detail-backdrop-overlay"));
-    frag.append(hero);
-  }
 
   const header = el("div", "show-detail");
   const poster = posterBlock(showPosterSource(show), show.title, { seen: showSeen(show), watchlisted: showWatchlisted(show) });

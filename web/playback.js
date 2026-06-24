@@ -12,6 +12,10 @@ function setView(content) {
   view.innerHTML = "";
   if (typeof content === "string") view.innerHTML = content;
   else if (content) view.append(content);
+  // Nav goes translucent only when a full-bleed hero is on screen.
+  if (typeof appShell !== "undefined" && appShell) {
+    appShell.classList.toggle("home-mode", Boolean(view.querySelector(".home-hero")));
+  }
   view.classList.remove("view-fade");
   void view.offsetWidth;
   view.classList.add("view-fade");

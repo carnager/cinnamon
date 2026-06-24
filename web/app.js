@@ -408,26 +408,26 @@ async function setShowWatchlisted(show, watchlisted) {
 
 function renderNav() {
   appShell.classList.toggle("settings-mode", activeView === "settings");
+  appShell.classList.toggle("home-mode", activeView === "home");
   libraryNav.innerHTML = "";
-  const home = document.createElement("button");
-  home.type = "button";
-  home.className = activeView === "home" ? "nav-item active" : "nav-item";
-  home.append(navIcon("home"), el("span", "nav-label", "Home"));
-  home.addEventListener("click", () => {
+
+  const navLink = (label, active, onClick) => {
+    const a = el("button", active ? "nav-link active" : "nav-link", label);
+    a.type = "button";
+    a.addEventListener("click", onClick);
+    return a;
+  };
+
+  libraryNav.append(navLink("Home", activeView === "home", () => {
     search.value = "";
     currentPage = 1;
     activeView = "home";
     renderNav();
     loadHome().catch(console.error);
-  });
-  libraryNav.append(home);
+  }));
 
   for (const library of libraries) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = activeView === "library" && library.id === activeLibraryId ? "nav-item active" : "nav-item";
-    button.append(navIcon(library.type === "tv" ? "tv" : "movies"), el("span", "nav-label", library.name));
-    button.addEventListener("click", () => {
+    libraryNav.append(navLink(library.name, activeView === "library" && library.id === activeLibraryId, () => {
       search.value = "";
       activeView = "library";
       activeLibraryId = library.id;
@@ -440,47 +440,24 @@ function renderNav() {
       currentMinRating = 0;
       renderNav();
       loadLibraryPage().catch(console.error);
-    });
-    libraryNav.append(button);
+    }));
   }
 
-  const searchButton = document.createElement("button");
-  searchButton.type = "button";
-  searchButton.className = activeView === "search" ? "nav-item active" : "nav-item";
-  searchButton.append(navIcon("search"), el("span", "nav-label", "Search"));
-  searchButton.addEventListener("click", () => {
+  libraryNav.append(navLink("Search", activeView === "search", () => {
     activeView = "search";
     renderNav();
     search.focus();
     if (search.value.trim()) renderSearch().catch(console.error);
-  });
-  libraryNav.append(searchButton);
+  }));
 
-  const watchlist = document.createElement("button");
-  watchlist.type = "button";
-  watchlist.className = activeView === "watchlist" ? "nav-item active" : "nav-item";
-  watchlist.append(navIcon("watchlist"), el("span", "nav-label", "Watchlist"));
-  watchlist.addEventListener("click", () => {
+  libraryNav.append(navLink("Watchlist", activeView === "watchlist", () => {
     search.value = "";
     activeView = "watchlist";
     currentPage = 1;
     renderNav();
     renderWatchlist().catch(console.error);
-  });
-  libraryNav.append(watchlist);
+  }));
 
-  const settings = document.createElement("button");
-  settings.type = "button";
-  settings.className = activeView === "settings" ? "nav-item active" : "nav-item";
-  settings.append(navIcon("settings"), el("span", "nav-label", "Settings"));
-  settings.addEventListener("click", () => {
-    search.value = "";
-    activeView = "settings";
-    currentPage = 1;
-    renderNav();
-    renderSettings().catch(console.error);
-  });
-  libraryNav.append(settings);
   renderTopbarControls();
 }
 
@@ -840,9 +817,24 @@ function renderHome(skipHistory) {
   stopPlayer();
 
   const frag = document.createDocumentFragment();
-  frag.append(el("div", "view-header home-header", el("h1", null, "Popcorn"), el("span", null, "Ready to watch")));
+  const featured = pickHeroItem(homeData);
+  if (featured) frag.append(homeHero(featured));
+  else frag.append(el("div", "view-header home-header", el("h1", null, "Home"), el("span", null, "Ready to watch")));
   frag.append(curatedHome(homeData));
   setView(frag);
+}
+
+function pickHeroItem(data) {
+  const pools = [data.continueMovies, data.continueEpisodes, data.recentMovies, pickFeatured(data.movies || [])];
+  for (const pool of pools) {
+    const withArt = (pool || []).find((i) => i && (i.backdropItemId || i.backdropPath) && i.overview);
+    if (withArt) return withArt;
+  }
+  for (const pool of pools) {
+    const withArt = (pool || []).find((i) => i && (i.backdropItemId || i.backdropPath));
+    if (withArt) return withArt;
+  }
+  return null;
 }
 
 async function renderWatchlist(skipHistory) {

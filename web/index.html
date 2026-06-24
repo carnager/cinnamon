@@ -24,21 +24,19 @@
       </form>
     </section>
     <main id="appShell" class="shell hidden">
-      <aside class="app-sidebar">
-        <div class="sidebar-brand">Popcorn</div>
-        <nav id="libraryNav" class="library-nav"></nav>
-      </aside>
-      <header class="topbar">
-        <div id="topbarFilters" class="topbar-left topbar-filters"></div>
-        <div class="topbar-right">
+      <nav class="topnav">
+        <div class="brand"><span class="brand-dot"></span>Popcorn</div>
+        <nav id="libraryNav" class="primary-nav"></nav>
+        <div class="topnav-right">
           <label class="search-field">
             <span>Search</span>
-            <input id="search" type="search" placeholder="Search movies and shows" autocomplete="off">
+            <input id="search" type="search" placeholder="Search your library…" autocomplete="off">
           </label>
           <div id="userPanel" class="user-panel"></div>
         </div>
-      </header>
+      </nav>
       <section class="content">
+        <div id="topbarFilters" class="filter-bar"></div>
         <div id="view" class="view"></div>
       </section>
     </main>

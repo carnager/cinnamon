@@ -67,7 +67,11 @@ data class PopItem(
     val seasonNumber: Int,
     val episodeNumber: Int,
     val episodeTitle: String,
+    val actors: List<Actor> = emptyList(),
 )
+
+data class Actor(val name: String, val role: String, val thumb: String)
+data class SidecarStatus(val trailer: Boolean = false, val theme: Boolean = false)
 
 data class ShowSummary(
     val libraryId: String,

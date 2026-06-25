@@ -17,8 +17,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -38,10 +42,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.content.Intent
+import android.net.Uri
 
 @Composable
 fun DetailPage(
@@ -53,9 +61,12 @@ fun DetailPage(
     onBack: () -> Unit,
     onPlay: (PopItem, Int?, Int?) -> Unit,
     onPlayLocal: (PopItem, Int?, Int?) -> Unit,
+    onOpenSimilar: (PopItem) -> Unit,
 ) {
+    val context = LocalContext.current
     var streams by remember(item.id) { mutableStateOf<List<StreamInfo>>(emptyList()) }
     var ratings by remember(item.id) { mutableStateOf<ExternalRatings?>(null) }
+    var similar by remember(item.id) { mutableStateOf<List<PopItem>>(emptyList()) }
     var selectedAudio by remember(item.id) { mutableStateOf<Int?>(null) }
     var selectedSubtitle by remember(item.id) { mutableStateOf<Int?>(null) }
     var error by remember(item.id) { mutableStateOf("") }
@@ -72,6 +83,9 @@ fun DetailPage(
             .onFailure { error = it.message ?: "Could not load streams" }
         runCatching { api.ratings(item.id) }
             .onSuccess { ratings = it }
+        if (item.kind == "movie") {
+            similar = runCatching { api.similar(item.id) }.getOrDefault(emptyList())
+        }
     }
 
     LazyColumn(contentPadding = PaddingValues(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -90,6 +104,18 @@ fun DetailPage(
                 Text("Play on $targetLabel", fontWeight = FontWeight.Black, fontSize = 16.sp)
             }
         }
+        item {
+            OutlinedButton(
+                onClick = {
+                    val q = Uri.encode(listOf(displayTitle(item), item.year.takeIf { it > 0 }?.toString(), "trailer").filterNotNull().joinToString(" "))
+                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=$q"))) }
+                },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Text("▶  Trailer", color = TextColor, fontWeight = FontWeight.Bold)
+            }
+        }
         if (item.overview.isNotBlank()) {
             item {
                 ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = Surface1), shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(horizontal = 16.dp)) {
@@ -99,6 +125,12 @@ fun DetailPage(
                     }
                 }
             }
+        }
+        if (item.actors.isNotEmpty()) {
+            item { CastStrip(session, item.actors) }
+        }
+        if (similar.isNotEmpty()) {
+            item { SimilarRow(session, similar, onOpenSimilar) }
         }
         if (error.isNotBlank()) {
             item { Text(error, color = ErrorRed, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
@@ -162,6 +194,36 @@ fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, strea
                 Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                     tech.forEach { DetailChip(it, Surface3, TextColor) }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun CastStrip(session: Session, actors: List<Actor>) {
+    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Cast", color = TextColor, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(actors.take(20), key = { it.name }) { actor ->
+                Column(Modifier.width(72.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Box(Modifier.size(64.dp).clip(CircleShape).background(Surface2), contentAlignment = Alignment.Center) {
+                        AuthAsyncImage(session, "${session.server}/api/actors/image?name=${Uri.encode(actor.name)}", contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                    }
+                    Text(actor.name, color = TextColor, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                    if (actor.role.isNotBlank()) Text(actor.role, color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SimilarRow(session: Session, items: List<PopItem>, onOpen: (PopItem) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("More like this", color = TextColor, fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = Modifier.padding(horizontal = 16.dp))
+        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(items, key = { it.id }) { m ->
+                MovieCard(session, m, Modifier.width(120.dp), onClick = { onOpen(m) })
             }
         }
     }

@@ -407,7 +407,24 @@ class Api(private val session: Session) {
 
     private fun parseItems(arr: JSONArray): List<PopItem> = (0 until arr.length()).map {
         val o = arr.getJSONObject(it)
-        PopItem(o.getLong("id"), o.getString("libraryId"), o.optString("kind"), o.optString("title"), o.optInt("year"), o.optLong("durationMs"), o.optLong("posterMtimeUnix"), o.optLong("backdropMtimeUnix"), o.optString("overview"), o.optString("genres"), o.optDouble("rating"), o.optString("imdbId"), o.optString("tmdbId"), o.optString("showTitle"), o.optInt("seasonNumber"), o.optInt("episodeNumber"), o.optString("episodeTitle"))
+        PopItem(o.getLong("id"), o.getString("libraryId"), o.optString("kind"), o.optString("title"), o.optInt("year"), o.optLong("durationMs"), o.optLong("posterMtimeUnix"), o.optLong("backdropMtimeUnix"), o.optString("overview"), o.optString("genres"), o.optDouble("rating"), o.optString("imdbId"), o.optString("tmdbId"), o.optString("showTitle"), o.optInt("seasonNumber"), o.optInt("episodeNumber"), o.optString("episodeTitle"), parseActors(o.optJSONArray("actors")))
+    }
+
+    private fun parseActors(arr: JSONArray?): List<Actor> {
+        if (arr == null) return emptyList()
+        return (0 until arr.length()).map {
+            val a = arr.getJSONObject(it)
+            Actor(a.optString("name"), a.optString("role"), a.optString("thumb"))
+        }
+    }
+
+    suspend fun similar(itemId: Long): List<PopItem> = withContext(Dispatchers.IO) {
+        parseItems(requestArray("/api/items/$itemId/similar"))
+    }
+
+    suspend fun itemSidecars(itemId: Long): SidecarStatus = withContext(Dispatchers.IO) {
+        val o = request("/api/items/$itemId/sidecars")
+        SidecarStatus(trailer = o.optBoolean("trailer"), theme = o.optBoolean("theme"))
     }
 
     private fun jsonToPlaybackPlan(o: JSONObject): PlaybackPlan {

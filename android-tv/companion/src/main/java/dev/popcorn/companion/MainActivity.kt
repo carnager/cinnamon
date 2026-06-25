@@ -1058,6 +1058,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 onBack = ::goBack,
                                 onPlay = { item, audio, subtitle -> play(item.id, audio, subtitle) },
                                 onPlayLocal = ::playLocally,
+                                onOpenSimilar = ::openDetail,
                             )
                             Page.Search -> SearchPage(
                                 session,

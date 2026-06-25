@@ -102,6 +102,9 @@ fun BottomNavigation(page: Page, onHome: () -> Unit, onMovies: () -> Unit, onSho
 @Composable
 fun HomePage(
     session: Session,
+    continueMovies: List<PopItem>,
+    continueEpisodes: List<PopItem>,
+    resume: Map<Long, Float>,
     recentMovies: List<PopItem>,
     recentShows: List<ShowSummary>,
     topMovies: List<PopItem>,
@@ -112,8 +115,11 @@ fun HomePage(
     watchlistShows: Set<String>,
     onMovie: (PopItem) -> Unit,
     onShow: (ShowSummary) -> Unit,
+    onEpisode: (PopItem) -> Unit,
 ) {
     LazyColumn(contentPadding = PaddingValues(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+        if (continueMovies.isNotEmpty()) item { ContinueShelf("Continue Watching", session, continueMovies, resume, onMovie) }
+        if (continueEpisodes.isNotEmpty()) item { ContinueShelf("Continue Watching · TV", session, continueEpisodes, resume, onEpisode) }
         item { MovieShelf("Recently Added Movies", session, recentMovies, completedItems, watchlistItems, onMovie) }
         item { ShowShelf("Recently Added TV", session, recentShows, completedShows, watchlistShows, onShow) }
         if (topMovies.isNotEmpty()) item { MovieShelf("Top Rated Movies", session, topMovies, completedItems, watchlistItems, onMovie) }
@@ -369,11 +375,47 @@ fun ShowCard(session: Session, show: ShowSummary, modifier: Modifier = Modifier,
 }
 
 @Composable
-fun PosterImage(session: Session, url: String, modifier: Modifier, watched: Boolean = false, watchlisted: Boolean = false) {
+fun PosterImage(session: Session, url: String, modifier: Modifier, watched: Boolean = false, watchlisted: Boolean = false, progress: Float = 0f) {
     Box(modifier.aspectRatio(2f / 3f).clip(RoundedCornerShape(6.dp)).background(Surface2), contentAlignment = Alignment.Center) {
         if (url.isNotBlank()) AuthAsyncImage(session, url, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) else Text("?", color = Muted)
         if (watched) MarkerBadge("Seen", Accent, Modifier.align(Alignment.TopStart))
         if (watchlisted) MarkerBadge("List", Color(0xFFFFD166), Modifier.align(Alignment.TopEnd))
+        if (progress in 0.01f..0.999f) {
+            Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Color.Black.copy(alpha = .45f))) {
+                Box(Modifier.fillMaxWidth(progress).height(3.dp).background(Accent))
+            }
+        }
+    }
+}
+
+@Composable
+fun ContinueShelf(title: String, session: Session, items: List<PopItem>, resume: Map<Long, Float>, onClick: (PopItem) -> Unit) {
+    if (items.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(title, color = TextColor, fontSize = 19.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 12.dp))
+        LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            items(items, key = { it.id }) { item ->
+                ContinueCard(session, item, resume[item.id] ?: 0f, Modifier.width(128.dp)) { onClick(item) }
+            }
+        }
+    }
+}
+
+@Composable
+fun ContinueCard(session: Session, item: PopItem, progress: Float, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val isEpisode = item.kind == "episode"
+    Column(modifier.clip(RoundedCornerShape(8.dp)).background(Surface1).clickable(onClick = onClick).padding(6.dp)) {
+        PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix), Modifier.fillMaxWidth(), progress = progress)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            if (isEpisode) item.showTitle.ifBlank { item.title } else item.title,
+            color = TextColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            if (isEpisode) "S%02dE%02d".format(item.seasonNumber, item.episodeNumber)
+            else listOf(item.year.takeIf { it > 0 }?.toString(), fmtDuration(item.durationMs)).filterNotNull().joinToString(" · "),
+            color = Muted, fontSize = 11.sp, maxLines = 1,
+        )
     }
 }
 

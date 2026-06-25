@@ -262,6 +262,25 @@ class Api(private val session: Session) {
         )
     }
 
+    // Aggregated home payload: the continue-watching rows plus a resume map
+    // (itemId -> watched fraction) derived from in-progress playback.
+    suspend fun home(): HomeContinue = withContext(Dispatchers.IO) {
+        val o = request("/api/home")
+        val movies = parseItems(o.optJSONArray("continueMovies") ?: JSONArray())
+        val episodes = parseItems(o.optJSONArray("continueEpisodes") ?: JSONArray())
+        val resume = mutableMapOf<Long, Float>()
+        val prog = o.optJSONArray("progress") ?: JSONArray()
+        for (i in 0 until prog.length()) {
+            val p = prog.getJSONObject(i)
+            val dur = p.optLong("durationMs")
+            val pos = p.optLong("positionMs")
+            if (!p.optBoolean("completed") && dur > 0 && pos > 0) {
+                resume[p.optLong("itemId")] = (pos.toFloat() / dur.toFloat()).coerceIn(0f, 1f)
+            }
+        }
+        HomeContinue(movies, episodes, resume)
+    }
+
     suspend fun progress(itemId: Long): PlaybackProgress = withContext(Dispatchers.IO) {
         val o = request("/api/items/$itemId/progress")
         PlaybackProgress(

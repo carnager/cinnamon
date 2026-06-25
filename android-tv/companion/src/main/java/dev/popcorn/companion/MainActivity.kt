@@ -299,6 +299,9 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     var state by remember { mutableStateOf(PlayerState(0, "", "idle", 0, 0)) }
     var movies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var shows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
+    var continueMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
+    var continueEpisodes by remember { mutableStateOf<List<PopItem>>(emptyList()) }
+    var resumeProgress by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
     var recentMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var recentShows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
     var topMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
@@ -781,6 +784,11 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                 CompanionCache.writeShows(context, session, "top_shows_${tl.id}", topShows)
             }
         }.onFailure { reportError(it, "Load failed") }
+        runCatching { api.home() }.onSuccess {
+            continueMovies = it.movies
+            continueEpisodes = it.episodes
+            resumeProgress = it.resume
+        }
         if (initial) loading = false
     }
 
@@ -990,6 +998,9 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                         when (current) {
                             Page.Home -> HomePage(
                                 session,
+                                continueMovies,
+                                continueEpisodes,
+                                resumeProgress,
                                 recentMovies,
                                 recentShows,
                                 topMovies,
@@ -1000,6 +1011,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 watchlistShows,
                                 onMovie = ::openDetail,
                                 onShow = ::openShow,
+                                onEpisode = ::openDetail,
                             )
                             Page.Movies -> MediaGrid(
                                 title = "Movies",

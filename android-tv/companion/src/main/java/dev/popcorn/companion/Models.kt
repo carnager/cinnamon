@@ -7,6 +7,7 @@ data class PlayerState(val itemId: Long, val title: String, val state: String, v
 data class PlaybackProgress(val itemId: Long, val positionMs: Long, val durationMs: Long, val completed: Boolean)
 data class ShowProgress(val libraryId: String, val showTitle: String, val episodeCount: Int, val completedCount: Int, val completed: Boolean)
 data class Watchlist(val items: List<PopItem>, val shows: List<ShowSummary>)
+data class HomeContinue(val movies: List<PopItem>, val episodes: List<PopItem>, val resume: Map<Long, Float>)
 data class AppUpdateInfo(
     val configured: Boolean,
     val available: Boolean,

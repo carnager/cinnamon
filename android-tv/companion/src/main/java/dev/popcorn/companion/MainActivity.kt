@@ -3,6 +3,7 @@ package dev.popcorn.companion
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.util.Log
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
@@ -783,18 +784,30 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         if (initial) loading = false
     }
 
+    // Bumped on every foreground return to force the polling loops to restart.
+    // The cached-app freezer can freeze a coroutine mid-delay() while the app is
+    // backgrounded; the scheduled wake-up is then lost and the while(true) loop
+    // never resumes — which is why the connection stayed dead until a manual
+    // restart. Re-keying the loops on this counter gives them a fresh start.
+    var resumeTick by remember { mutableStateOf(0) }
+
     LaunchedEffect(session) { loadContent(initial = true) }
 
-    // Refresh content every time the app returns to the foreground, so media
-    // added on the server shows up without a restart. The first ON_START is the
-    // cold start already handled by the initial load above, so skip it.
+    // On every foreground return: restart the polling loops (resumeTick) and
+    // refresh content. The first ON_START is the cold start already handled by
+    // the initial load above, so skip it.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, session) {
         var first = true
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_START) {
-                if (first) first = false
-                else scope.launch { loadContent(initial = false) }
+                if (first) {
+                    first = false
+                } else {
+                    Log.i("PopcornCompanion", "foreground return: restarting polls + refresh")
+                    resumeTick++
+                    scope.launch { loadContent(initial = false) }
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -817,17 +830,21 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         }
     }
 
-    LaunchedEffect(selectedDevice?.id) {
+    LaunchedEffect(selectedDevice?.id, resumeTick) {
         while (true) {
             val id = selectedDevice?.id
             // A successful poll means the server is reachable again, so clear any
             // stale connection-error banner instead of leaving it up until restart.
-            if (id != null) runCatching { state = api.deviceState(id) }.onSuccess { if (error.isNotBlank()) onError("") }
+            if (id != null) {
+                runCatching { state = api.deviceState(id) }
+                    .onSuccess { if (error.isNotBlank()) onError("") }
+                    .onFailure { Log.w("PopcornCompanion", "deviceState poll failed: ${it.message}") }
+            }
             delay(1000)
         }
     }
 
-    LaunchedEffect(session, playbackTarget) {
+    LaunchedEffect(session, playbackTarget, resumeTick) {
         while (true) {
             runCatching { refreshDevices() }.onFailure { reportError(it, "Device refresh failed") }
             delay(5000)

@@ -9,10 +9,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -70,25 +74,8 @@ fun DetailPage(
             .onSuccess { ratings = it }
     }
 
-    LazyColumn(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item {
-            ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = Surface1), shape = RoundedCornerShape(18.dp)) {
-                Row(Modifier.padding(14.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.Top) {
-                    PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix), Modifier.width(132.dp))
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(displayTitle(item), color = TextColor, fontSize = 25.sp, lineHeight = 29.sp, fontWeight = FontWeight.Black, maxLines = 4, overflow = TextOverflow.Ellipsis)
-                        val meta = listOf(
-                            item.year.takeIf { it > 0 }?.toString(),
-                            fmtDuration(item.durationMs),
-                            fmtEndsAround(item.durationMs),
-                            if (item.kind == "episode") "S%02d E%02d".format(item.seasonNumber, item.episodeNumber) else null,
-                        ).filterNotNull().filter { it.isNotBlank() }.joinToString(" \u00b7 ")
-                        if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                        RatingBadges(item, ratings)
-                    }
-                }
-            }
-        }
+    LazyColumn(contentPadding = PaddingValues(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        item { DetailHero(session, item, ratings, streams) }
         item {
             val targetLabel = if (playbackTarget == PlaybackTarget.Phone) "Phone" else cleanDeviceName(selectedDeviceName ?: "") ?: "TV"
             Button(
@@ -97,7 +84,7 @@ fun DetailPage(
                     else onPlay(item, selectedAudio, selectedSubtitle)
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black),
-                modifier = Modifier.fillMaxWidth().height(52.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(52.dp),
                 shape = RoundedCornerShape(14.dp),
             ) {
                 Text("Play on $targetLabel", fontWeight = FontWeight.Black, fontSize = 16.sp)
@@ -105,7 +92,7 @@ fun DetailPage(
         }
         if (item.overview.isNotBlank()) {
             item {
-                ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = Surface1), shape = RoundedCornerShape(16.dp)) {
+                ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = Surface1), shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(horizontal = 16.dp)) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Overview", color = TextColor, fontWeight = FontWeight.Bold, fontSize = 15.sp)
                         Text(item.overview, color = TextColor, fontSize = 14.sp, lineHeight = 20.sp)
@@ -114,10 +101,10 @@ fun DetailPage(
             }
         }
         if (error.isNotBlank()) {
-            item { Text(error, color = ErrorRed, fontSize = 12.sp) }
+            item { Text(error, color = ErrorRed, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
         }
         item {
-            ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = Surface1), shape = RoundedCornerShape(16.dp)) {
+            ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = Surface1), shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(horizontal = 16.dp)) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     TrackSection("Audio", audioTracks, selectedAudio, emptyLabel = "Default", onSelect = { selectedAudio = it })
                     TrackSection("Subtitles", subtitleTracks, selectedSubtitle, emptyLabel = "Off", onSelect = { selectedSubtitle = it })
@@ -125,6 +112,75 @@ fun DetailPage(
             }
         }
     }
+}
+
+// Full-bleed backdrop hero with a gradient scrim fading into the page, with the
+// poster, title, meta, genres, ratings and tech chips layered on top.
+@Composable
+fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, streams: List<StreamInfo>) {
+    val backdropUrl = if (item.backdropMtimeUnix > 0) imageUrl(session, item.id, item.backdropMtimeUnix, "backdrop") else ""
+    val genres = item.genres.split(Regex("[,;/]")).map { it.trim() }.filter { it.isNotBlank() }.take(3)
+    Column {
+        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
+            if (backdropUrl.isNotBlank()) {
+                AuthAsyncImage(session, backdropUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            } else {
+                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Surface2, Bg))))
+            }
+            Box(
+                Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(0f to Color.Transparent, 0.45f to Bg.copy(alpha = 0.25f), 1f to Bg),
+                ),
+            )
+            Row(
+                Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix), Modifier.width(96.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(displayTitle(item), color = TextColor, fontSize = 23.sp, lineHeight = 27.sp, fontWeight = FontWeight.Black, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    val meta = listOf(
+                        item.year.takeIf { it > 0 }?.toString(),
+                        fmtDuration(item.durationMs),
+                        fmtEndsAround(item.durationMs),
+                        if (item.kind == "episode") "S%02d E%02d".format(item.seasonNumber, item.episodeNumber) else null,
+                    ).filterNotNull().filter { it.isNotBlank() }.joinToString(" \u00b7 ")
+                    if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+        Column(Modifier.padding(horizontal = 16.dp).padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (genres.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                    genres.forEach { DetailChip(it.uppercase(), Surface2, Muted) }
+                }
+            }
+            RatingBadges(item, ratings)
+            val tech = techChips(streams)
+            if (tech.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                    tech.forEach { DetailChip(it, Surface3, TextColor) }
+                }
+            }
+        }
+    }
+}
+
+private fun techChips(streams: List<StreamInfo>): List<String> = buildList {
+    streams.firstOrNull { it.type == "video" }?.codec?.takeIf { it.isNotBlank() }?.let { add(it.uppercase()) }
+    streams.firstOrNull { it.type == "audio" }?.codec?.takeIf { it.isNotBlank() }?.let { add(it.uppercase()) }
+}
+
+@Composable
+fun DetailChip(label: String, bg: Color, fg: Color) {
+    Text(
+        label,
+        color = fg,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.clip(RoundedCornerShape(999.dp)).background(bg).padding(horizontal = 10.dp, vertical = 5.dp),
+    )
 }
 
 @Composable

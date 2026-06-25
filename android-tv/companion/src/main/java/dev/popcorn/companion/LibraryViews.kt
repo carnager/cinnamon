@@ -357,29 +357,44 @@ fun ShowShelf(title: String, session: Session, shows: List<ShowSummary>, complet
 @Composable
 fun MovieCard(session: Session, item: PopItem, modifier: Modifier = Modifier, watched: Boolean = false, watchlisted: Boolean = false, onClick: () -> Unit) {
     Column(modifier.clip(RoundedCornerShape(8.dp)).background(Surface1).clickable(onClick = onClick).padding(6.dp)) {
-        PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix), Modifier.fillMaxWidth(), watched = watched, watchlisted = watchlisted)
+        PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix), Modifier.fillMaxWidth(), watched = watched, watchlisted = watchlisted, rating = item.rating)
         Spacer(Modifier.height(6.dp))
         Text(item.title, color = TextColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(listOf(item.year.takeIf { it > 0 }?.toString(), fmtDuration(item.durationMs)).filterNotNull().joinToString(" \u00b7 "), color = Muted, fontSize = 11.sp, maxLines = 1)
+        firstGenre(item.genres)?.let { Text(it, color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis) }
     }
 }
 
 @Composable
 fun ShowCard(session: Session, show: ShowSummary, modifier: Modifier = Modifier, watched: Boolean = false, watchlisted: Boolean = false, onClick: () -> Unit) {
     Column(modifier.clip(RoundedCornerShape(8.dp)).background(Surface1).clickable(onClick = onClick).padding(6.dp)) {
-        PosterImage(session, imageUrl(session, show.posterItemId, show.posterMtimeUnix), Modifier.fillMaxWidth(), watched = watched, watchlisted = watchlisted)
+        PosterImage(session, imageUrl(session, show.posterItemId, show.posterMtimeUnix), Modifier.fillMaxWidth(), watched = watched, watchlisted = watchlisted, rating = show.rating)
         Spacer(Modifier.height(6.dp))
         Text(show.title, color = TextColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text("${show.seasonCount} seasons", color = Muted, fontSize = 11.sp, maxLines = 1)
+        firstGenre(show.genres)?.let { Text(it, color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis) }
     }
 }
 
+fun firstGenre(genres: String): String? = genres.split(Regex("[,;/]")).map { it.trim() }.firstOrNull { it.isNotBlank() }?.uppercase()
+
 @Composable
-fun PosterImage(session: Session, url: String, modifier: Modifier, watched: Boolean = false, watchlisted: Boolean = false, progress: Float = 0f) {
+fun PosterImage(session: Session, url: String, modifier: Modifier, watched: Boolean = false, watchlisted: Boolean = false, progress: Float = 0f, rating: Double = 0.0) {
     Box(modifier.aspectRatio(2f / 3f).clip(RoundedCornerShape(6.dp)).background(Surface2), contentAlignment = Alignment.Center) {
         if (url.isNotBlank()) AuthAsyncImage(session, url, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) else Text("?", color = Muted)
         if (watched) MarkerBadge("Seen", Accent, Modifier.align(Alignment.TopStart))
         if (watchlisted) MarkerBadge("List", Color(0xFFFFD166), Modifier.align(Alignment.TopEnd))
+        if (rating > 0 && !watched) {
+            Text(
+                "★ %.1f".format(rating),
+                color = Color.Black,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Black,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(5.dp)
+                    .clip(RoundedCornerShape(4.dp)).background(Color(0xFFE5A00D).copy(alpha = .94f))
+                    .padding(horizontal = 5.dp, vertical = 2.dp),
+            )
+        }
         if (progress in 0.01f..0.999f) {
             Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Color.Black.copy(alpha = .45f))) {
                 Box(Modifier.fillMaxWidth(progress).height(3.dp).background(Accent))

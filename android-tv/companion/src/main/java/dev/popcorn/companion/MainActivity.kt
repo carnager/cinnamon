@@ -132,6 +132,9 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.PlayerView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -733,20 +736,25 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         }
     }
 
-    LaunchedEffect(session) {
-        loading = true
-        val cachedLibraries = CompanionCache.readLibraries(context, session)
-        if (cachedLibraries.isNotEmpty()) {
-            libraries = cachedLibraries
-            val cachedMovieLib = cachedLibraries.firstOrNull { it.type == "movies" }
-            val cachedTvLib = cachedLibraries.firstOrNull { it.type == "tv" }
-            if (cachedMovieLib != null) {
-                recentMovies = CompanionCache.readItems(context, session, "recent_movies_${cachedMovieLib.id}")
-                topMovies = CompanionCache.readItems(context, session, "top_movies_${cachedMovieLib.id}")
-            }
-            if (cachedTvLib != null) {
-                recentShows = CompanionCache.readShows(context, session, "recent_shows_${cachedTvLib.id}")
-                topShows = CompanionCache.readShows(context, session, "top_shows_${cachedTvLib.id}")
+    // Pull libraries + home shelves from the server. On the initial load we show
+    // the spinner and seed from cache; background refreshes (foreground return /
+    // periodic) update in place so newly added media appears without restarting.
+    suspend fun loadContent(initial: Boolean) {
+        if (initial) {
+            loading = true
+            val cachedLibraries = CompanionCache.readLibraries(context, session)
+            if (cachedLibraries.isNotEmpty()) {
+                libraries = cachedLibraries
+                val cachedMovieLib = cachedLibraries.firstOrNull { it.type == "movies" }
+                val cachedTvLib = cachedLibraries.firstOrNull { it.type == "tv" }
+                if (cachedMovieLib != null) {
+                    recentMovies = CompanionCache.readItems(context, session, "recent_movies_${cachedMovieLib.id}")
+                    topMovies = CompanionCache.readItems(context, session, "top_movies_${cachedMovieLib.id}")
+                }
+                if (cachedTvLib != null) {
+                    recentShows = CompanionCache.readShows(context, session, "recent_shows_${cachedTvLib.id}")
+                    topShows = CompanionCache.readShows(context, session, "top_shows_${cachedTvLib.id}")
+                }
             }
         }
         runCatching {
@@ -772,7 +780,34 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                 CompanionCache.writeShows(context, session, "top_shows_${tl.id}", topShows)
             }
         }.onFailure { reportError(it, "Load failed") }
-        loading = false
+        if (initial) loading = false
+    }
+
+    LaunchedEffect(session) { loadContent(initial = true) }
+
+    // Refresh content every time the app returns to the foreground, so media
+    // added on the server shows up without a restart. The first ON_START is the
+    // cold start already handled by the initial load above, so skip it.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, session) {
+        var first = true
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_START) {
+                if (first) first = false
+                else scope.launch { loadContent(initial = false) }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // While the app stays open, keep the home shelves current so content added
+    // server-side appears without any user action.
+    LaunchedEffect(session) {
+        while (true) {
+            delay(60_000)
+            loadContent(initial = false)
+        }
     }
 
     LaunchedEffect(session) {

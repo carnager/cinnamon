@@ -820,7 +820,9 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     LaunchedEffect(selectedDevice?.id) {
         while (true) {
             val id = selectedDevice?.id
-            if (id != null) runCatching { state = api.deviceState(id) }
+            // A successful poll means the server is reachable again, so clear any
+            // stale connection-error banner instead of leaving it up until restart.
+            if (id != null) runCatching { state = api.deviceState(id) }.onSuccess { if (error.isNotBlank()) onError("") }
             delay(1000)
         }
     }

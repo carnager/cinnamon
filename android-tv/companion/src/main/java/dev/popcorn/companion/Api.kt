@@ -355,20 +355,30 @@ class Api(private val session: Session) {
 
     private fun requestText(path: String, method: String, body: String?): String {
         val conn = URL(session.server + path).openConnection() as HttpURLConnection
-        conn.requestMethod = method
-        conn.connectTimeout = 8000
-        conn.readTimeout = 20000
-        if (session.token.isNotBlank()) conn.setRequestProperty("Authorization", "Bearer ${session.token}")
-        if (body != null) {
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.doOutput = true
-            OutputStreamWriter(conn.outputStream).use { it.write(body) }
+        try {
+            conn.requestMethod = method
+            conn.connectTimeout = 8000
+            conn.readTimeout = 20000
+            // Use a fresh connection per request instead of a pooled keep-alive
+            // socket. After the server restarts or the network blips, a stale
+            // pooled socket hangs or errors and HttpURLConnection's pool stays
+            // poisoned until the app process restarts — which is why the app
+            // previously "lost its connection" until a manual restart.
+            conn.setRequestProperty("Connection", "close")
+            if (session.token.isNotBlank()) conn.setRequestProperty("Authorization", "Bearer ${session.token}")
+            if (body != null) {
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.doOutput = true
+                OutputStreamWriter(conn.outputStream).use { it.write(body) }
+            }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+            if (code !in 200..299) error(text.ifBlank { "HTTP $code" })
+            return text
+        } finally {
+            conn.disconnect()
         }
-        val code = conn.responseCode
-        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-        val text = stream.bufferedReader().use { it.readText() }
-        if (code !in 200..299) error(text.ifBlank { "HTTP $code" })
-        return text
     }
 
     private fun parseShows(arr: JSONArray): List<ShowSummary> = (0 until arr.length()).map {

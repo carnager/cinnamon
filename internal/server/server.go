@@ -951,10 +951,12 @@ func popcornWebFiles(mount string) http.Handler {
 		}
 		if strings.HasSuffix(path, ".html") {
 			w.Header().Set("Cache-Control", "no-store")
-			// Stamp asset URLs with the build version so a new deploy
-			// invalidates the browser cache without renaming files.
+			// Stamp asset URLs with the build version AND build time so a new
+			// deploy invalidates the browser cache without renaming files —
+			// version alone stays identical between two builds of the same
+			// dirty tree, which would leave stale css/js cached for a day.
 			if data, err := web.Files.ReadFile(path); err == nil {
-				ver := url.QueryEscape(version.Version)
+				ver := url.QueryEscape(version.Version + "-" + version.BuildTime)
 				rewritten := htmlAssetRef.ReplaceAll(data, []byte(`${1}="${2}?v=`+ver+`"`))
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				_, _ = w.Write(rewritten)

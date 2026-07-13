@@ -16,6 +16,7 @@ function setView(content) {
   if (typeof appShell !== "undefined" && appShell) {
     appShell.classList.toggle("home-mode", Boolean(view.querySelector(".home-hero")));
   }
+  view.classList.toggle("has-backdrop", Boolean(view.querySelector(".page-backdrop")));
   view.classList.remove("view-fade");
   void view.offsetWidth;
   view.classList.add("view-fade");

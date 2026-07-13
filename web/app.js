@@ -454,13 +454,6 @@ function renderNav() {
     }));
   }
 
-  libraryNav.append(navLink("Search", activeView === "search", () => {
-    activeView = "search";
-    renderNav();
-    search.focus();
-    if (search.value.trim()) renderSearch().catch(console.error);
-  }));
-
   libraryNav.append(navLink("Watchlist", activeView === "watchlist", () => {
     search.value = "";
     activeView = "watchlist";
@@ -829,23 +822,63 @@ function renderHome(skipHistory) {
 
   const frag = document.createDocumentFragment();
   const featured = pickHeroItem(homeData);
-  if (featured) frag.append(homeHero(featured));
+  if (featured) frag.append(homeHero(featured.item, featured.kick));
   else frag.append(el("div", "view-header home-header", el("h1", null, "Home"), el("span", null, "Ready to watch")));
   frag.append(curatedHome(homeData));
   setView(frag);
 }
 
+/* The hero rotates through *suggestions with a reason* rather than pinning the
+   first continue-watching item forever: resume prompts, "because you watched
+   X" genre matches, fresh arrivals, watchlist reminders and hidden gems. */
 function pickHeroItem(data) {
-  const pools = [data.continueMovies, data.continueEpisodes, data.recentMovies, pickFeatured(data.movies || [])];
-  for (const pool of pools) {
-    const withArt = (pool || []).find((i) => i && (i.backdropItemId || i.backdropPath) && i.overview);
-    if (withArt) return withArt;
+  const withArt = (entry) => entry && (entry.backdropItemId || entry.backdropPath);
+  const isShow = (entry) => !entry.kind && (entry.episodeCount != null || entry.seasonCount != null);
+  const entrySeen = (entry) => (isShow(entry) ? showSeen(entry) : itemSeen(entry));
+  const entryTitle = (entry) => (entry.kind === "episode" ? (entry.showTitle || entry.title) : entry.title);
+  const pick = (list) => list[Math.floor(Math.random() * list.length)];
+  const candidates = [];
+
+  for (const item of [...(data.continueMovies || []), ...(data.continueEpisodes || [])].slice(0, 4)) {
+    if (withArt(item)) candidates.push({ item, kick: "Continue watching" });
   }
-  for (const pool of pools) {
-    const withArt = (pool || []).find((i) => i && (i.backdropItemId || i.backdropPath));
-    if (withArt) return withArt;
+
+  // "Because you watched X": prefer TMDb-backed picks (same source as the
+  // detail page's "More like this"), fall back to a same-genre match.
+  const pool = [...(data.movies || []), ...(data.shows || [])];
+  if (data.similarSource && (data.similarPicks || []).length) {
+    const fresh = data.similarPicks.filter((entry) => withArt(entry) && !entrySeen(entry));
+    if (fresh.length) candidates.push({ item: pick(fresh), kick: `Because you watched ${entryTitle(data.similarSource)}` });
+  } else {
+    const recentPlays = [...(data.continueMovies || []), ...(data.continueEpisodes || [])];
+    for (const played of recentPlays.slice(0, 4)) {
+      const genre = splitGenres(played.genres)[0];
+      if (!genre) continue;
+      const source = entryTitle(played);
+      const matches = pool.filter((entry) =>
+        withArt(entry) && !entrySeen(entry) && entryTitle(entry) !== source &&
+        Number(entry.rating || 0) >= 6.5 && splitGenres(entry.genres).includes(genre));
+      if (matches.length) candidates.push({ item: pick(matches), kick: `Because you watched ${source}` });
+    }
   }
-  return null;
+
+  for (const entry of [...(data.recentMovies || []).slice(0, 2), ...(data.recentShows || []).slice(0, 2)]) {
+    if (withArt(entry) && !entrySeen(entry)) candidates.push({ item: entry, kick: "New in your library" });
+  }
+
+  for (const entry of [...(data.watchlistMovies || []), ...(data.watchlistShows || [])].slice(0, 3)) {
+    if (withArt(entry) && !entrySeen(entry)) candidates.push({ item: entry, kick: "On your watchlist" });
+  }
+
+  const gems = pool.filter((entry) => withArt(entry) && !entrySeen(entry) && Number(entry.rating || 0) >= 7.5);
+  if (gems.length) candidates.push({ item: pick(gems), kick: "Maybe you missed this" });
+
+  if (!candidates.length) {
+    const anyArt = pool.filter(withArt);
+    if (!anyArt.length) return null;
+    return { item: pick(anyArt), kick: "Featured" };
+  }
+  return pick(candidates);
 }
 
 async function renderWatchlist(skipHistory) {
@@ -936,14 +969,14 @@ function curatedHome(data) {
   const movieGenres = genreShelves(data.movies, 2);
   const showGenres = genreShelves(data.shows, 1);
 
-  appendShelf(wrap, "Continue Movies", data.continueMovies, (items) => renderShelfGrid(items));
-  appendShelf(wrap, "Continue TV", data.continueEpisodes, (items) => renderShelfGrid(items));
-  appendShelf(wrap, "Watchlist Movies", data.watchlistMovies, (items) => renderShelfGrid(items));
-  appendShelf(wrap, "Watchlist TV", data.watchlistShows, (items) => renderShelfGrid(items.map((show) => showCard(show))));
+  appendShelf(wrap, "Continue Watching", data.continueMovies, (items) => renderShelfGrid(items));
+  appendShelf(wrap, "Continue Watching · TV", data.continueEpisodes, (items) => renderShelfGrid(items));
   appendShelf(wrap, "Recently Added Movies", data.recentMovies, (items) => renderShelfGrid(items));
   appendShelf(wrap, "Recently Added TV", data.recentShows, (items) => renderShelfGrid(items.map((show) => showCard(show))));
-  appendShelf(wrap, "Movie Picks", moviePicks, (items) => renderShelfGrid(items));
-  appendShelf(wrap, "TV Picks", showPicks, (items) => renderShelfGrid(items.map((show) => showCard(show))));
+  appendShelf(wrap, "Your Watchlist", data.watchlistMovies, (items) => renderShelfGrid(items));
+  appendShelf(wrap, "Your Watchlist · TV", data.watchlistShows, (items) => renderShelfGrid(items.map((show) => showCard(show))));
+  appendShelf(wrap, "Top Rated Movies", moviePicks, (items) => renderShelfGrid(items));
+  appendShelf(wrap, "Top Rated TV", showPicks, (items) => renderShelfGrid(items.map((show) => showCard(show))));
 
   for (const row of movieGenres) {
     appendShelf(wrap, row.genre, row.items, (items) => renderShelfGrid(items));
@@ -964,8 +997,35 @@ function shelf(title, items, renderItems) {
   const header = el("div", "shelf-header");
   header.append(el("h2", null, title), el("span", null, `${items.length}`));
   section.append(header);
-  section.append(renderItems(items.slice(0, 18)));
+  section.append(hScroller(renderItems(items.slice(0, 18))));
   return section;
+}
+
+/* hScroller wraps a horizontally scrolling row with paddle buttons so mouse
+   users can page through it — the row's native scrollbar is hidden and a
+   plain wheel only scrolls vertically. Buttons fade in on hover and disable
+   at either end; touch devices keep native swiping (buttons hidden in CSS). */
+function hScroller(row) {
+  const wrap = el("div", "shelf-scroller");
+  const prev = el("button", "shelf-nav prev", "‹");
+  prev.type = "button";
+  prev.setAttribute("aria-label", "Scroll left");
+  const next = el("button", "shelf-nav next", "›");
+  next.type = "button";
+  next.setAttribute("aria-label", "Scroll right");
+  const step = () => Math.max(Math.round(row.clientWidth * 0.85), 220);
+  prev.addEventListener("click", () => row.scrollBy({ left: -step(), behavior: "smooth" }));
+  next.addEventListener("click", () => row.scrollBy({ left: step(), behavior: "smooth" }));
+  const sync = () => {
+    const max = row.scrollWidth - row.clientWidth;
+    wrap.classList.toggle("scrollable", max > 8);
+    prev.disabled = row.scrollLeft <= 4;
+    next.disabled = row.scrollLeft >= max - 4;
+  };
+  row.addEventListener("scroll", sync, { passive: true });
+  new ResizeObserver(sync).observe(row);
+  wrap.append(prev, row, next);
+  return wrap;
 }
 
 function renderShelfGrid(itemsOrNodes) {
@@ -1091,7 +1151,26 @@ async function loadHome(skipHistory) {
     homeData.recentShows = recentShows || [];
     homeData.shows = shows || [];
   }
+  await loadHeroSimilar();
   renderHome(skipHistory);
+}
+
+/* loadHeroSimilar picks one movie the user has watched (or is watching) and
+   fetches its TMDb-backed similar titles for the hero's "Because you watched
+   X" suggestion. The endpoint is cached server-side, so this stays cheap. */
+async function loadHeroSimilar() {
+  homeData.similarSource = null;
+  homeData.similarPicks = [];
+  const watched = (homeData.movies || []).filter((m) => watchedItemIds.has(Number(m.id)));
+  const sources = watched.length ? watched : (homeData.continueMovies || []);
+  if (!sources.length) return;
+  const source = sources[Math.floor(Math.random() * sources.length)];
+  const similar = await api(`/api/items/${source.id}/similar`).catch(() => []);
+  const picks = (similar || []).filter((s) => !itemSeen(s));
+  if (picks.length) {
+    homeData.similarSource = source;
+    homeData.similarPicks = picks;
+  }
 }
 
 function applyHomePayload(payload) {
@@ -1283,7 +1362,8 @@ function routeFromLocation() {
 function urlForState(state) {
   const libraryId = encodeURIComponent(state.libraryId || activeLibraryId || "");
   let path = "/";
-  if (state.view === "search") path = "/search";
+  if (state.view === "home") path = "/";
+  else if (state.view === "search") path = "/search";
   else if (state.view === "watchlist") path = "/watchlist";
   else if (state.view === "settings") path = "/settings";
   else if (state.view === "users") path = "/settings/users";

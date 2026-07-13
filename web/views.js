@@ -48,6 +48,25 @@ function posterProgressBar(item) {
   return wrap;
 }
 
+/* pageBackdrop renders the full-bleed artwork behind a detail/show page.
+   Returns null when the item has no backdrop so pages degrade gracefully. */
+function pageBackdrop(source) {
+  if (!source?.backdropItemId && !source?.backdropPath) return null;
+  const wrap = el("div", "page-backdrop");
+  const img = el("div", "page-backdrop-img");
+  img.style.backgroundImage = `url(${imageURL(source, "backdrop")})`;
+  wrap.append(img);
+  return wrap;
+}
+
+/* showYears renders a show's run as "2019" or "2009–2012". */
+function showYears(show) {
+  const start = Number(show?.year || 0);
+  if (!start) return "";
+  const end = Number(show?.endYear || 0);
+  return end > start ? `${start}–${end}` : String(start);
+}
+
 function sourceRatingBadge(label, value) {
   const badge = el("span", "source-rating");
   badge.append(el("span", "source-rating-label", label), el("span", "source-rating-value", value));
@@ -81,6 +100,8 @@ function itemCard(item) {
   const meta = el("div", "meta", metaText);
 
   card.append(poster, title, meta);
+  const genre = genreList(item.genres)[0];
+  if (genre && item.kind !== "episode") card.append(el("div", "card-genre", genre));
   return card;
 }
 
@@ -93,13 +114,16 @@ function showCard(show) {
     seen: showSeen(show),
     watchlisted: showWatchlisted(show),
   });
-  const metaText = showCountText(show);
+  const seasons = show.seasonCount || 0;
+  const cardMeta = [showYears(show), seasons ? `${seasons} season${seasons === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ") || showCountText(show);
 
   const overlay = el("div", "poster-overlay");
-  overlay.append(el("div", "overlay-title", show.title), el("div", "overlay-meta", metaText));
+  overlay.append(el("div", "overlay-title", show.title), el("div", "overlay-meta", [showYears(show), showCountText(show)].filter(Boolean).join(" · ")));
   poster.append(overlay);
 
-  card.append(poster, el("div", "title", show.title), el("div", "meta", metaText));
+  card.append(poster, el("div", "title", show.title), el("div", "meta", cardMeta));
+  const genre = genreList(show.genres)[0];
+  if (genre) card.append(el("div", "card-genre", genre));
   return card;
 }
 
@@ -140,8 +164,8 @@ function renderGrid(items) {
   return grid;
 }
 
-/* ── Home hero (static featured) ── */
-function homeHero(item) {
+/* ── Home hero (rotating suggestion) ── */
+function homeHero(item, kick) {
   const isShow = !item.kind && (item.episodeCount != null || item.seasonCount != null);
   const hero = el("section", "home-hero");
 
@@ -155,7 +179,7 @@ function homeHero(item) {
   hero.append(bg);
 
   const content = el("div", "home-hero-content");
-  content.append(el("div", "home-hero-kick", item.kind === "episode" ? "Continue watching" : (isShow ? "Featured series" : "Featured")));
+  content.append(el("div", "home-hero-kick", kick || (item.kind === "episode" ? "Continue watching" : (isShow ? "Featured series" : "Featured"))));
   content.append(el("h1", "home-hero-title", item.kind === "episode" ? (item.showTitle || item.title) : item.title));
 
   const meta = el("div", "hmeta");
@@ -164,6 +188,9 @@ function homeHero(item) {
   const parts = [];
   if (item.kind === "episode") {
     if (item.seasonNumber || item.episodeNumber) parts.push(`S${String(item.seasonNumber || 0).padStart(2, "0")}E${String(item.episodeNumber || 0).padStart(2, "0")}`);
+  } else if (isShow) {
+    const years = showYears(item);
+    if (years) parts.push(years);
   } else if (item.year) parts.push(String(item.year));
   if (isShow) parts.push(showCountText(item));
   if (item.durationMs) parts.push(fmtDuration(item.durationMs));
@@ -378,83 +405,171 @@ async function renderSettings(skipHistory) {
 
   const header = el("div", "view-header settings-hero");
   const headerText = el("div", "settings-hero-copy");
-  headerText.append(el("h1", null, "Settings"), el("span", null, `${currentUser?.displayName || currentUser?.username || "User"} · Popcorn preferences`));
+  headerText.append(el("h1", null, "Settings"));
   header.append(headerText);
 
-  const grid = el("div", "settings-grid");
-  grid.append(accountSettingsCard());
-  grid.append(traktSettingsCard(traktStatus));
-  if (currentUser?.isAdmin) {
-    grid.append(adminSettingsCard());
-    grid.append(appUpdatesCard(appUpdates));
-  }
-
   const content = el("div", "settings-view");
-  content.append(header, grid);
-  setView(settingsShell("overview", content));
-}
+  content.append(header);
 
-function accountSettingsCard() {
-  const card = settingsCard("Account", "Current browser session", "account-card");
-  const identity = el("div", "account-identity");
-  identity.append(
-    el("div", "user-avatar large", initials(currentUser?.displayName || currentUser?.username || "User")),
-    el("div", "account-identity-copy", [
-      el("strong", null, currentUser?.displayName || currentUser?.username || "Unknown"),
-      el("span", null, currentUser?.username || ""),
-    ]),
-  );
-  card.append(identity);
-  card.append(settingsRows([
-    ["Role", currentUser?.isAdmin ? "Admin" : "User"],
-  ]));
-  const actions = el("div", "settings-actions");
+  // Account
+  const account = settingsSection("Account");
   const logout = el("button", "secondary", "Logout");
   logout.type = "button";
   logout.addEventListener("click", logoutUser);
-  actions.append(logout);
-  card.append(actions);
-  return card;
-}
+  account.append(settingRow({
+    title: currentUser?.displayName || currentUser?.username || "User",
+    description: [currentUser?.username, currentUser?.isAdmin ? "Admin" : "User"].filter(Boolean).join(" · "),
+    control: logout,
+  }));
+  content.append(account);
 
-function adminSettingsCard() {
-  const card = settingsCard("Users", "Manage Popcorn accounts", "admin-card");
-  card.append(el("p", "settings-copy", "Create local users and assign admin access."));
-  const actions = el("div", "settings-actions");
-  const users = el("button", "primary", "Manage Users");
-  users.type = "button";
-  users.addEventListener("click", () => renderUsers().catch(console.error));
-  actions.append(users);
-  card.append(actions);
-  return card;
-}
+  content.append(traktSection(traktStatus));
 
-function appUpdatesCard(status) {
-  const card = settingsCard("App Updates", "Upload internal Android releases", "updates-card");
-  if (status?.error) {
-    card.append(el("div", "settings-message error", status.error));
+  if (currentUser?.isAdmin) {
+    const users = settingsSection("Users");
+    const manage = el("button", "secondary", "Manage users");
+    manage.type = "button";
+    manage.addEventListener("click", () => renderUsers().catch(console.error));
+    users.append(settingRow({
+      title: "User accounts",
+      description: "Create local logins and assign admin access.",
+      control: manage,
+    }));
+    content.append(users);
+    content.append(appUpdatesSection(appUpdates));
   }
-  const grid = el("div", "app-update-grid");
-  grid.append(appUploadPanel("Android TV", "tv", status?.tv));
-  grid.append(appUploadPanel("Phone Companion", "companion", status?.companion));
-  card.append(grid);
-  return card;
+
+  setView(settingsShell("overview", content));
 }
 
-function appUploadPanel(title, app, info) {
-  const panel = el("div", "app-update-panel");
+/* One setting per row: label and explanation on the left, the control on the
+   right. Sections are plain headings above a run of rows. */
+function settingsSection(title, subtitle) {
+  const section = el("section", "settings-section");
+  const head = el("div", "settings-section-head");
+  head.append(el("h2", null, title));
+  if (subtitle) head.append(el("span", null, subtitle));
+  section.append(head);
+  return section;
+}
+
+function settingRow({ title, description, control, stacked = false }) {
+  const row = el("div", stacked ? "setting-row stacked" : "setting-row");
+  const copy = el("div", "setting-copy");
+  copy.append(el("strong", null, title));
+  if (description) copy.append(el("span", null, description));
+  const ctrl = el("div", "setting-control");
+  if (Array.isArray(control)) control.forEach((node) => node && ctrl.append(node));
+  else if (control) ctrl.append(control);
+  row.append(copy, ctrl);
+  return row;
+}
+
+function traktSection(status) {
+  const configured = Boolean(status?.configured);
+  const connected = Boolean(status?.connected);
+  const section = settingsSection("Trakt.tv");
+  const output = el("div", "settings-output");
+
+  let statusControl = null;
+  if (configured && !connected) {
+    const link = el("button", "primary", "Link account");
+    link.type = "button";
+    link.addEventListener("click", () => startTraktLink(section, output, link).catch((err) => {
+      output.textContent = cleanError(err);
+      output.classList.add("error");
+    }));
+    statusControl = link;
+  } else if (configured && connected) {
+    const disconnect = el("button", "danger", "Disconnect");
+    disconnect.type = "button";
+    disconnect.addEventListener("click", async () => {
+      if (!confirm("Disconnect this Popcorn user from Trakt.tv?")) return;
+      await runSettingsAction(disconnect, output, async () => {
+        await api("/api/trakt", { method: "DELETE" });
+        await renderSettings(true);
+        return "Disconnected Trakt account.";
+      });
+    });
+    statusControl = disconnect;
+  }
+  section.append(settingRow({
+    title: "Account link",
+    description: connected
+      ? `Connected${status?.expiresAt ? ` · token valid until ${formatDateTime(status.expiresAt)}` : ""}`
+      : configured ? "Not connected." : "Not configured — set the Trakt client id and secret in the server config.",
+    control: statusControl,
+  }));
+  if (status?.error) section.append(el("div", "settings-message error", status.error));
+
+  if (configured && connected) {
+    const importSeen = el("button", "secondary", "Import seen status");
+    importSeen.type = "button";
+    importSeen.addEventListener("click", () => runSettingsAction(importSeen, output, async () => {
+      const summary = await api("/api/trakt/import-watched", { method: "POST" });
+      await refreshMediaState();
+      return renderTraktWatchedSummary(summary);
+    }));
+    const importWatchlist = el("button", "secondary", "Import watchlist");
+    importWatchlist.type = "button";
+    importWatchlist.addEventListener("click", () => runSettingsAction(importWatchlist, output, async () => {
+      const summary = await api("/api/trakt/import-watchlist", { method: "POST" });
+      await refreshMediaState();
+      await fetchWatchlist();
+      return renderTraktWatchlistSummary(summary);
+    }));
+    section.append(settingRow({
+      title: "Import from Trakt",
+      description: "Pull your watched history or watchlist into Popcorn.",
+      control: [importSeen, importWatchlist],
+    }));
+  }
+
+  const exportInput = document.createElement("input");
+  exportInput.type = "file";
+  exportInput.multiple = true;
+  exportInput.accept = ".zip,.json,application/zip,application/json";
+  const importExport = el("button", "secondary", "Upload");
+  importExport.type = "button";
+  importExport.addEventListener("click", () => runSettingsAction(importExport, output, async () => {
+    if (!exportInput.files.length) return "Choose a Trakt export zip or JSON files first.";
+    const form = new FormData();
+    for (const file of exportInput.files) form.append("files", file, file.webkitRelativePath || file.name);
+    const summary = await api("/api/trakt/import-export-upload", { method: "POST", body: form });
+    await refreshMediaState();
+    return renderTraktWatchedSummary(summary);
+  }));
+  section.append(settingRow({
+    title: "Import a Trakt export",
+    description: "Upload the export zip or the JSON files. Works without linking an account.",
+    control: [exportInput, importExport],
+    stacked: true,
+  }));
+
+  section.append(output);
+  return section;
+}
+
+function appUpdatesSection(status) {
+  const section = settingsSection("App updates", "Android builds served to your devices");
+  if (status?.error) section.append(el("div", "settings-message error", status.error));
+  section.append(appUpdateRow("Android TV", "tv", status?.tv));
+  section.append(appUpdateRow("Phone Companion", "companion", status?.companion));
+  return section;
+}
+
+function appUpdateRow(title, app, info) {
   const configured = Boolean(info?.configured);
-  const state = el("div", configured ? "settings-status ok" : "settings-status warn");
-  state.append(el("span", "settings-status-dot"), el("span", null, configured ? `${info.versionName || "Configured"} (${info.versionCode || "?"})` : "Not configured"));
-  panel.append(el("h3", null, title), state);
-  if (info?.source || info?.sizeBytes) {
-    panel.append(settingsRows([
-      ["Source", info.source || ""],
-      ["APK size", info.sizeBytes ? formatBytes(info.sizeBytes) : ""],
-    ]));
-  }
-  if (info?.error) panel.append(el("div", "settings-message error", info.error));
+  const description = configured
+    ? [`${info.versionName || "?"} (${info.versionCode || "?"})`, info.sizeBytes ? formatBytes(info.sizeBytes) : "", info.error || ""].filter(Boolean).join(" · ")
+    : (info?.error || "No build uploaded yet.");
+  const details = el("details", "setting-upload");
+  details.append(el("summary", null, "Upload APK"));
+  details.append(appUploadForm(title, app));
+  return settingRow({ title, description, control: details, stacked: true });
+}
 
+function appUploadForm(title, app) {
   const form = el("form", "app-upload-form");
   const fileField = el("label", "field");
   fileField.append(el("span", null, "APK File"));
@@ -494,14 +609,12 @@ function appUploadPanel(title, app, info) {
       return `${title} ${updated.versionName} (${updated.versionCode}) uploaded.`;
     });
   });
-  panel.append(form);
-  return panel;
+  return form;
 }
 
 function settingsShell(active, content) {
   const shell = el("div", "settings-shell settings-page");
   const sidebar = el("aside", "settings-sidebar");
-  sidebar.append(el("div", "settings-sidebar-title", "Settings"));
   const nav = el("nav", "settings-sidebar-nav");
   nav.append(settingsNavButton("Overview", active === "overview", () => renderSettings().catch(console.error)));
   if (currentUser?.isAdmin) {
@@ -510,7 +623,11 @@ function settingsShell(active, content) {
   sidebar.append(nav);
   const main = el("main", "settings-main");
   main.append(content);
-  shell.append(sidebar, main);
+  // Tabs belong between the page heading and the sections.
+  const header = main.querySelector(".view-header");
+  if (header) header.after(sidebar);
+  else main.prepend(sidebar);
+  shell.append(main);
   return shell;
 }
 
@@ -519,95 +636,6 @@ function settingsNavButton(label, selected, onClick) {
   button.type = "button";
   button.addEventListener("click", onClick);
   return button;
-}
-
-function traktSettingsCard(status) {
-  const configured = Boolean(status?.configured);
-  const connected = Boolean(status?.connected);
-  const card = settingsCard("Trakt.tv", configured ? "Per-user Trakt integration" : "Server integration is not configured", "trakt-card");
-  const state = el("div", connected ? "settings-status ok" : configured ? "settings-status" : "settings-status warn");
-  state.append(
-    el("span", "settings-status-dot"),
-    el("span", null, connected ? "Connected" : configured ? "Not connected" : "Not configured"),
-  );
-  card.append(state);
-  if (status?.expiresAt) {
-    card.append(settingsRows([["Token expires", formatDateTime(status.expiresAt)]]));
-  }
-  if (status?.error) {
-    card.append(el("div", "settings-message error", status.error));
-  }
-
-  const output = el("div", "settings-output");
-  const actions = el("div", "settings-actions");
-  const exportField = el("label", "field settings-export-field");
-  exportField.append(el("span", null, "Trakt Export File"));
-  const exportInput = document.createElement("input");
-  exportInput.type = "file";
-  exportInput.multiple = true;
-  exportInput.accept = ".zip,.json,application/zip,application/json";
-  exportField.append(exportInput);
-  card.append(exportField, el("p", "settings-copy", "Upload a Trakt export zip, or select the export JSON files. This does not require linking Trakt."));
-
-  const importExport = el("button", "secondary", "Upload Trakt Export");
-  importExport.type = "button";
-  importExport.addEventListener("click", () => runSettingsAction(importExport, output, async () => {
-    if (!exportInput.files.length) return "Choose a Trakt export zip or JSON files first.";
-    const form = new FormData();
-    for (const file of exportInput.files) form.append("files", file, file.webkitRelativePath || file.name);
-    const summary = await api("/api/trakt/import-export-upload", {
-      method: "POST",
-      body: form,
-    });
-    await refreshMediaState();
-    return renderTraktWatchedSummary(summary);
-  }));
-
-  if (configured && !connected) {
-    const link = el("button", "primary", "Link Trakt Account");
-    link.type = "button";
-    link.addEventListener("click", () => startTraktLink(card, output, link).catch((err) => {
-      output.textContent = cleanError(err);
-      output.classList.add("error");
-    }));
-    actions.append(link);
-  }
-  if (configured && connected) {
-    const importSeen = el("button", "primary", "Import Seen Status");
-    importSeen.type = "button";
-    importSeen.addEventListener("click", () => runSettingsAction(importSeen, output, async () => {
-      const summary = await api("/api/trakt/import-watched", { method: "POST" });
-      await refreshMediaState();
-      return renderTraktWatchedSummary(summary);
-    }));
-
-    const importWatchlist = el("button", "secondary", "Import Watchlist");
-    importWatchlist.type = "button";
-    importWatchlist.addEventListener("click", () => runSettingsAction(importWatchlist, output, async () => {
-      const summary = await api("/api/trakt/import-watchlist", { method: "POST" });
-      await refreshMediaState();
-      await fetchWatchlist();
-      return renderTraktWatchlistSummary(summary);
-    }));
-
-    const disconnect = el("button", "danger", "Disconnect");
-    disconnect.type = "button";
-    disconnect.addEventListener("click", async () => {
-      if (!confirm("Disconnect this Popcorn user from Trakt.tv?")) return;
-      await runSettingsAction(disconnect, output, async () => {
-        await api("/api/trakt", { method: "DELETE" });
-        await renderSettings(true);
-        return "Disconnected Trakt account.";
-      });
-    });
-    actions.append(importSeen, importWatchlist, disconnect);
-  }
-  actions.append(importExport);
-  if (!configured) {
-    card.append(el("p", "settings-copy", "Set the Trakt client id and secret in the server config to enable direct Trakt linking and API imports."));
-  }
-  card.append(actions, output);
-  return card;
 }
 
 async function startTraktLink(card, output, button) {
@@ -919,6 +947,8 @@ async function openDetail(item, skipHistory, parent = {}) {
   }
 
   const frag = document.createDocumentFragment();
+  const backdrop = pageBackdrop(d);
+  if (backdrop) frag.append(backdrop);
   const isEpisode = item.kind === "episode";
   // Resolve the breadcrumb from the item's own library/show, not the globally
   // active library — otherwise opening an item from the home shelves (where the
@@ -1021,8 +1051,7 @@ async function openDetail(item, skipHistory, parent = {}) {
   frag.append(detail);
   if (d.actors?.length) frag.append(castShelf(d.actors));
   if (similar && similar.length) {
-    frag.append(sectionTitle("More like this", `${similar.length}`));
-    frag.append(renderGrid(similar.slice(0, 24)));
+    frag.append(shelf("More like this", similar, (items) => renderShelfGrid(items)));
   }
   setView(frag);
 }
@@ -1127,6 +1156,16 @@ async function openShow(show, skipHistory, initialSeason) {
   setLoading();
 
   const libraryId = show.libraryId || activeLibraryId;
+  // Breadcrumbs and deep links may hand over a bare {libraryId, title} stub
+  // (e.g. episode opened straight from a home shelf). Hydrate the full
+  // summary so the header gets artwork, overview, years and counts.
+  if (!show.episodeCount && !show.posterItemId) {
+    const full = await fetchShowSummary(libraryId, show.title).catch(() => null);
+    if (full) {
+      show = full;
+      currentShow = full;
+    }
+  }
   const seasons = await api(`/api/tv/seasons?libraryId=${encodeURIComponent(libraryId)}&showTitle=${encodeURIComponent(show.title)}`).catch(() => groupSeasons(show.episodes || []));
   const seasonNumbers = seasons.map((s) => Number(s.seasonNumber ?? s.number ?? 0));
   let activeSeason = initialSeason != null && seasonNumbers.includes(Number(initialSeason))
@@ -1135,6 +1174,8 @@ async function openShow(show, skipHistory, initialSeason) {
   currentSeason = activeSeason;
 
   const frag = document.createDocumentFragment();
+  const backdrop = pageBackdrop(showBackdropSource(show));
+  if (backdrop) frag.append(backdrop);
   const library = libraryById(show.libraryId) || activeLibrary();
 
   frag.append(makeBreadcrumb([
@@ -1149,6 +1190,8 @@ async function openShow(show, skipHistory, initialSeason) {
   const body = el("div", "detail-body");
   body.append(el("h1", null, show.title));
   const meta = el("div", "detail-meta");
+  const years = showYears(show);
+  if (years) meta.append(el("span", null, years), el("span", "meta-dot"));
   meta.append(el("span", null, showCountText(show)));
   if (showRating(show)) meta.append(el("span", "meta-dot"), el("span", "content-rating-chip", `★ ${Number(showRating(show)).toFixed(1)}`));
   body.append(meta);
@@ -1296,7 +1339,7 @@ function castShelf(actors) {
   const section = el("section", "cast-shelf");
   const filtered = (actors || []).filter((actor) => actor?.name).slice(0, 28);
   section.append(sectionTitle("Cast", `${filtered.length}`));
-  const row = el("div", "cast-row");
+  const row = el("div", "cast-row hscroll-row");
   for (const actor of filtered) {
     const card = el("button", "cast-card");
     card.type = "button";
@@ -1311,7 +1354,7 @@ function castShelf(actors) {
     );
     row.append(card);
   }
-  section.append(row);
+  section.append(hScroller(row));
   return section;
 }
 

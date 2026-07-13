@@ -104,6 +104,8 @@ private fun jsonToShow(o: JSONObject): ShowSummary {
         overview = o.optString("overview"),
         genres = o.optString("genres"),
         rating = o.optDouble("rating"),
+        year = o.optInt("year"),
+        endYear = o.optInt("endYear"),
     )
 }
 
@@ -111,6 +113,8 @@ private fun showToJson(show: ShowSummary): JSONObject {
     return JSONObject()
         .put("libraryId", show.libraryId)
         .put("title", show.title)
+        .put("year", show.year)
+        .put("endYear", show.endYear)
         .put("episodeCount", show.episodeCount)
         .put("seasonCount", show.seasonCount)
         .put("posterItemId", show.posterItemId)

@@ -1262,6 +1262,7 @@ SELECT mi.library_id,
 	COALESCE(ms.sort_title, LOWER(COALESCE(mi.show_title, ''))) AS sort_title,
 	COALESCE(ms.original_title, CASE WHEN COUNT(DISTINCT NULLIF(mi.original_title, '')) = 1 THEN COALESCE(MAX(NULLIF(mi.original_title, '')), '') ELSE '' END, ''),
 	COALESCE(ms.year, MIN(NULLIF(mi.year, 0)), 0),
+	COALESCE(MAX(NULLIF(mi.year, 0)), 0),
 	COUNT(*),
 	COUNT(DISTINCT mi.season_number),
 	COALESCE(MIN(CASE WHEN mi.poster_path IS NOT NULL AND mi.poster_path != '' THEN mi.id END), 0),
@@ -1342,7 +1343,7 @@ LIMIT ? OFFSET ?`, append(append([]any{libraryID, libraryID}, genreArgs...), see
 	shows := []ShowSummary{}
 	for rows.Next() {
 		var show ShowSummary
-		if err := rows.Scan(&show.LibraryID, &show.Title, &show.SortTitle, &show.OriginalTitle, &show.Year, &show.EpisodeCount, &show.SeasonCount, &show.PosterItemID, &show.PosterMTimeUnix, &show.BackdropItemID, &show.BackdropMTimeUnix, &show.Overview, &show.Genres, &show.Rating, &show.Premiered); err != nil {
+		if err := rows.Scan(&show.LibraryID, &show.Title, &show.SortTitle, &show.OriginalTitle, &show.Year, &show.EndYear, &show.EpisodeCount, &show.SeasonCount, &show.PosterItemID, &show.PosterMTimeUnix, &show.BackdropItemID, &show.BackdropMTimeUnix, &show.Overview, &show.Genres, &show.Rating, &show.Premiered); err != nil {
 			return nil, err
 		}
 		shows = append(shows, show)
@@ -2098,6 +2099,7 @@ SELECT mi.library_id,
 	COALESCE(ms.sort_title, LOWER(COALESCE(mi.show_title, ''))) AS sort_title,
 	COALESCE(ms.original_title, CASE WHEN COUNT(DISTINCT NULLIF(mi.original_title, '')) = 1 THEN COALESCE(MAX(NULLIF(mi.original_title, '')), '') ELSE '' END, ''),
 	COALESCE(ms.year, MIN(NULLIF(mi.year, 0)), 0),
+	COALESCE(MAX(NULLIF(mi.year, 0)), 0),
 	COUNT(*),
 	COUNT(DISTINCT mi.season_number),
 	COALESCE(MIN(CASE WHEN mi.poster_path IS NOT NULL AND mi.poster_path != '' THEN mi.id END), 0),
@@ -2124,7 +2126,7 @@ LIMIT ?`, userID, limit)
 	for rows.Next() {
 		var show ShowSummary
 		var updatedAt string
-		if err := rows.Scan(&show.LibraryID, &show.Title, &show.SortTitle, &show.OriginalTitle, &show.Year, &show.EpisodeCount, &show.SeasonCount, &show.PosterItemID, &show.PosterMTimeUnix, &show.BackdropItemID, &show.BackdropMTimeUnix, &show.Overview, &show.Genres, &show.Rating, &show.Premiered, &updatedAt); err != nil {
+		if err := rows.Scan(&show.LibraryID, &show.Title, &show.SortTitle, &show.OriginalTitle, &show.Year, &show.EndYear, &show.EpisodeCount, &show.SeasonCount, &show.PosterItemID, &show.PosterMTimeUnix, &show.BackdropItemID, &show.BackdropMTimeUnix, &show.Overview, &show.Genres, &show.Rating, &show.Premiered, &updatedAt); err != nil {
 			return nil, err
 		}
 		shows = append(shows, show)

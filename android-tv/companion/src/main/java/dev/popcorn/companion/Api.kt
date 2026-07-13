@@ -402,7 +402,7 @@ class Api(private val session: Session) {
 
     private fun parseShows(arr: JSONArray): List<ShowSummary> = (0 until arr.length()).map {
         val o = arr.getJSONObject(it)
-        ShowSummary(o.getString("libraryId"), o.optString("title"), o.optInt("episodeCount"), o.optInt("seasonCount"), o.optLong("posterItemId"), o.optLong("posterMtimeUnix"), o.optString("overview"), o.optString("genres"), o.optDouble("rating"))
+        ShowSummary(o.getString("libraryId"), o.optString("title"), o.optInt("episodeCount"), o.optInt("seasonCount"), o.optLong("posterItemId"), o.optLong("posterMtimeUnix"), o.optString("overview"), o.optString("genres"), o.optDouble("rating"), o.optInt("year"), o.optInt("endYear"), o.optLong("backdropItemId"), o.optLong("backdropMtimeUnix"))
     }
 
     private fun parseItems(arr: JSONArray): List<PopItem> = (0 until arr.length()).map {
@@ -420,6 +420,10 @@ class Api(private val session: Session) {
 
     suspend fun similar(itemId: Long): List<PopItem> = withContext(Dispatchers.IO) {
         parseItems(requestArray("/api/items/$itemId/similar"))
+    }
+
+    suspend fun showActors(libraryId: String, showTitle: String): List<Actor> = withContext(Dispatchers.IO) {
+        parseActors(requestArray("/api/tv/shows/actors?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}"))
     }
 
     suspend fun itemSidecars(itemId: Long): SidecarStatus = withContext(Dispatchers.IO) {
@@ -500,15 +504,23 @@ private fun jsonToShow(o: JSONObject): ShowSummary = ShowSummary(
     o.optString("overview"),
     o.optString("genres"),
     o.optDouble("rating"),
+    o.optInt("year"),
+    o.optInt("endYear"),
+    o.optLong("backdropItemId"),
+    o.optLong("backdropMtimeUnix"),
 )
 
 private fun showToJson(show: ShowSummary): JSONObject = JSONObject()
     .put("libraryId", show.libraryId)
     .put("title", show.title)
+    .put("year", show.year)
+    .put("endYear", show.endYear)
     .put("episodeCount", show.episodeCount)
     .put("seasonCount", show.seasonCount)
     .put("posterItemId", show.posterItemId)
     .put("posterMtimeUnix", show.posterMtimeUnix)
+    .put("backdropItemId", show.backdropItemId)
+    .put("backdropMtimeUnix", show.backdropMtimeUnix)
     .put("overview", show.overview)
     .put("genres", show.genres)
     .put("rating", show.rating)

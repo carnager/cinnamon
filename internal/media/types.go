@@ -133,6 +133,7 @@ type ShowSummary struct {
 	SortTitle         string  `json:"sortTitle"`
 	OriginalTitle     string  `json:"originalTitle,omitempty"`
 	Year              int     `json:"year,omitempty"`
+	EndYear           int     `json:"endYear,omitempty"`
 	EpisodeCount      int     `json:"episodeCount"`
 	SeasonCount       int     `json:"seasonCount"`
 	PosterItemID      int64   `json:"posterItemId,omitempty"`

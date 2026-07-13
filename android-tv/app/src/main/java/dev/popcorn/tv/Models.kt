@@ -78,7 +78,16 @@ data class ShowSummary(
     val overview: String,
     val genres: String,
     val rating: Double,
+    val year: Int = 0,
+    val endYear: Int = 0,
 )
+
+// yearsLabel renders a show's run as "2019" or "2009–2012"; empty when unknown.
+fun ShowSummary.yearsLabel(): String = when {
+    year <= 0 -> ""
+    endYear > year -> "$year–$endYear"
+    else -> "$year"
+}
 
 data class SeasonSummary(
     val libraryId: String,

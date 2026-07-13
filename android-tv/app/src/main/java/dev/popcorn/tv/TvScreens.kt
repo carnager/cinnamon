@@ -374,6 +374,9 @@ fun ShowHeader(
                     if (meta != null) {
                         Text(meta, color = Muted, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     } else {
+                        show.yearsLabel().takeIf { it.isNotBlank() }?.let {
+                            Text(it, color = Muted, fontSize = 15.sp)
+                        }
                         Text("${show.seasonCount} seasons", color = Muted, fontSize = 15.sp)
                         Text("${show.episodeCount} episodes", color = Muted, fontSize = 15.sp)
                     }

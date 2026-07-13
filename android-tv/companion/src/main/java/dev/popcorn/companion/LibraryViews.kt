@@ -42,6 +42,7 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -151,16 +153,82 @@ fun ShowGrid(title: String, session: Session, shows: List<ShowSummary>, complete
 
 @Composable
 fun SeasonList(session: Session, show: ShowSummary, seasons: List<SeasonSummary>, onBack: () -> Unit, onSeason: (SeasonSummary) -> Unit) {
-    LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { HeaderBack(show.title, onBack) }
+    var actors by remember(show.libraryId, show.title) { mutableStateOf<List<Actor>>(emptyList()) }
+    LaunchedEffect(show.libraryId, show.title) {
+        actors = runCatching { Api(session).showActors(show.libraryId, show.title) }.getOrDefault(emptyList())
+    }
+    LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        item { ShowHero(session, show, onBack) }
+        if (show.overview.isNotBlank()) {
+            item {
+                Column(
+                    Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Surface1).padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text("Overview", color = TextColor, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text(show.overview, color = TextColor, fontSize = 14.sp, lineHeight = 20.sp)
+                }
+            }
+        }
+        if (actors.isNotEmpty()) {
+            item { CastStrip(session, actors) }
+        }
+        item { Text("Seasons", color = TextColor, fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 12.dp)) }
         items(seasons, key = { it.seasonNumber }) { season ->
-            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Surface1).clickable { onSeason(season) }.padding(10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Surface1).clickable { onSeason(season) }.padding(10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 PosterImage(session, imageUrl(session, season.posterItemId, season.posterMtimeUnix), Modifier.width(72.dp))
                 Column(Modifier.weight(1f)) {
                     Text(season.title.ifBlank { "Season ${season.seasonNumber}" }, color = TextColor, fontWeight = FontWeight.Bold)
                     Text("${season.episodeCount} episodes", color = Muted, fontSize = 12.sp)
                     if (season.overview.isNotBlank()) Text(season.overview, color = Muted, fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
+            }
+        }
+    }
+}
+
+// ShowHero mirrors the movie DetailHero: full-bleed backdrop with a gradient
+// scrim, poster, title, run years, season/episode counts and genre chips.
+@Composable
+fun ShowHero(session: Session, show: ShowSummary, onBack: () -> Unit) {
+    val backdropUrl = if (show.backdropItemId > 0) imageUrl(session, show.backdropItemId, show.backdropMtimeUnix, "backdrop") else ""
+    val genres = show.genres.split(Regex("[,;/]")).map { it.trim() }.filter { it.isNotBlank() }.take(3)
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
+            if (backdropUrl.isNotBlank()) {
+                AuthAsyncImage(session, backdropUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            } else {
+                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Surface2, Bg))))
+            }
+            Box(
+                Modifier.fillMaxSize().background(
+                    Brush.verticalGradient(0f to Color.Transparent, 0.45f to Bg.copy(alpha = 0.25f), 1f to Bg),
+                ),
+            )
+            OutlinedButton(onClick = onBack, modifier = Modifier.align(Alignment.TopStart).padding(8.dp)) { Text("Back") }
+            Row(
+                Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                PosterImage(session, imageUrl(session, show.posterItemId, show.posterMtimeUnix), Modifier.width(96.dp), rating = show.rating)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(show.title, color = TextColor, fontSize = 23.sp, lineHeight = 27.sp, fontWeight = FontWeight.Black, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    val meta = listOfNotNull(
+                        show.yearsLabel().takeIf { it.isNotBlank() },
+                        "${show.seasonCount} seasons",
+                        "${show.episodeCount} episodes",
+                    ).joinToString(" · ")
+                    Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+        if (genres.isNotEmpty()) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                modifier = Modifier.padding(horizontal = 12.dp).fillMaxWidth().horizontalScroll(rememberScrollState()),
+            ) {
+                genres.forEach { DetailChip(it.uppercase(), Surface2, Muted) }
             }
         }
     }
@@ -246,7 +314,7 @@ fun SearchPage(session: Session, query: String, onQuery: (String) -> Unit, genre
         item { PopTextField(query, onQuery, "Search movies and shows") }
         item { FilterBar(genres, filters, onFilters) }
         if (shows.isNotEmpty()) item { Text("Shows", color = TextColor, fontWeight = FontWeight.Bold) }
-        items(shows, key = { it.libraryId + it.title }) { show -> SearchRow(title = show.title, meta = "${show.seasonCount} seasons \u00b7 ${show.episodeCount} episodes", onClick = { onShow(show) }) }
+        items(shows, key = { it.libraryId + it.title }) { show -> SearchRow(title = show.title, meta = listOfNotNull(show.yearsLabel().takeIf { it.isNotBlank() }, "${show.seasonCount} seasons \u00b7 ${show.episodeCount} episodes").joinToString(" \u00b7 "), onClick = { onShow(show) }) }
         if (movies.isNotEmpty()) item { Text("Movies", color = TextColor, fontWeight = FontWeight.Bold) }
         items(movies, key = { it.id }) { item -> SearchRow(title = item.title, meta = listOf(item.year.takeIf { it > 0 }?.toString(), fmtDuration(item.durationMs)).filterNotNull().joinToString(" \u00b7 "), onClick = { onMovie(item) }) }
     }
@@ -371,7 +439,10 @@ fun ShowCard(session: Session, show: ShowSummary, modifier: Modifier = Modifier,
         PosterImage(session, imageUrl(session, show.posterItemId, show.posterMtimeUnix), Modifier.fillMaxWidth(), watched = watched, watchlisted = watchlisted, rating = show.rating)
         Spacer(Modifier.height(6.dp))
         Text(show.title, color = TextColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text("${show.seasonCount} seasons", color = Muted, fontSize = 11.sp, maxLines = 1)
+        Text(
+            listOfNotNull(show.yearsLabel().takeIf { it.isNotBlank() }, "${show.seasonCount} seasons").joinToString(" · "),
+            color = Muted, fontSize = 11.sp, maxLines = 1,
+        )
         firstGenre(show.genres)?.let { Text(it, color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis) }
     }
 }

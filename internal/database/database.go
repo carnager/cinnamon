@@ -2,14 +2,78 @@ package database
 
 import (
 	"database/sql"
+	"database/sql/driver"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"unicode"
 
-	_ "modernc.org/sqlite"
+	sqlite "modernc.org/sqlite"
 )
 
+// SearchNormalize folds a string into a relaxed form for searching: lowercase,
+// with diacritics and any non-alphanumeric characters (apostrophes, hyphens,
+// punctuation) dropped and runs of whitespace collapsed to single spaces. This
+// lets "Lets Dance" match "Let's Dance". It is exposed to SQLite as the
+// searchnorm() function and must produce identical output on both sides of a
+// comparison, so query parameters are passed through this same function.
+func SearchNormalize(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	pendingSpace := false
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			if pendingSpace && b.Len() > 0 {
+				b.WriteByte(' ')
+			}
+			pendingSpace = false
+			b.WriteRune(foldRune(r))
+		case unicode.IsSpace(r):
+			pendingSpace = true
+		default:
+			// drop punctuation entirely so "let's" == "lets"
+		}
+	}
+	return b.String()
+}
+
+// foldRune maps the most common Latin-1 accented letters to their ASCII base so
+// "Amelie" matches "Amélie". Anything without a mapping is returned unchanged.
+func foldRune(r rune) rune {
+	switch r {
+	case 'à', 'á', 'â', 'ã', 'ä', 'å', 'ā':
+		return 'a'
+	case 'ç', 'č':
+		return 'c'
+	case 'è', 'é', 'ê', 'ë', 'ē':
+		return 'e'
+	case 'ì', 'í', 'î', 'ï', 'ī':
+		return 'i'
+	case 'ñ':
+		return 'n'
+	case 'ò', 'ó', 'ô', 'õ', 'ö', 'ø', 'ō':
+		return 'o'
+	case 'ù', 'ú', 'û', 'ü', 'ū':
+		return 'u'
+	case 'ý', 'ÿ':
+		return 'y'
+	case 'ß':
+		return 's'
+	}
+	return r
+}
+
+var registerSearchnorm sync.Once
+
 func Open(path string) (*sql.DB, error) {
+	registerSearchnorm.Do(func() {
+		sqlite.MustRegisterDeterministicScalarFunction("searchnorm", 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+			s, _ := args[0].(string)
+			return SearchNormalize(s), nil
+		})
+	})
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}

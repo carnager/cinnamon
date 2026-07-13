@@ -4,10 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+
+	"popcorn/internal/database"
 )
 
 type Store struct {
@@ -209,26 +213,58 @@ ORDER BY id`, item.LibraryID, strings.TrimSpace(item.IMDbID), strings.TrimSpace(
 		return err
 	}
 	defer rows.Close()
-	type candidate struct {
-		id   int64
-		path string
+	candidates, err := scanIdentityCandidates(rows)
+	if err != nil {
+		return err
 	}
-	candidates := []candidate{}
+	return claimIdentityCandidatesTx(ctx, tx, item, candidates)
+}
+
+type identityCandidate struct {
+	id   int64
+	path string
+}
+
+func scanIdentityCandidates(rows *sql.Rows) ([]identityCandidate, error) {
+	candidates := []identityCandidate{}
 	for rows.Next() {
-		var c candidate
+		var c identityCandidate
 		if err := rows.Scan(&c.id, &c.path); err != nil {
-			return err
+			return nil, err
 		}
 		candidates = append(candidates, c)
 	}
-	if err := rows.Err(); err != nil {
-		return err
+	return candidates, rows.Err()
+}
+
+// claimIdentityCandidatesTx reconciles item against existing rows that share
+// its logical identity (external IDs for movies, show/season/episode for
+// episodes). A candidate whose file is gone from disk is the same item renamed
+// or moved, so the row is claimed (keeping watch state) and its path updated.
+// A candidate whose file still exists is a different physical file that merely
+// claims the same identity (e.g. a misfiled release); it must be left alone,
+// otherwise the two files would steal one row from each other on every scan.
+func claimIdentityCandidatesTx(ctx context.Context, tx *sql.Tx, item Item, candidates []identityCandidate) error {
+	var keep identityCandidate
+	var claimable []identityCandidate
+	for _, c := range candidates {
+		switch {
+		case c.path == item.Path:
+			keep = c
+		case fileGone(c.path):
+			claimable = append(claimable, c)
+		}
+		// A candidate whose file still exists belongs to another live file and
+		// is deliberately left untouched.
 	}
-	if len(candidates) == 0 {
+	merge := claimable
+	if keep.id == 0 && len(claimable) > 0 {
+		keep, merge = claimable[0], claimable[1:]
+	}
+	if keep.id == 0 {
 		return reconcilePathCaseTx(ctx, tx, item)
 	}
-	keep := candidates[0]
-	for _, c := range candidates[1:] {
+	for _, c := range merge {
 		if err := mergeDuplicateItemTx(ctx, tx, keep.id, c.id); err != nil {
 			return err
 		}
@@ -239,6 +275,18 @@ ORDER BY id`, item.LibraryID, strings.TrimSpace(item.IMDbID), strings.TrimSpace(
 		}
 	}
 	return nil
+}
+
+// fileGone reports whether nothing exists at path anymore, meaning a database
+// row pointing there may be claimed by a renamed/moved file. Stat errors other
+// than "not exist" (permissions, flaky mounts) count as still present so a
+// transient failure never lets one file hijack another's row.
+func fileGone(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return true
+	}
+	_, err := os.Stat(path)
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func reconcilePathCaseTx(ctx context.Context, tx *sql.Tx, item Item) error {
@@ -277,36 +325,11 @@ ORDER BY id`, item.LibraryID, item.ShowTitle, item.SeasonNumber, item.EpisodeNum
 		return err
 	}
 	defer rows.Close()
-	type candidate struct {
-		id   int64
-		path string
-	}
-	candidates := []candidate{}
-	for rows.Next() {
-		var c candidate
-		if err := rows.Scan(&c.id, &c.path); err != nil {
-			return err
-		}
-		candidates = append(candidates, c)
-	}
-	if err := rows.Err(); err != nil {
+	candidates, err := scanIdentityCandidates(rows)
+	if err != nil {
 		return err
 	}
-	if len(candidates) == 0 {
-		return reconcilePathCaseTx(ctx, tx, item)
-	}
-	keep := candidates[0]
-	for _, c := range candidates[1:] {
-		if err := mergeDuplicateItemTx(ctx, tx, keep.id, c.id); err != nil {
-			return err
-		}
-	}
-	if keep.path != item.Path {
-		if _, err := tx.ExecContext(ctx, `UPDATE media_items SET path = ? WHERE id = ?`, item.Path, keep.id); err != nil {
-			return err
-		}
-	}
-	return nil
+	return claimIdentityCandidatesTx(ctx, tx, item, candidates)
 }
 
 func mergeDuplicateItemTx(ctx context.Context, tx *sql.Tx, keepID, duplicateID int64) error {
@@ -725,33 +748,38 @@ func (s *Store) searchItems(ctx context.Context, opts SearchOptions) ([]Item, er
 	END,
 	sort_title, season_number, episode_number`
 	}
+	// nq is a relaxed, normalized form of the query (lowercased, punctuation and
+	// diacritics stripped) compared against searchnorm()-normalized columns so
+	// "Lets Dance" matches "Let's Dance". The empty-query guard still tests the
+	// raw query so a query that is only punctuation isn't treated as empty.
+	nq := database.SearchNormalize(q)
 	textWhere := `AND (
 	? = ''
-	OR title LIKE '%' || ? || '%'
-	OR sort_title LIKE '%' || ? || '%'
-	OR original_title LIKE '%' || ? || '%'
-	OR show_title LIKE '%' || ? || '%'
-	OR episode_title LIKE '%' || ? || '%'
-	OR overview LIKE '%' || ? || '%'
-	OR genres LIKE '%' || ? || '%'
+	OR searchnorm(title) LIKE '%' || ? || '%'
+	OR searchnorm(sort_title) LIKE '%' || ? || '%'
+	OR searchnorm(original_title) LIKE '%' || ? || '%'
+	OR searchnorm(show_title) LIKE '%' || ? || '%'
+	OR searchnorm(episode_title) LIKE '%' || ? || '%'
+	OR searchnorm(overview) LIKE '%' || ? || '%'
+	OR searchnorm(genres) LIKE '%' || ? || '%'
 	OR CAST(year AS TEXT) = ?
 	OR EXISTS (
 		SELECT 1 FROM media_actors ma
 		WHERE ma.scope = 'item'
 		AND ma.item_id = media_items.id
-		AND ma.name LIKE '%' || ? || '%'
+		AND searchnorm(ma.name) LIKE '%' || ? || '%'
 	)
 )`
-	textArgs := []any{q, q, q, q, q, q, q, q, q, q}
+	textArgs := []any{q, nq, nq, nq, nq, nq, nq, nq, q, nq}
 	if opts.TitleOnly {
 		textWhere = `AND (
 	? = ''
-	OR title LIKE '%' || ? || '%'
-	OR sort_title LIKE '%' || ? || '%'
-	OR original_title LIKE '%' || ? || '%'
+	OR searchnorm(title) LIKE '%' || ? || '%'
+	OR searchnorm(sort_title) LIKE '%' || ? || '%'
+	OR searchnorm(original_title) LIKE '%' || ? || '%'
 	OR CAST(year AS TEXT) = ?
 )`
-		textArgs = []any{q, q, q, q, q}
+		textArgs = []any{q, nq, nq, nq, q}
 	}
 	query := itemSelect + `
 FROM media_items
@@ -1138,6 +1166,7 @@ func (s *Store) ListShowsForUser(ctx context.Context, libraryID, q, genre, sort,
 func (s *Store) SearchShows(ctx context.Context, opts ShowOptions) ([]ShowSummary, error) {
 	libraryID := opts.LibraryID
 	q := opts.Query
+	nq := database.SearchNormalize(q)
 	genre := opts.Genre
 	genres := splitFilterList(genre)
 	genreWhere, genreArgs := showGenreFilterSQL(genres)
@@ -1235,12 +1264,12 @@ AND (
 )
 AND (
 	? = ''
-	OR mi.show_title LIKE '%' || ? || '%'
-	OR mi.original_title LIKE '%' || ? || '%'
-	OR ms.original_title LIKE '%' || ? || '%'
+	OR searchnorm(mi.show_title) LIKE '%' || ? || '%'
+	OR searchnorm(mi.original_title) LIKE '%' || ? || '%'
+	OR searchnorm(ms.original_title) LIKE '%' || ? || '%'
 	OR EXISTS (
 		SELECT 1 FROM media_actors ma
-		WHERE ma.name LIKE '%' || ? || '%'
+		WHERE searchnorm(ma.name) LIKE '%' || ? || '%'
 		AND (
 			(ma.scope = 'show' AND ma.library_id = mi.library_id AND ma.show_title = mi.show_title)
 			OR (ma.scope = 'season' AND ma.library_id = mi.library_id AND ma.show_title = mi.show_title)
@@ -1251,7 +1280,7 @@ AND (
 GROUP BY mi.library_id, mi.show_title
 HAVING (? <= 0 OR COALESCE(ms.rating, MAX(mi.rating), 0) >= ?)
 `+orderBy+`
-LIMIT ? OFFSET ?`, append(append([]any{libraryID, libraryID}, genreArgs...), seenStatus, seenStatus, userID, userID, seenStatus, userID, userID, seenStatus, userID, userID, userID, nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith, q, q, q, q, q, opts.MinRating, opts.MinRating, limit, offset)...)
+LIMIT ? OFFSET ?`, append(append([]any{libraryID, libraryID}, genreArgs...), seenStatus, seenStatus, userID, userID, seenStatus, userID, userID, seenStatus, userID, userID, userID, nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith, q, nq, nq, nq, nq, opts.MinRating, opts.MinRating, limit, offset)...)
 	if err != nil {
 		return nil, err
 	}

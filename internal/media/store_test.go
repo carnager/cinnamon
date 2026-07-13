@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -354,6 +355,42 @@ func TestSearchItemsFiltersNameStartsWith(t *testing.T) {
 	}
 }
 
+func TestSearchItemsRelaxesPunctuationAndDiacritics(t *testing.T) {
+	store, ctx := newTestStore(t)
+	dance := upsertTestItem(t, ctx, store, Item{
+		LibraryID: "movies",
+		Kind:      "movie",
+		Title:     "Let's Dance",
+		SortTitle: "lets dance",
+		Path:      "/media/movies/lets-dance.mkv",
+	})
+	amelie := upsertTestItem(t, ctx, store, Item{
+		LibraryID: "movies",
+		Kind:      "movie",
+		Title:     "Amélie",
+		SortTitle: "amelie",
+		Path:      "/media/movies/amelie.mkv",
+	})
+
+	for _, query := range []string{"Lets Dance", "let's dance", "  Lets   Dance "} {
+		items, err := store.SearchItems(ctx, SearchOptions{Query: query, Limit: 10})
+		if err != nil {
+			t.Fatalf("search %q: %v", query, err)
+		}
+		if len(items) != 1 || items[0].ID != dance.ID {
+			t.Fatalf("search %q returned %#v, want Let's Dance", query, items)
+		}
+	}
+
+	items, err := store.SearchItems(ctx, SearchOptions{Query: "Amelie", Limit: 10})
+	if err != nil {
+		t.Fatalf("search Amelie: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != amelie.ID {
+		t.Fatalf("search Amelie returned %#v, want Amélie", items)
+	}
+}
+
 func TestSearchItemsTitleOnlySkipsOverviewMatches(t *testing.T) {
 	store, ctx := newTestStore(t)
 	match := upsertTestItem(t, ctx, store, Item{
@@ -378,6 +415,71 @@ func TestSearchItemsTitleOnlySkipsOverviewMatches(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].ID != match.ID {
 		t.Fatalf("title-only search returned %#v, want only title match", items)
+	}
+}
+
+func TestUpsertEpisodeIdentityDoesNotStealLiveFile(t *testing.T) {
+	store, ctx := newTestStore(t)
+	dir := t.TempDir()
+	realPath := filepath.Join(dir, "Show - S01E01 - Real.mkv")
+	misfiledPath := filepath.Join(dir, "Other Show - S01E01 - Misfiled.mkv")
+	for _, path := range []string{realPath, misfiledPath} {
+		if err := os.WriteFile(path, []byte("video"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	real := episodeItem("Show", 1, 1)
+	real.Path = realPath
+	kept := upsertTestItem(t, ctx, store, real)
+
+	misfiled := episodeItem("Show", 1, 1)
+	misfiled.Path = misfiledPath
+	other := upsertTestItem(t, ctx, store, misfiled)
+
+	if other.ID == kept.ID {
+		t.Fatalf("misfiled file stole the row of a file that still exists (id %d)", kept.ID)
+	}
+	items, err := store.AllItems(ctx)
+	if err != nil {
+		t.Fatalf("list items: %v", err)
+	}
+	paths := map[string]bool{}
+	for _, item := range items {
+		paths[item.Path] = true
+	}
+	if !paths[realPath] || !paths[misfiledPath] {
+		t.Fatalf("expected rows for both existing files, got %#v", paths)
+	}
+}
+
+func TestUpsertEpisodeIdentityClaimsRenamedFile(t *testing.T) {
+	store, ctx := newTestStore(t)
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "Show - S01E01.mkv")
+	newPath := filepath.Join(dir, "Show - S01E01 - Pilot.mkv")
+	if err := os.WriteFile(newPath, []byte("video"), 0o644); err != nil {
+		t.Fatalf("write %s: %v", newPath, err)
+	}
+	original := episodeItem("Show", 1, 1)
+	original.Path = oldPath // never on disk: the file was renamed before this scan
+	row := upsertTestItem(t, ctx, store, original)
+	userID := insertTestUser(t, store, "viewer")
+	if _, err := store.SaveProgress(ctx, userID, row.ID, 60_000, 600_000, false); err != nil {
+		t.Fatalf("save progress: %v", err)
+	}
+
+	renamed := episodeItem("Show", 1, 1)
+	renamed.Path = newPath
+	claimed := upsertTestItem(t, ctx, store, renamed)
+	if claimed.ID != row.ID {
+		t.Fatalf("renamed file created row %d, want to claim row %d", claimed.ID, row.ID)
+	}
+	progress, err := store.Progress(ctx, userID, row.ID)
+	if err != nil {
+		t.Fatalf("read progress: %v", err)
+	}
+	if progress.PositionMS != 60_000 {
+		t.Fatalf("progress lost after rename: %#v", progress)
 	}
 }
 

@@ -744,6 +744,68 @@ func TestStoreWatchlistReturnsMoviesAndShows(t *testing.T) {
 	}
 }
 
+func TestPruneOrphanShowRowsKeepsLiveShows(t *testing.T) {
+	store, ctx := newTestStore(t)
+	if err := store.UpsertItems(ctx, []Item{{
+		LibraryID:      "tv_shows",
+		Path:           "/tv/Keeper (2020)/Season 1/Keeper - S01E01.mkv",
+		Kind:           "episode",
+		Title:          "Keeper - S01E01",
+		SortTitle:      "keeper s01e01",
+		ShowTitle:      "Keeper",
+		SeasonNumber:   1,
+		EpisodeNumber:  1,
+		MTimeUnix:      1000,
+		ShowMetadata:   &ShowMetadata{LibraryID: "tv_shows", Title: "Keeper", Actors: []Actor{{Name: "Jane Doe"}}},
+		SeasonMetadata: &SeasonMetadata{LibraryID: "tv_shows", ShowTitle: "Keeper", SeasonNumber: 1},
+	}, {
+		LibraryID:      "tv_shows",
+		Path:           "/tv/Ghost.Release-GROUP/Ghost.S01E01.mkv",
+		Kind:           "episode",
+		Title:          "Ghost - S01E01",
+		SortTitle:      "ghost s01e01",
+		ShowTitle:      "Ghost.Release-GROUP",
+		SeasonNumber:   1,
+		EpisodeNumber:  1,
+		MTimeUnix:      1000,
+		ShowMetadata:   &ShowMetadata{LibraryID: "tv_shows", Title: "Ghost.Release-GROUP", Actors: []Actor{{Name: "John Doe"}}},
+		SeasonMetadata: &SeasonMetadata{LibraryID: "tv_shows", ShowTitle: "Ghost.Release-GROUP", SeasonNumber: 1},
+	}}); err != nil {
+		t.Fatalf("upsert items: %v", err)
+	}
+
+	// The ghost release folder disappears; its episode row goes with it, and
+	// pruning must then drop the empty show/season/actor rows while leaving the
+	// live show untouched.
+	if err := store.RemovePaths(ctx, "tv_shows", []string{"/tv/Ghost.Release-GROUP/Ghost.S01E01.mkv"}); err != nil {
+		t.Fatalf("remove ghost episode: %v", err)
+	}
+	pruned, err := store.PruneOrphanShowRows(ctx, "tv_shows")
+	if err != nil {
+		t.Fatalf("prune orphan show rows: %v", err)
+	}
+	if pruned != 2 {
+		t.Fatalf("pruned = %d, want 2 (one show row, one season row)", pruned)
+	}
+
+	counts := map[string]string{
+		"shows":         `SELECT COUNT(*) FROM media_shows WHERE library_id = 'tv_shows'`,
+		"seasons":       `SELECT COUNT(*) FROM media_seasons WHERE library_id = 'tv_shows'`,
+		"show actors":   `SELECT COUNT(*) FROM media_actors WHERE scope = 'show'`,
+		"season actors": `SELECT COUNT(*) FROM media_actors WHERE scope = 'season'`,
+	}
+	want := map[string]int{"shows": 1, "seasons": 1, "show actors": 1, "season actors": 0}
+	for name, query := range counts {
+		var n int
+		if err := store.DB().QueryRow(query).Scan(&n); err != nil {
+			t.Fatalf("count %s: %v", name, err)
+		}
+		if n != want[name] {
+			t.Fatalf("%s = %d after prune, want %d", name, n, want[name])
+		}
+	}
+}
+
 func newTestStore(t *testing.T) (*Store, context.Context) {
 	t.Helper()
 	db, err := database.Open(filepath.Join(t.TempDir(), "popcorn.db"))

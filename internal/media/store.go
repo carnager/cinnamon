@@ -608,6 +608,60 @@ func (s *Store) RemovePathPrefix(ctx context.Context, libraryID, prefix string) 
 	return nil
 }
 
+// PruneOrphanShowRows deletes show- and season-level metadata rows (and their
+// actor links) that no longer have any episodes — e.g. a ghost show scanned
+// from a release folder that an external renamer has since moved away. It
+// returns the number of show and season rows removed.
+func (s *Store) PruneOrphanShowRows(ctx context.Context, libraryID string) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `
+DELETE FROM media_actors
+WHERE scope = 'show' AND library_id = ? AND NOT EXISTS (
+	SELECT 1 FROM media_items mi
+	WHERE mi.library_id = media_actors.library_id AND mi.show_title = media_actors.show_title
+)`, libraryID); err != nil {
+		return 0, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+DELETE FROM media_actors
+WHERE scope = 'season' AND library_id = ? AND NOT EXISTS (
+	SELECT 1 FROM media_items mi
+	WHERE mi.library_id = media_actors.library_id AND mi.show_title = media_actors.show_title
+	  AND COALESCE(mi.season_number, 0) = media_actors.season_number
+)`, libraryID); err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, `
+DELETE FROM media_shows
+WHERE library_id = ? AND NOT EXISTS (
+	SELECT 1 FROM media_items mi
+	WHERE mi.library_id = media_shows.library_id AND mi.show_title = media_shows.show_title
+)`, libraryID)
+	if err != nil {
+		return 0, err
+	}
+	shows, _ := res.RowsAffected()
+	res, err = tx.ExecContext(ctx, `
+DELETE FROM media_seasons
+WHERE library_id = ? AND NOT EXISTS (
+	SELECT 1 FROM media_items mi
+	WHERE mi.library_id = media_seasons.library_id AND mi.show_title = media_seasons.show_title
+	  AND COALESCE(mi.season_number, 0) = media_seasons.season_number
+)`, libraryID)
+	if err != nil {
+		return 0, err
+	}
+	seasons, _ := res.RowsAffected()
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return shows + seasons, nil
+}
+
 func (s *Store) ItemPathExists(ctx context.Context, libraryID, path string) (bool, error) {
 	var exists int
 	err := s.db.QueryRowContext(ctx, `

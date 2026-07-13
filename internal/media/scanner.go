@@ -173,6 +173,10 @@ func (s *Scanner) scanPaths(ctx context.Context, lib config.Library, paths []str
 	if err := flush(); err != nil {
 		return err
 	}
+	orphanShowRows, err := s.store.PruneOrphanShowRows(ctx, lib.ID)
+	if err != nil {
+		return err
+	}
 	finalStatus := ScanStatus{
 		LibraryID:     lib.ID,
 		StartedAt:     started,
@@ -193,6 +197,7 @@ func (s *Scanner) scanPaths(ctx context.Context, lib config.Library, paths []str
 		"itemsImported", finalStatus.ItemsImported,
 		"removedPrefixes", len(removed),
 		"prunedItems", len(pruned),
+		"orphanShowRows", orphanShowRows,
 		"errors", finalStatus.Errors,
 	)
 	return nil
@@ -281,7 +286,10 @@ func (s *Scanner) addScanFile(ctx context.Context, lib config.Library, path stri
 	if isLibraryRootFile(lib, path) {
 		return nil
 	}
-	if lib.Type == "movies" && isAuxiliaryVideo(path) {
+	if lib.Type == "tv" && isShowRootVideo(lib, path) {
+		return nil
+	}
+	if skipAuxiliaryVideo(lib, path) {
 		return nil
 	}
 	info, err := os.Stat(path)
@@ -321,6 +329,36 @@ func isLibraryRootFile(lib config.Library, path string) bool {
 		abs = filepath.Clean(path)
 	}
 	return filepath.Dir(abs) == filepath.Clean(lib.Path)
+}
+
+// isShowRootVideo reports whether path sits directly inside a first-level
+// folder of the library (library/Show/file.mkv). Episodes always live one
+// level deeper (library/Show/Season 1/file.mkv), so a video at this depth is a
+// release mid-import: a raw release folder dropped into the library root, or
+// files an external renamer has not yet moved into their season folder.
+// Importing it would create a ghost show that outlives the rename, so the
+// scanner never does — the move into the season folder triggers its own
+// notification the moment it lands.
+func isShowRootVideo(lib config.Library, path string) bool {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = filepath.Clean(path)
+	}
+	return filepath.Dir(filepath.Dir(abs)) == filepath.Clean(lib.Path)
+}
+
+// skipAuxiliaryVideo reports whether a video is a trailer/sample/extra that
+// must never become an item (e.g. a tvshow-trailer.mp4 next to the episodes).
+// TV files are only skipped when the name carries no SxxEyy marker, so an
+// episode legitimately titled e.g. "Extra Large Medium" survives.
+func skipAuxiliaryVideo(lib config.Library, path string) bool {
+	if !isAuxiliaryVideo(path) {
+		return false
+	}
+	if lib.Type == "movies" {
+		return true
+	}
+	return !episodePattern.MatchString(filepath.Base(path))
 }
 
 func (s *Scanner) scanFileChanged(lib config.Library, path string, info os.FileInfo, existing Item) bool {
@@ -466,7 +504,11 @@ func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
 			s.log.Debug("scan root-level file skipped", "library", lib.ID, "path", path)
 			return nil
 		}
-		if lib.Type == "movies" && isAuxiliaryVideo(path) {
+		if lib.Type == "tv" && isShowRootVideo(lib, path) {
+			s.log.Debug("scan show-root video skipped", "library", lib.ID, "path", path)
+			return nil
+		}
+		if skipAuxiliaryVideo(lib, path) {
 			s.log.Debug("scan auxiliary video skipped", "library", lib.ID, "path", path)
 			return nil
 		}
@@ -509,6 +551,12 @@ func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
 	err = walkErr
 	if err == nil {
 		err = s.store.RemoveMissing(ctx, lib.ID, seen)
+	}
+	if err == nil {
+		var orphanShowRows int64
+		if orphanShowRows, err = s.store.PruneOrphanShowRows(ctx, lib.ID); err == nil && orphanShowRows > 0 {
+			s.log.Info("scan pruned orphan show rows", "library", lib.ID, "rows", orphanShowRows)
+		}
 	}
 	if err == nil && backfillNeeded {
 		if markErr := s.store.MarkMetadataBackfillComplete(ctx, lib.ID, metadataBackfillNFOActors); markErr != nil {

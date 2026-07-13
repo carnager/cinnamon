@@ -411,6 +411,139 @@ func TestScanPathsIgnoresRootLevelFile(t *testing.T) {
 	}
 }
 
+func TestScanPathsIgnoresShowRootVideo(t *testing.T) {
+	store, ctx := newTestStore(t)
+	root := t.TempDir()
+	libDir := filepath.Join(root, "TV Shows")
+	releaseDir := filepath.Join(libDir, "Some.Show.S01.GERMAN.WEBRip.H264-GROUP")
+	mustMkdirAll(t, releaseDir)
+	flatVideo := filepath.Join(releaseDir, "Some.Show.S01E01.GERMAN.WEBRip.H264-GROUP.mkv")
+	mustWrite(t, flatVideo, "fake video")
+	mustChtimes(t, flatVideo, 1000)
+
+	scanner := NewScanner(config.Config{FFprobePath: "ffprobe"}, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	lib := config.Library{ID: "tv_shows", Type: "tv", Path: libDir}
+
+	// A raw release folder dropped into the library root holds its episodes
+	// directly (library/Release.Name/file.mkv). The renamer will move them into
+	// Show/Season folders shortly, so the scanner must not import this state.
+	if err := scanner.ScanPaths(ctx, lib, []string{releaseDir}); err != nil {
+		t.Fatalf("scan release dir: %v", err)
+	}
+	items, err := store.AllItems(ctx)
+	if err != nil {
+		t.Fatalf("list items: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("items = %#v, want none (show-root video ignored)", items)
+	}
+
+	// The renamer moves the file into its final season folder; the very next
+	// scoped scan imports it.
+	showDir := filepath.Join(libDir, "Some Show (2019)")
+	seasonDir := filepath.Join(showDir, "Season 1")
+	mustMkdirAll(t, seasonDir)
+	final := filepath.Join(seasonDir, "Some Show - S01E01 - Pilot.mkv")
+	if err := os.Rename(flatVideo, final); err != nil {
+		t.Fatalf("rename into season folder: %v", err)
+	}
+	if err := os.RemoveAll(releaseDir); err != nil {
+		t.Fatalf("remove release dir: %v", err)
+	}
+	mustChtimes(t, final, 1000)
+	if err := scanner.ScanPaths(ctx, lib, []string{showDir, releaseDir}); err != nil {
+		t.Fatalf("scan show dir: %v", err)
+	}
+	items, err = store.AllItems(ctx)
+	if err != nil {
+		t.Fatalf("list items: %v", err)
+	}
+	if len(items) != 1 || items[0].Path != final {
+		t.Fatalf("items = %#v, want only the season-folder episode", items)
+	}
+}
+
+func TestScanPathsPrunesFlatEpisodeAndOrphanShowRow(t *testing.T) {
+	store, ctx := newTestStore(t)
+	root := t.TempDir()
+	libDir := filepath.Join(root, "TV Shows")
+	showDir := filepath.Join(libDir, "Ghost Show")
+	mustMkdirAll(t, showDir)
+	video := filepath.Join(showDir, "Ghost.Show.S01E01.mkv")
+	mustWrite(t, video, "fake video")
+	mustChtimes(t, video, 1000)
+	info := mustStat(t, video)
+
+	// A leftover from before the show-root rule: the flat file was imported and
+	// got show/season metadata rows. Scanning its directory must drop the item
+	// (the file is skipped, hence no longer seen) and the now-empty show and
+	// season rows with it.
+	if err := store.UpsertItems(ctx, []Item{{
+		LibraryID:      "tv_shows",
+		Path:           video,
+		Kind:           "episode",
+		Title:          "Ghost Show - S01E01",
+		SortTitle:      "ghost show s01e01",
+		ShowTitle:      "Ghost Show",
+		SeasonNumber:   1,
+		EpisodeNumber:  1,
+		SizeBytes:      info.Size(),
+		MTimeUnix:      info.ModTime().Unix(),
+		StreamsKnown:   true,
+		ShowMetadata:   &ShowMetadata{LibraryID: "tv_shows", Title: "Ghost Show"},
+		SeasonMetadata: &SeasonMetadata{LibraryID: "tv_shows", ShowTitle: "Ghost Show", SeasonNumber: 1},
+	}}); err != nil {
+		t.Fatalf("upsert flat episode: %v", err)
+	}
+
+	scanner := NewScanner(config.Config{FFprobePath: "ffprobe"}, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := scanner.ScanPaths(ctx, config.Library{ID: "tv_shows", Type: "tv", Path: libDir}, []string{showDir}); err != nil {
+		t.Fatalf("scan show dir: %v", err)
+	}
+
+	items, err := store.AllItems(ctx)
+	if err != nil {
+		t.Fatalf("list items: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("items = %#v, want flat episode pruned", items)
+	}
+	var showRows, seasonRows int
+	if err := store.DB().QueryRow(`SELECT COUNT(*) FROM media_shows WHERE show_title = 'Ghost Show'`).Scan(&showRows); err != nil {
+		t.Fatalf("count show rows: %v", err)
+	}
+	if err := store.DB().QueryRow(`SELECT COUNT(*) FROM media_seasons WHERE show_title = 'Ghost Show'`).Scan(&seasonRows); err != nil {
+		t.Fatalf("count season rows: %v", err)
+	}
+	if showRows != 0 || seasonRows != 0 {
+		t.Fatalf("show rows = %d, season rows = %d, want orphaned metadata pruned", showRows, seasonRows)
+	}
+}
+
+func TestSkipAuxiliaryVideo(t *testing.T) {
+	movies := config.Library{ID: "movies", Type: "movies", Path: "/lib/movies"}
+	tv := config.Library{ID: "tv_shows", Type: "tv", Path: "/lib/tv"}
+	cases := []struct {
+		lib  config.Library
+		path string
+		want bool
+	}{
+		{movies, "/lib/movies/Hoppers/Hoppers-trailer.mkv", true},
+		{movies, "/lib/movies/Hoppers/Hoppers.mkv", false},
+		{tv, "/lib/tv/Mr. Inbetween (2018)/tvshow-trailer.mp4", true},
+		{tv, "/lib/tv/Show/Season 1/sample.mkv", true},
+		// Anything carrying an SxxEyy marker is a real episode, even when its
+		// title happens to contain an auxiliary word.
+		{tv, "/lib/tv/Show/Season 1/Show - S01E03 - Sample.mkv", false},
+		{tv, "/lib/tv/Family Guy (1999)/Season 08/Family Guy - S08E12 - Extra Large Medium.avi", false},
+	}
+	for _, tc := range cases {
+		if got := skipAuxiliaryVideo(tc.lib, tc.path); got != tc.want {
+			t.Errorf("skipAuxiliaryVideo(%s, %q) = %v, want %v", tc.lib.Type, tc.path, got, tc.want)
+		}
+	}
+}
+
 func mustMkdirAll(t *testing.T, path string) {
 	t.Helper()
 	if err := os.MkdirAll(path, 0o755); err != nil {

@@ -61,25 +61,46 @@ func main() {
 		log.Info("watching", "root", root, "directories", n)
 	}
 
-	pending := map[string]struct{}{}
+	// Debounce per target path, not globally: a single global timer that
+	// resets on every event never fires while anything on the datasets is
+	// busy (e.g. a download writing chunks), starving notifications for
+	// unrelated directories. Each target flushes once IT has been quiet for
+	// the debounce window — so a directory receiving a slow copy is not
+	// announced until the copy finishes, while everything else flushes on
+	// time.
+	pending := map[string]time.Time{}
 	var mu sync.Mutex
-	timer := time.NewTimer(time.Hour)
-	timer.Stop()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 
-	flush := func() {
+	flushDue := func() {
+		now := time.Now()
 		mu.Lock()
-		if len(pending) == 0 {
-			mu.Unlock()
+		var due []string
+		var paths []string
+		for p, lastEvent := range pending {
+			if now.Sub(lastEvent) >= *debounce {
+				due = append(due, p)
+				paths = append(paths, remapPath(p, maps))
+				delete(pending, p)
+			}
+		}
+		mu.Unlock()
+		if len(paths) == 0 {
 			return
 		}
-		paths := make([]string, 0, len(pending))
-		for p := range pending {
-			paths = append(paths, remapPath(p, maps))
-		}
-		pending = map[string]struct{}{}
-		mu.Unlock()
 		if err := c.notify(paths); err != nil {
-			log.Warn("notify failed", "paths", len(paths), "error", err)
+			// Keep the paths pending so a transient failure (server restart,
+			// expired token, network blip) delays the notification instead of
+			// silently losing it.
+			log.Warn("notify failed, will retry", "paths", len(paths), "error", err)
+			mu.Lock()
+			for _, p := range due {
+				if _, ok := pending[p]; !ok {
+					pending[p] = time.Now()
+				}
+			}
+			mu.Unlock()
 		} else {
 			log.Info("notified scan", "paths", len(paths))
 		}
@@ -106,11 +127,10 @@ func main() {
 				continue
 			}
 			mu.Lock()
-			pending[target] = struct{}{}
+			pending[target] = time.Now()
 			mu.Unlock()
-			timer.Reset(*debounce)
-		case <-timer.C:
-			flush()
+		case <-ticker.C:
+			flushDue()
 		case err, ok := <-w.Errors:
 			if !ok {
 				return

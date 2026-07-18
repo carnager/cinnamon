@@ -383,6 +383,37 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         }
     }
 
+    fun setItemWatched(item: PopItem, watched: Boolean) {
+        scope.launch {
+            runCatching {
+                if (watched) api.markItemWatched(item) else api.unmarkItemWatched(item.id)
+            }.onSuccess {
+                completedItems = if (watched) completedItems + item.id else completedItems - item.id
+                refreshMarkers()
+            }.onFailure { reportError(it, "Could not update seen state") }
+        }
+    }
+
+    fun setShowWatched(show: ShowSummary, watched: Boolean) {
+        scope.launch {
+            runCatching {
+                if (watched) api.markShowWatched(show.libraryId, show.title) else api.unmarkShowWatched(show.libraryId, show.title)
+            }.onSuccess {
+                completedShows = if (watched) completedShows + showKey(show) else completedShows - showKey(show)
+                refreshMarkers()
+            }.onFailure { reportError(it, "Could not update seen state") }
+        }
+    }
+
+    fun setSeasonWatched(show: ShowSummary, season: Int, watched: Boolean) {
+        scope.launch {
+            runCatching {
+                if (watched) api.markSeasonWatched(show.libraryId, show.title, season) else api.unmarkSeasonWatched(show.libraryId, show.title, season)
+            }.onSuccess { refreshMarkers() }
+                .onFailure { reportError(it, "Could not update seen state") }
+        }
+    }
+
     suspend fun refreshDevices(selectIfNeeded: Boolean = true) {
         val loaded = uniquePlaybackDevices(api.devices())
         devices = loaded
@@ -1047,14 +1078,26 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 onNext = { loadShows(showPage + 1) },
                                 onShow = ::openShow,
                             )
-                            is Page.Show -> SeasonList(session, current.show, seasons, onBack = ::goBack, onSeason = { openSeason(current.show, it) })
-                            is Page.Season -> EpisodeList(session, current.show, current.season, episodes, completedItems, watchlistItems, onBack = ::goBack, onOpen = ::openDetail)
+                            is Page.Show -> SeasonList(
+                                session,
+                                current.show,
+                                seasons,
+                                completedItems,
+                                showWatched = completedShows.contains(showKey(current.show)),
+                                onBack = ::goBack,
+                                onSeason = { openSeason(current.show, it) },
+                                onSetShowWatched = { setShowWatched(current.show, it) },
+                                onSetSeasonWatched = { season, watched -> setSeasonWatched(current.show, season.seasonNumber, watched) },
+                            )
+                            is Page.Season -> EpisodeList(session, current.show, current.season, episodes, completedItems, watchlistItems, onBack = ::goBack, onOpen = ::openDetail, onSetWatched = ::setItemWatched)
                             is Page.Detail -> DetailPage(
                                 session,
                                 api,
                                 current.item,
                                 playbackTarget = playbackTarget,
                                 selectedDeviceName = selectedDevice?.name,
+                                watched = completedItems.contains(current.item.id),
+                                onSetWatched = { setItemWatched(current.item, it) },
                                 onBack = ::goBack,
                                 onPlay = { item, audio, subtitle -> play(item.id, audio, subtitle) },
                                 onPlayLocal = ::playLocally,

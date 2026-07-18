@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -24,6 +25,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
@@ -152,10 +154,27 @@ fun ShowGrid(title: String, session: Session, shows: List<ShowSummary>, complete
 }
 
 @Composable
-fun SeasonList(session: Session, show: ShowSummary, seasons: List<SeasonSummary>, onBack: () -> Unit, onSeason: (SeasonSummary) -> Unit) {
+fun SeasonList(
+    session: Session,
+    show: ShowSummary,
+    seasons: List<SeasonSummary>,
+    completedItems: Set<Long>,
+    showWatched: Boolean,
+    onBack: () -> Unit,
+    onSeason: (SeasonSummary) -> Unit,
+    onSetShowWatched: (Boolean) -> Unit,
+    onSetSeasonWatched: (SeasonSummary, Boolean) -> Unit,
+) {
     var actors by remember(show.libraryId, show.title) { mutableStateOf<List<Actor>>(emptyList()) }
+    var allEpisodes by remember(show.libraryId, show.title) { mutableStateOf<List<PopItem>>(emptyList()) }
     LaunchedEffect(show.libraryId, show.title) {
         actors = runCatching { Api(session).showActors(show.libraryId, show.title) }.getOrDefault(emptyList())
+        allEpisodes = runCatching { Api(session).episodes(show.libraryId, show.title, -1) }.getOrDefault(emptyList())
+    }
+    val watchedSeasons = remember(allEpisodes, completedItems) {
+        allEpisodes.groupBy { it.seasonNumber }
+            .filterValues { eps -> eps.all { completedItems.contains(it.id) } }
+            .keys
     }
     LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { ShowHero(session, show, onBack) }
@@ -173,8 +192,22 @@ fun SeasonList(session: Session, show: ShowSummary, seasons: List<SeasonSummary>
         if (actors.isNotEmpty()) {
             item { CastStrip(session, actors) }
         }
+        item {
+            OutlinedButton(
+                onClick = { onSetShowWatched(!showWatched) },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Text(
+                    if (showWatched) "✓  Seen — tap to unmark" else "Mark show as seen",
+                    color = if (showWatched) Accent else TextColor,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
         item { Text("Seasons", color = TextColor, fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 12.dp)) }
         items(seasons, key = { it.seasonNumber }) { season ->
+            val seasonWatched = watchedSeasons.contains(season.seasonNumber)
             Row(Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Surface1).clickable { onSeason(season) }.padding(10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                 PosterImage(session, imageUrl(session, season.posterItemId, season.posterMtimeUnix), Modifier.width(72.dp))
                 Column(Modifier.weight(1f)) {
@@ -182,8 +215,24 @@ fun SeasonList(session: Session, show: ShowSummary, seasons: List<SeasonSummary>
                     Text("${season.episodeCount} episodes", color = Muted, fontSize = 12.sp)
                     if (season.overview.isNotBlank()) Text(season.overview, color = Muted, fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
+                SeenToggle(seasonWatched, onToggle = { onSetSeasonWatched(season, !seasonWatched) })
             }
         }
+    }
+}
+
+// Small round check button used to mark seasons/episodes seen without opening them.
+@Composable
+fun SeenToggle(watched: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .size(34.dp)
+            .clip(CircleShape)
+            .background(if (watched) Accent else Surface2)
+            .clickable(onClick = onToggle),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("✓", color = if (watched) Color.Black else Muted, fontWeight = FontWeight.Black, fontSize = 15.sp)
     }
 }
 
@@ -235,17 +284,18 @@ fun ShowHero(session: Session, show: ShowSummary, onBack: () -> Unit) {
 }
 
 @Composable
-fun EpisodeList(session: Session, show: ShowSummary, season: SeasonSummary, episodes: List<PopItem>, completedItems: Set<Long>, watchlistItems: Set<Long>, onBack: () -> Unit, onOpen: (PopItem) -> Unit) {
+fun EpisodeList(session: Session, show: ShowSummary, season: SeasonSummary, episodes: List<PopItem>, completedItems: Set<Long>, watchlistItems: Set<Long>, onBack: () -> Unit, onOpen: (PopItem) -> Unit, onSetWatched: (PopItem, Boolean) -> Unit) {
     LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { HeaderBack("${show.title} \u00b7 ${season.title.ifBlank { "Season ${season.seasonNumber}" }}", onBack) }
         items(episodes, key = { it.id }) { episode ->
-            EpisodeCard(session, episode, watched = completedItems.contains(episode.id), watchlisted = watchlistItems.contains(episode.id), onOpen = { onOpen(episode) })
+            val watched = completedItems.contains(episode.id)
+            EpisodeCard(session, episode, watched = watched, watchlisted = watchlistItems.contains(episode.id), onOpen = { onOpen(episode) }, onToggleWatched = { onSetWatched(episode, !watched) })
         }
     }
 }
 
 @Composable
-fun EpisodeCard(session: Session, episode: PopItem, watched: Boolean, watchlisted: Boolean, onOpen: () -> Unit) {
+fun EpisodeCard(session: Session, episode: PopItem, watched: Boolean, watchlisted: Boolean, onOpen: () -> Unit, onToggleWatched: (() -> Unit)? = null) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -274,6 +324,9 @@ fun EpisodeCard(session: Session, episode: PopItem, watched: Boolean, watchliste
             if (episode.overview.isNotBlank()) {
                 Text(episode.overview, color = Muted, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
+        }
+        if (onToggleWatched != null) {
+            SeenToggle(watched, onToggle = onToggleWatched, modifier = Modifier.align(Alignment.CenterVertically))
         }
     }
 }

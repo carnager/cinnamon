@@ -58,6 +58,8 @@ fun DetailPage(
     item: PopItem,
     playbackTarget: PlaybackTarget,
     selectedDeviceName: String?,
+    watched: Boolean,
+    onSetWatched: (Boolean) -> Unit,
     onBack: () -> Unit,
     onPlay: (PopItem, Int?, Int?) -> Unit,
     onPlayLocal: (PopItem, Int?, Int?) -> Unit,
@@ -114,6 +116,19 @@ fun DetailPage(
                 shape = RoundedCornerShape(14.dp),
             ) {
                 Text("▶  Trailer", color = TextColor, fontWeight = FontWeight.Bold)
+            }
+        }
+        item {
+            OutlinedButton(
+                onClick = { onSetWatched(!watched) },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Text(
+                    if (watched) "✓  Seen — tap to unmark" else "Mark as seen",
+                    color = if (watched) Accent else TextColor,
+                    fontWeight = FontWeight.Bold,
+                )
             }
         }
         if (item.overview.isNotBlank()) {

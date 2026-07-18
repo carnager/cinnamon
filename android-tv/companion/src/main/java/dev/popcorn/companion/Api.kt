@@ -339,6 +339,40 @@ class Api(private val session: Session) {
         )
     }
 
+    suspend fun markItemWatched(item: PopItem) = withContext(Dispatchers.IO) {
+        val duration = if (item.durationMs > 0) item.durationMs else 1L
+        request(
+            "/api/items/${item.id}/progress",
+            "PUT",
+            JSONObject()
+                .put("positionMs", duration)
+                .put("durationMs", duration)
+                .put("completed", true)
+                .put("state", "manual")
+                .toString(),
+        )
+    }
+
+    suspend fun unmarkItemWatched(itemId: Long) = withContext(Dispatchers.IO) {
+        requestText("/api/items/$itemId/progress", "DELETE", null)
+    }
+
+    suspend fun markShowWatched(libraryId: String, showTitle: String) = withContext(Dispatchers.IO) {
+        request("/api/progress/tv?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}", "PUT", "{}")
+    }
+
+    suspend fun unmarkShowWatched(libraryId: String, showTitle: String) = withContext(Dispatchers.IO) {
+        requestText("/api/progress/tv?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}", "DELETE", null)
+    }
+
+    suspend fun markSeasonWatched(libraryId: String, showTitle: String, season: Int) = withContext(Dispatchers.IO) {
+        request("/api/progress/tv/season?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}&season=$season", "PUT", "{}")
+    }
+
+    suspend fun unmarkSeasonWatched(libraryId: String, showTitle: String, season: Int) = withContext(Dispatchers.IO) {
+        requestText("/api/progress/tv/season?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}&season=$season", "DELETE", null)
+    }
+
     suspend fun stopHls(sessionId: String) = withContext(Dispatchers.IO) {
         requestText("/api/hls/${enc(sessionId)}", "DELETE", null)
     }

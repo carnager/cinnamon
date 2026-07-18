@@ -649,6 +649,9 @@ fun PlayerScreen(
     DisposableEffect(Unit) {
         PlayerBackBridge.handler = { event ->
             when {
+                // The native track menu owns all keys while open; let events reach
+                // its view listeners so BACK closes the menu, not the player.
+                playerView.findViewWithTag<View>(NativeTrackMenuTag) != null -> false
                 isBackKey(event.keyCode) && event.action == AndroidKeyEvent.ACTION_DOWN -> {
                     logClient("player-back-dispatch", event)
                     exitPlayer()
@@ -663,6 +666,7 @@ fun PlayerScreen(
         }
         PlayerOsdBridge.handler = { event ->
             when {
+                playerView.findViewWithTag<View>(NativeTrackMenuTag) != null -> false
                 isBackKey(event.keyCode) && event.action == AndroidKeyEvent.ACTION_DOWN -> {
                     logClient("player-osd-back", event)
                     exitPlayer()

@@ -48,6 +48,10 @@ type App struct {
 	loginFails  map[string]loginAttempt
 	cache       responseCache
 	cacheGen    atomic.Uint64
+
+	scopedMu      sync.Mutex
+	scopedPending map[string]map[string]bool
+	scopedRunning map[string]bool
 }
 
 type responseCache struct {
@@ -82,6 +86,9 @@ func New(opts Options) *App {
 		failHints:   map[string]time.Time{},
 		loginFails:  map[string]loginAttempt{},
 		cache:       responseCache{entries: map[string]cachedResponse{}},
+
+		scopedPending: map[string]map[string]bool{},
+		scopedRunning: map[string]bool{},
 	}
 	app.cleanHLSScratch()
 	app.cleanThumbCache()

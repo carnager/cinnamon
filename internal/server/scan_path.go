@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,10 +45,72 @@ func (a *App) scanPath(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for id, paths := range byLib {
-		lib := libByID[id]
-		go a.runScopedScan(lib, paths)
+		a.enqueueScopedScan(libByID[id], paths)
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// enqueueScopedScan hands paths to the per-library scan worker. Notifications
+// are queued in a pending set and never dropped: a single worker per library
+// drains the set in batches, so a burst of notifications coalesces into a few
+// scans instead of a herd of goroutines racing for the scan lease — where
+// starved ones used to give up after a minute and silently lose their paths
+// (a freshly imported show then simply never appeared).
+func (a *App) enqueueScopedScan(lib config.Library, paths []string) {
+	a.scopedMu.Lock()
+	set := a.scopedPending[lib.ID]
+	if set == nil {
+		set = map[string]bool{}
+		a.scopedPending[lib.ID] = set
+	}
+	for _, p := range paths {
+		set[p] = true
+	}
+	start := !a.scopedRunning[lib.ID]
+	if start {
+		a.scopedRunning[lib.ID] = true
+	}
+	a.scopedMu.Unlock()
+	if start {
+		go a.scopedScanWorker(lib)
+	}
+}
+
+func (a *App) scopedScanWorker(lib config.Library) {
+	for {
+		a.scopedMu.Lock()
+		set := a.scopedPending[lib.ID]
+		if len(set) == 0 {
+			a.scopedRunning[lib.ID] = false
+			a.scopedMu.Unlock()
+			return
+		}
+		delete(a.scopedPending, lib.ID)
+		a.scopedMu.Unlock()
+		paths := make([]string, 0, len(set))
+		for p := range set {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		if !a.runScopedScan(lib, paths) {
+			// Lease stayed busy through the whole wait; put the paths back and
+			// keep trying. They stay pending until a scan actually covers them.
+			a.enqueueScopedScanLocked(lib, paths)
+		}
+	}
+}
+
+func (a *App) enqueueScopedScanLocked(lib config.Library, paths []string) {
+	a.scopedMu.Lock()
+	set := a.scopedPending[lib.ID]
+	if set == nil {
+		set = map[string]bool{}
+		a.scopedPending[lib.ID] = set
+	}
+	for _, p := range paths {
+		set[p] = true
+	}
+	a.scopedMu.Unlock()
 }
 
 // libraryForPath maps an absolute path to the library that contains it, picking
@@ -76,10 +139,11 @@ func (a *App) libraryForPath(p string) (config.Library, string, bool) {
 	return best, abs, bestLen >= 0
 }
 
-func (a *App) runScopedScan(lib config.Library, paths []string) {
+// runScopedScan runs one batched scan, waiting out a busy scan lease (a
+// manual full scan can hold it for a while). Returns false when the lease
+// stayed busy for the whole wait so the caller can requeue the paths.
+func (a *App) runScopedScan(lib config.Library, paths []string) bool {
 	scanner := media.NewScanner(a.cfg, a.store, a.log)
-	// A manual full scan holds the global scan lease; wait it out rather than
-	// dropping the notification.
 	for attempt := 0; attempt < 30; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.ScanTimeout)
 		err := scanner.ScanPaths(ctx, lib, paths)
@@ -94,7 +158,8 @@ func (a *App) runScopedScan(lib config.Library, paths []string) {
 			a.log.Info("scoped scan finished", "library", lib.ID, "paths", len(paths))
 		}
 		a.invalidateResponseCache()
-		return
+		return true
 	}
-	a.log.Warn("scoped scan skipped: scan stayed busy", "library", lib.ID, "paths", len(paths))
+	a.log.Warn("scan lease stayed busy, requeueing scoped scan", "library", lib.ID, "paths", len(paths))
+	return false
 }

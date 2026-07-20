@@ -1254,6 +1254,7 @@ private fun heroPicks(
 private fun HomeHero(
     session: Session?,
     picks: List<HeroPick>,
+    autoFocus: Boolean,
     onItem: (PopItem) -> Unit,
     onShow: (ShowSummary) -> Unit,
     onContentFocus: (FocusRequester) -> Unit,
@@ -1261,6 +1262,12 @@ private fun HomeHero(
     var index by remember(picks) { mutableStateOf(0) }
     var focused by remember { mutableStateOf(false) }
     val requester = remember { FocusRequester() }
+    LaunchedEffect(autoFocus) {
+        if (autoFocus) {
+            delay(200)
+            runCatching { requester.requestFocus() }
+        }
+    }
     LaunchedEffect(picks) {
         while (picks.size > 1) {
             delay(12_000)
@@ -1352,8 +1359,12 @@ fun CuratedLanding(
         EmptyState("No media found")
         return
     }
+    val heroEntries = remember(movies, shows, completedItems, completedShows, continueMovies, continueEpisodes, recentMovies, recentShows, watchlistMovies, watchlistTvShows) {
+        heroPicks(movies, shows, completedItems, completedShows, continueMovies, continueEpisodes, recentMovies, recentShows, watchlistMovies, watchlistTvShows)
+    }
     var initialFocusPending by remember { mutableStateOf(true) }
     val initialFocusTarget = when {
+        heroEntries.isNotEmpty() -> "hero"
         continueMovies.isNotEmpty() -> "continueMovies"
         continueEpisodes.isNotEmpty() -> "continueEpisodes"
         recentMovies.isNotEmpty() -> "recentMovies"
@@ -1369,10 +1380,6 @@ fun CuratedLanding(
         }
     }
 
-    val heroEntries = remember(movies, shows, completedItems, completedShows, continueMovies, continueEpisodes, recentMovies, recentShows, watchlistMovies, watchlistTvShows) {
-        heroPicks(movies, shows, completedItems, completedShows, continueMovies, continueEpisodes, recentMovies, recentShows, watchlistMovies, watchlistTvShows)
-    }
-
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 30.dp),
@@ -1382,7 +1389,17 @@ fun CuratedLanding(
             if (heroEntries.isEmpty()) {
                 BrowserHeader("Home", "${movies.size} movies \u00b7 ${shows.size} shows loaded")
             } else {
-                HomeHero(session, heroEntries, onItem, onShow, onContentFocus)
+                HomeHero(
+                    session = session,
+                    picks = heroEntries,
+                    autoFocus = initialFocusPending && initialFocusTarget == "hero",
+                    onItem = onItem,
+                    onShow = onShow,
+                    onContentFocus = { requester ->
+                        if (initialFocusTarget == "hero") initialFocusPending = false
+                        onContentFocus(requester)
+                    },
+                )
             }
         }
         if (continueMovies.isNotEmpty()) {

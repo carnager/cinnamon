@@ -37,6 +37,7 @@ scanOnStart = false
 autoScan = false
 autoScanDebounce = "5s"
 scanTimeout = "12m"
+reconcileInterval = "45m"
 
 [[libraries]]
 id = " movies "
@@ -63,6 +64,9 @@ type = ""
 	}
 	if cfg.ScanTimeout != 12*time.Minute {
 		t.Fatalf("scan timeout = %s, want 12m", cfg.ScanTimeout)
+	}
+	if cfg.ReconcileInterval != 45*time.Minute {
+		t.Fatalf("reconcile interval = %s, want 45m from config", cfg.ReconcileInterval)
 	}
 	if cfg.AutoScan {
 		t.Fatalf("autoScan = true, want false from config")
@@ -201,4 +205,21 @@ func writeJSONConfig(t *testing.T, body string) string {
 		t.Fatalf("write config: %v", err)
 	}
 	return path
+}
+
+func TestReconcileIntervalDefaultsOn(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	cfg, err := Load(writeTOMLConfig(t, `
+[[libraries]]
+id = "movies"
+name = "Movies"
+path = "/media/movies"
+type = "movies"
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ReconcileInterval != time.Hour {
+		t.Fatalf("default reconcile interval = %s, want 1h", cfg.ReconcileInterval)
+	}
 }

@@ -46,6 +46,23 @@ func (a *AutoScanner) Run(ctx context.Context) {
 		a.primeBaseline()
 	}
 	if !a.cfg.AutoScan {
+		// Event-driven imports (popcorn-watch) are the fast path, but any
+		// dropped notification used to mean the media never appeared at all.
+		// A slow reconciliation sweep guarantees the library converges even
+		// when an event is lost anywhere in the pipeline.
+		if a.cfg.ReconcileInterval > 0 {
+			a.log.Info("auto scan disabled; reconciliation sweeps enabled", "interval", a.cfg.ReconcileInterval)
+			ticker := time.NewTicker(a.cfg.ReconcileInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					a.scanChanged(ctx)
+				}
+			}
+		}
 		a.log.Info("auto scan disabled; use manual library update")
 		<-ctx.Done()
 		return

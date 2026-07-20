@@ -16,6 +16,10 @@ autoScanDebounce = "3s"
 autoScanInterval = "6h"
 autoScanWatchDepth = 0
 scanTimeout = "30m"
+# Safety net: even with autoScan off (e.g. popcorn-watch drives imports), a
+# cheap mtime-diff sweep runs at this interval so anything a lost event missed
+# still appears. "0s" disables it.
+reconcileInterval = "1h"
 
 # Optional static Android self-update support for deployments where the server
 # can read APK files from local paths. For normal use, upload release APKs from

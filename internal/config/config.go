@@ -42,6 +42,7 @@ type Config struct {
 	AutoScanInterval   time.Duration `json:"-"`
 	AutoScanWatchDepth int           `json:"autoScanWatchDepth" toml:"autoScanWatchDepth"`
 	ScanTimeout        time.Duration `json:"-"`
+	ReconcileInterval  time.Duration `json:"-"`
 }
 
 type Library struct {
@@ -84,6 +85,7 @@ type diskConfig struct {
 	AutoScanInterval   string    `json:"autoScanInterval" toml:"autoScanInterval"`
 	AutoScanWatchDepth *int      `json:"autoScanWatchDepth" toml:"autoScanWatchDepth"`
 	ScanTimeout        string    `json:"scanTimeout" toml:"scanTimeout"`
+	ReconcileInterval  string    `json:"reconcileInterval" toml:"reconcileInterval"`
 }
 
 func Load(path string) (Config, error) {
@@ -156,6 +158,7 @@ func defaults() Config {
 		AutoScanInterval:   30 * time.Second,
 		AutoScanWatchDepth: 0,
 		ScanTimeout:        30 * time.Minute,
+		ReconcileInterval:  time.Hour,
 	}
 }
 
@@ -248,6 +251,11 @@ func merge(cfg *Config, raw diskConfig) {
 	if raw.ScanTimeout != "" {
 		if d, err := time.ParseDuration(raw.ScanTimeout); err == nil {
 			cfg.ScanTimeout = d
+		}
+	}
+	if raw.ReconcileInterval != "" {
+		if d, err := time.ParseDuration(raw.ReconcileInterval); err == nil {
+			cfg.ReconcileInterval = d
 		}
 	}
 }

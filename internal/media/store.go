@@ -23,6 +23,7 @@ type SearchOptions struct {
 	LibraryID      string
 	Kind           string
 	Genre          string
+	Decades        string
 	Sort           string
 	SeenStatus     string
 	UserID         int64
@@ -37,6 +38,7 @@ type ShowOptions struct {
 	Query          string
 	LibraryID      string
 	Genre          string
+	Decades        string
 	Sort           string
 	SeenStatus     string
 	UserID         int64
@@ -50,6 +52,7 @@ type AlphabetOptions struct {
 	LibraryID string
 	Kind      string
 	Genre     string
+	Decades   string
 }
 
 func NewStore(db *sql.DB) *Store {
@@ -679,17 +682,17 @@ LIMIT 1`, libraryID, path).Scan(&exists)
 }
 
 func (s *Store) ListItems(ctx context.Context, libraryID, q, genre, sort string, minRating float64, limit, offset int) ([]Item, error) {
-	return s.ListItemsForUser(ctx, libraryID, q, genre, sort, "", 0, minRating, limit, offset)
+	return s.ListItemsForUser(ctx, libraryID, q, genre, "", sort, "", 0, minRating, limit, offset)
 }
 
-func (s *Store) ListItemsForUser(ctx context.Context, libraryID, q, genre, sort, seenStatus string, userID int64, minRating float64, limit, offset int) ([]Item, error) {
+func (s *Store) ListItemsForUser(ctx context.Context, libraryID, q, genre, decades, sort, seenStatus string, userID int64, minRating float64, limit, offset int) ([]Item, error) {
 	if limit <= 0 {
 		limit = 250
 	}
 	if limit > 2000 {
 		limit = 2000
 	}
-	return s.searchItems(ctx, SearchOptions{Query: q, LibraryID: libraryID, Genre: genre, Sort: sort, SeenStatus: seenStatus, UserID: userID, MinRating: minRating, Limit: limit, Offset: offset})
+	return s.searchItems(ctx, SearchOptions{Query: q, LibraryID: libraryID, Genre: genre, Decades: decades, Sort: sort, SeenStatus: seenStatus, UserID: userID, MinRating: minRating, Limit: limit, Offset: offset})
 }
 
 func (s *Store) SearchItems(ctx context.Context, opts SearchOptions) ([]Item, error) {
@@ -713,20 +716,27 @@ func (s *Store) AlphabetIndex(ctx context.Context, opts AlphabetOptions) ([]Alph
 	genres := splitFilterList(opts.Genre)
 	switch opts.Kind {
 	case "tv":
-		genreWhere, genreArgs := itemGenreFilterSQL("genres", genres)
+		genreWhere, genreArgs := itemGenreFilterSQL("mi.genres", genres)
+		decadeHaving := decadeFilterSQL(showYearExpr, opts.Decades)
+		if decadeHaving != "" {
+			decadeHaving = "HAVING 1 = 1 " + decadeHaving
+		}
 		args := []any{opts.LibraryID, opts.LibraryID}
 		args = append(args, genreArgs...)
 		rows, err = s.db.QueryContext(ctx, `
-SELECT LOWER(COALESCE(show_title, '')) AS sort_title
-FROM media_items
-WHERE kind = 'episode'
-AND (? = '' OR library_id = ?)
+SELECT LOWER(COALESCE(mi.show_title, '')) AS sort_title
+FROM media_items mi
+LEFT JOIN media_shows ms ON ms.library_id = mi.library_id AND ms.show_title = mi.show_title
+WHERE mi.kind = 'episode'
+AND (? = '' OR mi.library_id = ?)
 `+genreWhere+`
-AND show_title IS NOT NULL AND show_title != ''
-GROUP BY library_id, show_title
+AND mi.show_title IS NOT NULL AND mi.show_title != ''
+GROUP BY mi.library_id, mi.show_title
+`+decadeHaving+`
 ORDER BY sort_title`, args...)
 	default:
 		genreWhere, genreArgs := itemGenreFilterSQL("genres", genres)
+		decadeWhere := decadeFilterSQL(itemYearExpr, opts.Decades)
 		args := []any{opts.LibraryID, opts.LibraryID}
 		args = append(args, genreArgs...)
 		rows, err = s.db.QueryContext(ctx, `
@@ -735,6 +745,7 @@ FROM media_items
 WHERE kind = 'movie'
 AND (? = '' OR library_id = ?)
 `+genreWhere+`
+`+decadeWhere+`
 ORDER BY sort_title`, args...)
 	}
 	if err != nil {
@@ -761,6 +772,54 @@ ORDER BY sort_title`, args...)
 	return out, rows.Err()
 }
 
+// ListDecades returns the decades (1990, 2000, ...) that have at least one
+// movie (default) or show (kind "tv") in the library, ascending. Items
+// without a year are skipped.
+func (s *Store) ListDecades(ctx context.Context, libraryID, kind string) ([]int, error) {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	switch kind {
+	case "tv":
+		rows, err = s.db.QueryContext(ctx, `
+SELECT (`+showYearExpr+` / 10) * 10 AS decade
+FROM media_items mi
+LEFT JOIN media_shows ms ON ms.library_id = mi.library_id AND ms.show_title = mi.show_title
+WHERE mi.kind = 'episode'
+AND (? = '' OR mi.library_id = ?)
+AND mi.show_title IS NOT NULL AND mi.show_title != ''
+GROUP BY mi.library_id, mi.show_title`, libraryID, libraryID)
+	default:
+		rows, err = s.db.QueryContext(ctx, `
+SELECT DISTINCT (`+itemYearExpr+` / 10) * 10 AS decade
+FROM media_items
+WHERE kind = 'movie'
+AND (? = '' OR library_id = ?)`, libraryID, libraryID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	seen := map[int]bool{}
+	out := []int{}
+	for rows.Next() {
+		var decade int
+		if err := rows.Scan(&decade); err != nil {
+			return nil, err
+		}
+		if decade > 0 && !seen[decade] {
+			seen[decade] = true
+			out = append(out, decade)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Ints(out)
+	return out, nil
+}
+
 func alphabetLetter(title string) string {
 	title = strings.TrimSpace(title)
 	runes := []rune(title)
@@ -785,6 +844,7 @@ func (s *Store) searchItems(ctx context.Context, opts SearchOptions) ([]Item, er
 	genre := opts.Genre
 	genres := splitFilterList(genre)
 	genreWhere, genreArgs := itemGenreFilterSQL("genres", genres)
+	decadeWhere := decadeFilterSQL(itemYearExpr, opts.Decades)
 	nameStartsWith := strings.TrimSpace(opts.NameStartsWith)
 	seenStatus := normalizedSeenStatus(opts.SeenStatus)
 	userID := opts.UserID
@@ -840,6 +900,7 @@ FROM media_items
 WHERE (? = '' OR library_id = ?)
 AND (? = '' OR kind = ?)
 ` + genreWhere + `
+` + decadeWhere + `
 AND (? <= 0 OR COALESCE(rating, 0) >= ?)
 AND (
 	? = ''
@@ -957,6 +1018,31 @@ func splitFilterList(value string) []string {
 		out = append(out, part)
 	}
 	return out
+}
+
+// Year expressions for decade filtering. NFOs frequently carry only a
+// premiered date and no <year>, so both fall back to the date's year part.
+const itemYearExpr = "COALESCE(NULLIF(year, 0), CAST(NULLIF(SUBSTR(COALESCE(premiered, ''), 1, 4), '') AS INTEGER), 0)"
+const showYearExpr = "COALESCE(ms.year, CAST(NULLIF(SUBSTR(COALESCE(ms.premiered, ''), 1, 4), '') AS INTEGER), MIN(NULLIF(mi.year, 0)), CAST(NULLIF(SUBSTR(MAX(COALESCE(mi.premiered, '')), 1, 4), '') AS INTEGER), 0)"
+
+// decadeFilterSQL matches yearExpr against a comma-separated decade list
+// ("1990,2000" keeps years 1990-1999 and 2000-2009). The decades are parsed
+// to ints and inlined, so the fragment is safe to splice into a query.
+// An empty or unparsable list returns "".
+func decadeFilterSQL(yearExpr, decades string) string {
+	clauses := []string{}
+	for _, part := range splitFilterList(decades) {
+		start, err := strconv.Atoi(part)
+		if err != nil || start < 1000 || start > 2999 {
+			continue
+		}
+		start -= start % 10
+		clauses = append(clauses, "("+yearExpr+" >= "+strconv.Itoa(start)+" AND "+yearExpr+" < "+strconv.Itoa(start+10)+")")
+	}
+	if len(clauses) == 0 {
+		return ""
+	}
+	return "AND (" + strings.Join(clauses, " OR ") + ")"
 }
 
 func itemGenreFilterSQL(column string, genres []string) (string, []any) {
@@ -1200,14 +1286,15 @@ ON CONFLICT(library_id, name) DO UPDATE SET completed_at = CURRENT_TIMESTAMP`, l
 }
 
 func (s *Store) ListShows(ctx context.Context, libraryID, q, genre, sort string, minRating float64, limit, offset int) ([]ShowSummary, error) {
-	return s.ListShowsForUser(ctx, libraryID, q, genre, sort, "", 0, minRating, limit, offset)
+	return s.ListShowsForUser(ctx, libraryID, q, genre, "", sort, "", 0, minRating, limit, offset)
 }
 
-func (s *Store) ListShowsForUser(ctx context.Context, libraryID, q, genre, sort, seenStatus string, userID int64, minRating float64, limit, offset int) ([]ShowSummary, error) {
+func (s *Store) ListShowsForUser(ctx context.Context, libraryID, q, genre, decades, sort, seenStatus string, userID int64, minRating float64, limit, offset int) ([]ShowSummary, error) {
 	return s.SearchShows(ctx, ShowOptions{
 		Query:      q,
 		LibraryID:  libraryID,
 		Genre:      genre,
+		Decades:    decades,
 		Sort:       sort,
 		SeenStatus: seenStatus,
 		UserID:     userID,
@@ -1224,6 +1311,7 @@ func (s *Store) SearchShows(ctx context.Context, opts ShowOptions) ([]ShowSummar
 	genre := opts.Genre
 	genres := splitFilterList(genre)
 	genreWhere, genreArgs := showGenreFilterSQL(genres)
+	decadeHaving := decadeFilterSQL(showYearExpr, opts.Decades)
 	nameStartsWith := strings.TrimSpace(opts.NameStartsWith)
 	seenStatus := normalizedSeenStatus(opts.SeenStatus)
 	userID := opts.UserID
@@ -1334,6 +1422,7 @@ AND (
 )
 GROUP BY mi.library_id, mi.show_title
 HAVING (? <= 0 OR COALESCE(ms.rating, MAX(mi.rating), 0) >= ?)
+`+decadeHaving+`
 `+orderBy+`
 LIMIT ? OFFSET ?`, append(append([]any{libraryID, libraryID}, genreArgs...), seenStatus, seenStatus, userID, userID, seenStatus, userID, userID, seenStatus, userID, userID, userID, nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith, q, nq, nq, nq, nq, opts.MinRating, opts.MinRating, limit, offset)...)
 	if err != nil {

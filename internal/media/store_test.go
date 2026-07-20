@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"popcorn/internal/database"
@@ -881,4 +882,112 @@ func requireShowProgress(t *testing.T, shows []ShowProgress, libraryID, showTitl
 	}
 	t.Fatalf("show progress for %s/%s not found in %#v", libraryID, showTitle, shows)
 	return ShowProgress{}
+}
+
+func TestDecadeFilterSQL(t *testing.T) {
+	if got := decadeFilterSQL("year", ""); got != "" {
+		t.Fatalf("empty decades = %q, want empty", got)
+	}
+	if got := decadeFilterSQL("year", "abc,12"); got != "" {
+		t.Fatalf("invalid decades = %q, want empty", got)
+	}
+	got := decadeFilterSQL("year", "1995,2000")
+	want := "AND ((year >= 1990 AND year < 2000) OR (year >= 2000 AND year < 2010))"
+	if got != want {
+		t.Fatalf("decadeFilterSQL = %q, want %q", got, want)
+	}
+}
+
+func TestSearchItemsFiltersByDecades(t *testing.T) {
+	store, ctx := newTestStore(t)
+	for _, movie := range []struct {
+		title string
+		year  int
+	}{
+		{"Heat", 1995},
+		{"Inception", 2010},
+		{"Casablanca", 1942},
+	} {
+		upsertTestItem(t, ctx, store, Item{
+			LibraryID: "movies",
+			Path:      "/movies/" + movie.title + ".mkv",
+			Kind:      "movie",
+			Title:     movie.title,
+			SortTitle: strings.ToLower(movie.title),
+			Year:      movie.year,
+			SizeBytes: 1,
+		})
+	}
+
+	items, err := store.SearchItems(ctx, SearchOptions{LibraryID: "movies", Decades: "1990,2010"})
+	if err != nil {
+		t.Fatalf("search with decades: %v", err)
+	}
+	titles := make([]string, 0, len(items))
+	for _, item := range items {
+		titles = append(titles, item.Title)
+	}
+	if len(titles) != 2 || titles[0] != "Heat" || titles[1] != "Inception" {
+		t.Fatalf("decade-filtered titles = %v, want [Heat Inception]", titles)
+	}
+
+	decades, err := store.ListDecades(ctx, "movies", "movie")
+	if err != nil {
+		t.Fatalf("list decades: %v", err)
+	}
+	if len(decades) != 3 || decades[0] != 1940 || decades[1] != 1990 || decades[2] != 2010 {
+		t.Fatalf("decades = %v, want [1940 1990 2010]", decades)
+	}
+}
+
+func TestSearchShowsFiltersByDecades(t *testing.T) {
+	store, ctx := newTestStore(t)
+	// Severance has no year at all, only a premiered date — the decade
+	// filter must fall back to the date's year part.
+	for _, show := range []struct {
+		title     string
+		year      int
+		premiered string
+	}{
+		{"The Wire", 2002, ""},
+		{"Severance", 0, "2022-02-18"},
+	} {
+		upsertTestItem(t, ctx, store, Item{
+			LibraryID:     "tv",
+			Path:          "/tv/" + show.title + "/S01E01.mkv",
+			Kind:          "episode",
+			Title:         show.title,
+			SortTitle:     strings.ToLower(show.title),
+			ShowTitle:     show.title,
+			SeasonNumber:  1,
+			EpisodeNumber: 1,
+			Year:          show.year,
+			Premiered:     show.premiered,
+			SizeBytes:     1,
+		})
+	}
+
+	shows, err := store.SearchShows(ctx, ShowOptions{LibraryID: "tv", Decades: "2020"})
+	if err != nil {
+		t.Fatalf("search shows with decades: %v", err)
+	}
+	if len(shows) != 1 || shows[0].Title != "Severance" {
+		t.Fatalf("decade-filtered shows = %+v, want only Severance", shows)
+	}
+
+	alphabet, err := store.AlphabetIndex(ctx, AlphabetOptions{LibraryID: "tv", Kind: "tv", Decades: "2020"})
+	if err != nil {
+		t.Fatalf("alphabet with decades: %v", err)
+	}
+	if len(alphabet) != 1 || alphabet[0].Letter != "S" {
+		t.Fatalf("decade-filtered alphabet = %+v, want only S", alphabet)
+	}
+
+	decades, err := store.ListDecades(ctx, "tv", "tv")
+	if err != nil {
+		t.Fatalf("list tv decades: %v", err)
+	}
+	if len(decades) != 2 || decades[0] != 2000 || decades[1] != 2020 {
+		t.Fatalf("tv decades = %v, want [2000 2020]", decades)
+	}
 }

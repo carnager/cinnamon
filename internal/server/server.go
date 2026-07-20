@@ -119,6 +119,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/search", a.search)
 	mux.HandleFunc("GET /api/genres", a.genres)
 	mux.HandleFunc("GET /api/alphabet", a.alphabet)
+	mux.HandleFunc("GET /api/decades", a.decades)
 	mux.HandleFunc("GET /api/actors", a.actorDetail)
 	mux.HandleFunc("GET /api/actors/image", a.actorImage)
 	mux.HandleFunc("GET /api/tv/shows", a.tvShows)
@@ -280,7 +281,7 @@ func (a *App) items(w http.ResponseWriter, r *http.Request) {
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	minRating, _ := strconv.ParseFloat(r.URL.Query().Get("minRating"), 64)
 	a.writeCachedJSON(w, r, cacheKey(r, "items", user.ID), 20*time.Second, func() (any, error) {
-		return a.store.ListItemsForUser(r.Context(), r.URL.Query().Get("libraryId"), r.URL.Query().Get("q"), r.URL.Query().Get("genre"), r.URL.Query().Get("sort"), r.URL.Query().Get("seen"), user.ID, minRating, limit, offset)
+		return a.store.ListItemsForUser(r.Context(), r.URL.Query().Get("libraryId"), r.URL.Query().Get("q"), r.URL.Query().Get("genre"), r.URL.Query().Get("decades"), r.URL.Query().Get("sort"), r.URL.Query().Get("seen"), user.ID, minRating, limit, offset)
 	})
 }
 
@@ -296,7 +297,14 @@ func (a *App) alphabet(w http.ResponseWriter, r *http.Request) {
 			LibraryID: r.URL.Query().Get("libraryId"),
 			Kind:      r.URL.Query().Get("kind"),
 			Genre:     r.URL.Query().Get("genre"),
+			Decades:   r.URL.Query().Get("decades"),
 		})
+	})
+}
+
+func (a *App) decades(w http.ResponseWriter, r *http.Request) {
+	a.writeCachedJSON(w, r, cacheKey(r, "decades"), 1*time.Minute, func() (any, error) {
+		return a.store.ListDecades(r.Context(), r.URL.Query().Get("libraryId"), r.URL.Query().Get("kind"))
 	})
 }
 
@@ -334,7 +342,7 @@ func (a *App) tvShows(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	a.writeCachedJSON(w, r, cacheKey(r, "tvShows", user.ID), 20*time.Second, func() (any, error) {
-		return a.store.ListShowsForUser(r.Context(), r.URL.Query().Get("libraryId"), r.URL.Query().Get("q"), r.URL.Query().Get("genre"), r.URL.Query().Get("sort"), r.URL.Query().Get("seen"), user.ID, queryFloat(r, "minRating"), limit, offset)
+		return a.store.ListShowsForUser(r.Context(), r.URL.Query().Get("libraryId"), r.URL.Query().Get("q"), r.URL.Query().Get("genre"), r.URL.Query().Get("decades"), r.URL.Query().Get("sort"), r.URL.Query().Get("seen"), user.ID, queryFloat(r, "minRating"), limit, offset)
 	})
 }
 

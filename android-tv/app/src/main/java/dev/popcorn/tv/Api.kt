@@ -308,12 +308,13 @@ class Api(private val session: Session) {
         itemsPage(libraryId, limit, offset, "")
     }
 
-    suspend fun itemsPage(libraryId: String, limit: Int, offset: Int, genre: String, sort: String = "", minRating: Double = 0.0, seenStatus: String = ""): List<PopItem> = withContext(Dispatchers.IO) {
+    suspend fun itemsPage(libraryId: String, limit: Int, offset: Int, genre: String, sort: String = "", minRating: Double = 0.0, seenStatus: String = "", decades: String = ""): List<PopItem> = withContext(Dispatchers.IO) {
         val genreParam = if (genre.isNotBlank()) "&genre=${enc(genre)}" else ""
         val sortParam = if (sort.isNotBlank()) "&sort=${enc(sort)}" else ""
         val ratingParam = if (minRating > 0.0) "&minRating=$minRating" else ""
         val seenParam = if (seenStatus.isNotBlank()) "&seen=${enc(seenStatus)}" else ""
-        parseItems(requestArray("/api/items?libraryId=${enc(libraryId)}&limit=$limit&offset=$offset$genreParam$sortParam$ratingParam$seenParam"))
+        val decadesParam = if (decades.isNotBlank()) "&decades=${enc(decades)}" else ""
+        parseItems(requestArray("/api/items?libraryId=${enc(libraryId)}&limit=$limit&offset=$offset$genreParam$sortParam$ratingParam$seenParam$decadesParam"))
     }
 
     suspend fun recentItems(libraryId: String, limit: Int): List<PopItem> = withContext(Dispatchers.IO) {
@@ -349,12 +350,13 @@ class Api(private val session: Session) {
         showsPage(libraryId, limit, offset, "")
     }
 
-    suspend fun showsPage(libraryId: String, limit: Int, offset: Int, genre: String, sort: String = "", minRating: Double = 0.0, seenStatus: String = ""): List<ShowSummary> = withContext(Dispatchers.IO) {
+    suspend fun showsPage(libraryId: String, limit: Int, offset: Int, genre: String, sort: String = "", minRating: Double = 0.0, seenStatus: String = "", decades: String = ""): List<ShowSummary> = withContext(Dispatchers.IO) {
         val genreParam = if (genre.isNotBlank()) "&genre=${enc(genre)}" else ""
         val sortParam = if (sort.isNotBlank()) "&sort=${enc(sort)}" else ""
         val ratingParam = if (minRating > 0.0) "&minRating=$minRating" else ""
         val seenParam = if (seenStatus.isNotBlank()) "&seen=${enc(seenStatus)}" else ""
-        parseShows(requestArray("/api/tv/shows?libraryId=${enc(libraryId)}&limit=$limit&offset=$offset$genreParam$sortParam$ratingParam$seenParam"))
+        val decadesParam = if (decades.isNotBlank()) "&decades=${enc(decades)}" else ""
+        parseShows(requestArray("/api/tv/shows?libraryId=${enc(libraryId)}&limit=$limit&offset=$offset$genreParam$sortParam$ratingParam$seenParam$decadesParam"))
     }
 
     suspend fun recentShows(libraryId: String, limit: Int): List<ShowSummary> = withContext(Dispatchers.IO) {
@@ -364,6 +366,11 @@ class Api(private val session: Session) {
     suspend fun genres(libraryId: String): List<String> = withContext(Dispatchers.IO) {
         val arr = requestArray("/api/genres?libraryId=${enc(libraryId)}")
         (0 until arr.length()).map { i -> arr.getString(i) }
+    }
+
+    suspend fun decades(libraryId: String, kind: String): List<Int> = withContext(Dispatchers.IO) {
+        val arr = requestArray("/api/decades?libraryId=${enc(libraryId)}&kind=${enc(kind)}")
+        (0 until arr.length()).map { i -> arr.optInt(i) }.filter { it > 0 }
     }
 
     suspend fun scanLibraries() = withContext(Dispatchers.IO) {
@@ -385,9 +392,10 @@ class Api(private val session: Session) {
         }
     }
 
-    suspend fun alphabet(libraryId: String, kind: String, genre: String = ""): List<AlphabetEntry> = withContext(Dispatchers.IO) {
+    suspend fun alphabet(libraryId: String, kind: String, genre: String = "", decades: String = ""): List<AlphabetEntry> = withContext(Dispatchers.IO) {
         val genreParam = if (genre.isNotBlank()) "&genre=${enc(genre)}" else ""
-        val arr = requestArray("/api/alphabet?libraryId=${enc(libraryId)}&kind=${enc(kind)}$genreParam")
+        val decadesParam = if (decades.isNotBlank()) "&decades=${enc(decades)}" else ""
+        val arr = requestArray("/api/alphabet?libraryId=${enc(libraryId)}&kind=${enc(kind)}$genreParam$decadesParam")
         (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
             AlphabetEntry(

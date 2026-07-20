@@ -505,10 +505,12 @@ fun LibraryPageView(
     pageIndex: Int,
     pageHasNext: Boolean,
     selectedGenre: String,
+    selectedDecades: String,
     selectedSort: String,
     selectedMinRating: Double,
     selectedSeenStatus: String,
     genres: List<String>,
+    decades: List<Int>,
     alphabet: List<AlphabetEntry>,
     initialFocusKey: Any?,
     showUpdate: Boolean,
@@ -522,6 +524,7 @@ fun LibraryPageView(
     onPreviousPage: () -> Unit,
     onNextPage: () -> Unit,
     onGenre: (String) -> Unit,
+    onDecades: (String) -> Unit,
     onSort: (String) -> Unit,
     onMinRating: (Double) -> Unit,
     onSeenStatus: (String) -> Unit,
@@ -586,13 +589,16 @@ fun LibraryPageView(
                     activeLibrary = activeLibrary,
                     count = if (activeLibrary.type == "tv") shows.size else items.size,
                     selectedGenre = selectedGenre,
+                    selectedDecades = selectedDecades,
                     selectedSort = selectedSort,
                     selectedMinRating = selectedMinRating,
                     selectedSeenStatus = selectedSeenStatus,
                     genres = genres,
+                    decades = decades,
                     firstFocusRequester = filterFocusRequester,
                     onSort = onSort,
                     onGenre = onGenre,
+                    onDecades = onDecades,
                     onMinRating = onMinRating,
                     onSeenStatus = onSeenStatus,
                     onMenuOpenChange = { open ->
@@ -802,13 +808,16 @@ fun LibraryFilterBar(
     activeLibrary: Library,
     count: Int,
     selectedGenre: String,
+    selectedDecades: String,
     selectedSort: String,
     selectedMinRating: Double,
     selectedSeenStatus: String,
     genres: List<String>,
+    decades: List<Int>,
     firstFocusRequester: FocusRequester? = null,
     onSort: (String) -> Unit,
     onGenre: (String) -> Unit,
+    onDecades: (String) -> Unit,
     onMinRating: (Double) -> Unit,
     onSeenStatus: (String) -> Unit,
     onMenuOpenChange: (Boolean) -> Unit = {},
@@ -828,6 +837,12 @@ fun LibraryFilterBar(
         1 -> "Genre: ${selectedGenres.first()}"
         else -> "Genre: ${selectedGenres.size} selected"
     }
+    val selectedDecadeList = splitSelectedGenres(selectedDecades)
+    val decadeLabel = when (selectedDecadeList.size) {
+        0 -> "Decade: All"
+        1 -> "Decade: ${selectedDecadeList.first()}s"
+        else -> "Decade: ${selectedDecadeList.size} selected"
+    }
     Box(
         Modifier
             .fillMaxWidth()
@@ -846,6 +861,7 @@ fun LibraryFilterBar(
             Pill(text = seenLabel(selectedSeenStatus), selected = openDropdown == LibraryDropdown.Seen || selectedSeenStatus.isNotBlank(), onClick = { openDropdown = LibraryDropdown.Seen })
             Pill(text = ratingLabel(selectedMinRating), selected = openDropdown == LibraryDropdown.Rating || selectedMinRating > 0.0, onClick = { openDropdown = LibraryDropdown.Rating })
             Pill(text = genreLabel, selected = openDropdown == LibraryDropdown.Genre || selectedGenres.isNotEmpty(), onClick = { openDropdown = LibraryDropdown.Genre })
+            Pill(text = decadeLabel, selected = openDropdown == LibraryDropdown.Decade || selectedDecadeList.isNotEmpty(), onClick = { openDropdown = LibraryDropdown.Decade })
             Spacer(Modifier.weight(1f))
             UserMenuButton(session, showUpdate, onUpdates, onScan, onLogout)
         }
@@ -878,12 +894,23 @@ fun LibraryFilterBar(
                 multiSelect = true,
                 onClose = { openDropdown = null },
             )
+            LibraryDropdown.Decade -> FilterPopup(
+                title = "Decades",
+                options = listOf(FilterOption("All", selectedDecadeList.isEmpty()) { onDecades("") }) + decades.sortedDescending().map { decade ->
+                    val value = decade.toString()
+                    FilterOption("${decade}s", selectedDecadeList.contains(value)) {
+                        onDecades(toggleGenre(selectedDecadeList, value).joinToString(","))
+                    }
+                },
+                multiSelect = true,
+                onClose = { openDropdown = null },
+            )
             null -> Unit
         }
     }
 }
 
-private enum class LibraryDropdown { Sort, Seen, Rating, Genre }
+private enum class LibraryDropdown { Sort, Seen, Rating, Genre, Decade }
 
 private data class SortOption(val sort: String, val label: String)
 private data class FilterOption(val label: String, val selected: Boolean, val onClick: () -> Unit)

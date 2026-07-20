@@ -60,21 +60,21 @@ func (a *App) buildHomePayload(ctx context.Context, user auth.User) (homePayload
 	payload.Watchlist = watchlist
 
 	if movieLib != nil {
-		payload.HomeMovies, err = a.store.ListItemsForUser(ctx, movieLib.ID, "", "", "", "", user.ID, 0, 150, 0)
+		payload.HomeMovies, err = a.store.ListItemsForUser(ctx, movieLib.ID, "", "", "", "", "", user.ID, 0, 150, 0)
 		if err != nil {
 			return payload, err
 		}
-		payload.RecentMovies, err = a.store.ListItemsForUser(ctx, movieLib.ID, "", "", "mtime", "", user.ID, 0, 24, 0)
+		payload.RecentMovies, err = a.store.ListItemsForUser(ctx, movieLib.ID, "", "", "", "mtime", "", user.ID, 0, 24, 0)
 		if err != nil {
 			return payload, err
 		}
 	}
 	if tvLib != nil {
-		payload.HomeShows, err = a.store.ListShowsForUser(ctx, tvLib.ID, "", "", "", "", user.ID, 0, 150, 0)
+		payload.HomeShows, err = a.store.ListShowsForUser(ctx, tvLib.ID, "", "", "", "", "", user.ID, 0, 150, 0)
 		if err != nil {
 			return payload, err
 		}
-		payload.RecentShows, err = a.store.ListShowsForUser(ctx, tvLib.ID, "", "", "mtime", "", user.ID, 0, 24, 0)
+		payload.RecentShows, err = a.store.ListShowsForUser(ctx, tvLib.ID, "", "", "", "mtime", "", user.ID, 0, 24, 0)
 		if err != nil {
 			return payload, err
 		}

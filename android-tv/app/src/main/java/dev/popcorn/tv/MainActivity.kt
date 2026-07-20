@@ -116,10 +116,12 @@ fun PopcornApp() {
     var pageIndex by remember { mutableStateOf(0) }
     var pageHasNext by remember { mutableStateOf(false) }
     var selectedGenre by remember { mutableStateOf("") }
+    var selectedDecades by remember { mutableStateOf("") }
     var selectedSort by remember { mutableStateOf("") }
     var selectedMinRating by remember { mutableStateOf(0.0) }
     var selectedSeenStatus by remember { mutableStateOf("") }
     var libraryGenres by remember { mutableStateOf<List<String>>(emptyList()) }
+    var libraryDecades by remember { mutableStateOf<List<Int>>(emptyList()) }
     var libraryAlphabet by remember { mutableStateOf<List<AlphabetEntry>>(emptyList()) }
     var watchMenu by remember { mutableStateOf<WatchMenuState?>(null) }
     var deviceId by remember { mutableStateOf(prefs.getString("remoteDeviceId", "") ?: "") }
@@ -517,7 +519,7 @@ fun PopcornApp() {
         }
     }
 
-    fun loadLibraryPage(library: Library, activeSession: Session, page: Int = 0, genre: String = selectedGenre, sort: String = selectedSort, minRating: Double = selectedMinRating, seenStatus: String = selectedSeenStatus, resetFiltersOnLibraryChange: Boolean = true, preserveFocusKey: Boolean = false) {
+    fun loadLibraryPage(library: Library, activeSession: Session, page: Int = 0, genre: String = selectedGenre, sort: String = selectedSort, minRating: Double = selectedMinRating, seenStatus: String = selectedSeenStatus, decades: String = selectedDecades, resetFiltersOnLibraryChange: Boolean = true, preserveFocusKey: Boolean = false) {
         loadGeneration += 1
         val generation = loadGeneration
         if (!preserveFocusKey) libraryFocusKey = null
@@ -537,10 +539,12 @@ fun PopcornApp() {
             val activeSort = if (shouldResetFilters) "" else sort
             val activeMinRating = if (shouldResetFilters) 0.0 else minRating
             val activeSeenStatus = if (shouldResetFilters) "" else seenStatus
+            val activeDecades = if (shouldResetFilters) "" else decades
             selectedGenre = activeGenre
             selectedSort = activeSort
             selectedMinRating = activeMinRating
             selectedSeenStatus = activeSeenStatus
+            selectedDecades = activeDecades
             pageIndex = page.coerceAtLeast(0)
             libraryFullyLoaded = false
             loadingMore = false
@@ -552,15 +556,16 @@ fun PopcornApp() {
                 val pageSize = 500
                 val offset = pageIndex
                 libraryGenres = api.genres(library.id)
-                libraryAlphabet = if (activeSort.isBlank()) api.alphabet(library.id, if (library.type == "tv") "tv" else "movie", activeGenre) else emptyList()
+                libraryDecades = api.decades(library.id, if (library.type == "tv") "tv" else "movie")
+                libraryAlphabet = if (activeSort.isBlank()) api.alphabet(library.id, if (library.type == "tv") "tv" else "movie", activeGenre, activeDecades) else emptyList()
                 if (library.type == "tv") {
-                    val pageItems = api.showsPage(library.id, pageSize, offset, activeGenre, activeSort, activeMinRating, activeSeenStatus)
+                    val pageItems = api.showsPage(library.id, pageSize, offset, activeGenre, activeSort, activeMinRating, activeSeenStatus, activeDecades)
                     if (generation != loadGeneration) return@launch
                     shows = pageItems
                     pageHasNext = pageItems.size == pageSize
                     libraryFullyLoaded = pageItems.size < pageSize
                 } else {
-                    val pageItems = api.itemsPage(library.id, pageSize, offset, activeGenre, activeSort, activeMinRating, activeSeenStatus)
+                    val pageItems = api.itemsPage(library.id, pageSize, offset, activeGenre, activeSort, activeMinRating, activeSeenStatus, activeDecades)
                     if (generation != loadGeneration) return@launch
                     items = pageItems
                     pageHasNext = pageItems.size == pageSize
@@ -574,11 +579,11 @@ fun PopcornApp() {
                     runCatching {
                         val api = Api(activeSession)
                         val pageSize = 500
-                        val canUpdateLibraryCache = pageIndex == 0 && activeGenre.isBlank() && activeSort.isBlank() && activeMinRating <= 0.0 && activeSeenStatus.isBlank()
+                        val canUpdateLibraryCache = pageIndex == 0 && activeGenre.isBlank() && activeSort.isBlank() && activeMinRating <= 0.0 && activeSeenStatus.isBlank() && activeDecades.isBlank()
                         var offset = pageIndex + if (library.type == "tv") shows.size else items.size
                         while (true) {
                             if (library.type == "tv") {
-                                val pageItems = api.showsPage(library.id, pageSize, offset, activeGenre, activeSort, activeMinRating, activeSeenStatus)
+                                val pageItems = api.showsPage(library.id, pageSize, offset, activeGenre, activeSort, activeMinRating, activeSeenStatus, activeDecades)
                                 if (generation != loadGeneration) return@launch
                                 shows = (shows + pageItems).distinctBy { showKey(it) }
                                 if (canUpdateLibraryCache) {
@@ -587,7 +592,7 @@ fun PopcornApp() {
                                 if (pageItems.size < pageSize) break
                                 offset += pageSize
                             } else {
-                                val pageItems = api.itemsPage(library.id, pageSize, offset, activeGenre, activeSort, activeMinRating, activeSeenStatus)
+                                val pageItems = api.itemsPage(library.id, pageSize, offset, activeGenre, activeSort, activeMinRating, activeSeenStatus, activeDecades)
                                 if (generation != loadGeneration) return@launch
                                 items = (items + pageItems).distinctBy { it.id }
                                 if (canUpdateLibraryCache) {
@@ -874,14 +879,14 @@ fun PopcornApp() {
                 val active = session
                 val movieLib = libraries.firstOrNull { it.type == "movies" || it.type == "movie" }
                 if (active != null && movieLib != null) {
-                    loadLibraryPage(movieLib, active, page = 0, genre = "", sort = "mtime", minRating = 0.0, seenStatus = "", resetFiltersOnLibraryChange = false)
+                    loadLibraryPage(movieLib, active, page = 0, genre = "", sort = "mtime", minRating = 0.0, seenStatus = "", decades = "", resetFiltersOnLibraryChange = false)
                 }
             },
             onMoreRecentTv = {
                 val active = session
                 val tvLib = libraries.firstOrNull { it.type == "tv" }
                 if (active != null && tvLib != null) {
-                    loadLibraryPage(tvLib, active, page = 0, genre = "", sort = "mtime", minRating = 0.0, seenStatus = "", resetFiltersOnLibraryChange = false)
+                    loadLibraryPage(tvLib, active, page = 0, genre = "", sort = "mtime", minRating = 0.0, seenStatus = "", decades = "", resetFiltersOnLibraryChange = false)
                 }
             },
             onItem = { screen = Screen.Detail(it, null, fromHome = true) },
@@ -940,10 +945,12 @@ fun PopcornApp() {
             pageIndex = pageIndex,
             pageHasNext = pageHasNext,
             selectedGenre = selectedGenre,
+            selectedDecades = selectedDecades,
             selectedSort = selectedSort,
             selectedMinRating = selectedMinRating,
             selectedSeenStatus = selectedSeenStatus,
             genres = libraryGenres,
+            decades = libraryDecades,
             initialFocusKey = libraryFocusKey,
             showUpdate = updateAvailable,
             onHome = { session?.let { loadHome(it, libraries) } },
@@ -963,6 +970,7 @@ fun PopcornApp() {
             onPreviousPage = { session?.let { loadLibraryPage(current.library, it, pageIndex - 1) } },
             onNextPage = { session?.let { loadLibraryPage(current.library, it, pageIndex + 1) } },
             onGenre = { genre -> session?.let { loadLibraryPage(current.library, it, 0, genre, selectedSort, selectedMinRating, selectedSeenStatus) } },
+            onDecades = { decades -> session?.let { loadLibraryPage(current.library, it, 0, selectedGenre, selectedSort, selectedMinRating, selectedSeenStatus, decades = decades) } },
             onSort = { sort -> session?.let { loadLibraryPage(current.library, it, 0, selectedGenre, sort, selectedMinRating, selectedSeenStatus) } },
             onMinRating = { minRating -> session?.let { loadLibraryPage(current.library, it, 0, selectedGenre, selectedSort, minRating, selectedSeenStatus) } },
             onSeenStatus = { seenStatus -> session?.let { loadLibraryPage(current.library, it, 0, selectedGenre, selectedSort, selectedMinRating, seenStatus) } },

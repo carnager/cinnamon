@@ -618,8 +618,8 @@ function showUpNext() {
   const next = pb.nextItem;
   const card = el("div", "up-next-card");
   const thumb = el("div", "up-next-thumb");
-  if (next.backdropPath) thumb.style.backgroundImage = `url(${imageURL(next, "backdrop")})`;
-  else if (next.posterPath) thumb.style.backgroundImage = `url(${imageURL(next, "poster")})`;
+  if (next.backdropPath) thumb.style.backgroundImage = `url(${imageURL(next, "backdrop", 400)})`;
+  else if (next.posterPath) thumb.style.backgroundImage = `url(${imageURL(next, "poster", 400)})`;
   const body = el("div", "up-next-body");
   body.append(
     el("div", "up-next-label", "Up next"),

@@ -1,7 +1,7 @@
-function posterBlock(item, fallbackTitle, badges = {}) {
+function posterBlock(item, fallbackTitle, badges = {}, width = 400) {
   const poster = el("div", "poster");
   if (hasPosterImage(item)) {
-    poster.style.backgroundImage = `url(${imageURL(item, "poster")})`;
+    poster.style.backgroundImage = `url(${imageURL(item, "poster", width)})`;
   } else {
     poster.textContent = (fallbackTitle || "?").slice(0, 1).toUpperCase();
   }
@@ -19,10 +19,14 @@ function posterBadges({ seen = false, watchlisted = false } = {}) {
   return stack;
 }
 
-function imageURL(item, kind) {
+/* imageURL builds a versioned artwork URL. Pass width to request a reduced
+   server-side thumbnail (walls, episode lists); omit it for full-bleed uses
+   like page backdrops and the home hero. */
+function imageURL(item, kind, width) {
   const id = imageItemID(item, kind);
   const mtime = kind === "backdrop" ? item?.backdropMtimeUnix : item?.posterMtimeUnix;
-  return `/api/items/${id}/image/${kind}?v=${encodeURIComponent(`${id}-${mtime || item?.mtimeUnix || 0}`)}`;
+  const version = encodeURIComponent(`${id}-${mtime || item?.mtimeUnix || 0}`);
+  return `/api/items/${id}/image/${kind}?v=${version}${width ? `&w=${width}` : ""}`;
 }
 
 function hasPosterImage(item) {
@@ -841,9 +845,9 @@ function episodeRow(episode) {
   // Thumbnail with episode number badge
   const thumb = el("div", "ep-thumb");
   if (episode.backdropPath) {
-    thumb.style.backgroundImage = `url(${imageURL(episode, "backdrop")})`;
+    thumb.style.backgroundImage = `url(${imageURL(episode, "backdrop", 400)})`;
   } else if (episode.posterPath) {
-    thumb.style.backgroundImage = `url(${imageURL(episode, "poster")})`;
+    thumb.style.backgroundImage = `url(${imageURL(episode, "poster", 400)})`;
   }
   const epNum = String(episode.episodeNumber || 0).padStart(2, "0");
   thumb.append(el("span", "ep-thumb-badge", epNum));
@@ -877,9 +881,9 @@ function episodeCard(episode) {
   still.type = "button";
   still.addEventListener("click", open);
   if (episode.backdropPath) {
-    still.style.backgroundImage = `url(${imageURL(episode, "backdrop")})`;
+    still.style.backgroundImage = `url(${imageURL(episode, "backdrop", 800)})`;
   } else if (episode.posterPath) {
-    still.style.backgroundImage = `url(${imageURL(episode, "poster")})`;
+    still.style.backgroundImage = `url(${imageURL(episode, "poster", 800)})`;
   }
   still.append(el("span", "ep-still-badge", `E${String(episode.episodeNumber || 0).padStart(2, "0")}`));
   if (episode.rating) still.append(ratingBadge(episode.rating, "poster-rating"));
@@ -971,7 +975,7 @@ async function openDetail(item, skipHistory, parent = {}) {
 
   const detail = el("article", "detail");
   const posterCol = el("div", "detail-poster-col");
-  const poster = posterBlock(d, d.title, { seen: itemSeen(d), watchlisted: itemWatchlisted(d) });
+  const poster = posterBlock(d, d.title, { seen: itemSeen(d), watchlisted: itemWatchlisted(d) }, 800);
   poster.classList.add("detail-poster");
   posterCol.append(poster);
   const posterGenres = genreList(d.genres).slice(0, 3);

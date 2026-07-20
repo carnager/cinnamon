@@ -84,6 +84,7 @@ func New(opts Options) *App {
 		cache:       responseCache{entries: map[string]cachedResponse{}},
 	}
 	app.cleanHLSScratch()
+	app.cleanThumbCache()
 	go app.reapIdleHLSSessions()
 	return app
 }
@@ -624,7 +625,14 @@ func (a *App) image(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	if width := normalizeThumbWidth(r.URL.Query().Get("w")); width > 0 {
+		if thumb := a.thumbnail(r.Context(), path, width); thumb != "" {
+			path = thumb
+		}
+	}
+	// Clients version these URLs with a ?v= param derived from the artwork
+	// mtime, so a changed poster changes the URL and immutable is safe.
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	http.ServeFile(w, r, path)
 }
 

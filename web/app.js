@@ -30,6 +30,9 @@ let resumeFractionDirty = false;
 let watchedItemIds = new Set();
 let mediaProgressRows = [];
 let watchedShowKeys = new Set();
+// Shows that can anchor "Because you watched X": fully seen, or at least two
+// episodes finished. A show sampled once is not "watched".
+let anchorShowKeys = new Set();
 let watchlistItemIds = new Set();
 let watchlistShowKeys = new Set();
 let currentGenre = "";
@@ -353,6 +356,9 @@ async function refreshMediaState() {
     .filter(Boolean));
   watchedShowKeys = new Set((showProgress || [])
     .filter((row) => row?.completed)
+    .map((row) => showKey(row.libraryId, row.showTitle)));
+  anchorShowKeys = new Set((showProgress || [])
+    .filter((row) => row?.completed || Number(row?.completedCount || 0) >= 2)
     .map((row) => showKey(row.libraryId, row.showTitle)));
   watchlistItemIds = new Set((watchlist?.items || [])
     .map((item) => Number(item.id))
@@ -912,8 +918,11 @@ function pickHeroItem(data) {
     const fresh = data.similarPicks.filter((entry) => withArt(entry) && !entrySeen(entry));
     if (fresh.length) candidates.push({ item: pick(fresh), kick: `Because you watched ${entryTitle(data.similarSource)}` });
   } else {
-    const recentPlays = [...(data.continueMovies || []), ...(data.continueEpisodes || [])];
-    for (const played of recentPlays.slice(0, 4)) {
+    // Anchor on finished movies and shows with at least two watched episodes —
+    // not on barely-started continue entries.
+    const anchors = pool.filter((entry) =>
+      isShow(entry) ? anchorShowKeys.has(showKey(entry.libraryId, entry.title)) : itemSeen(entry));
+    for (const played of anchors.sort(() => Math.random() - 0.5).slice(0, 4)) {
       const genre = splitGenres(played.genres)[0];
       if (!genre) continue;
       const source = entryTitle(played);
@@ -1223,8 +1232,9 @@ async function loadHome(skipHistory) {
 async function loadHeroSimilar() {
   homeData.similarSource = null;
   homeData.similarPicks = [];
-  const watched = (homeData.movies || []).filter((m) => watchedItemIds.has(Number(m.id)));
-  const sources = watched.length ? watched : (homeData.continueMovies || []);
+  // Only movies actually finished anchor the similar-titles hero; a movie
+  // started for two minutes is not "watched".
+  const sources = (homeData.movies || []).filter((m) => watchedItemIds.has(Number(m.id)));
   if (!sources.length) return;
   const source = sources[Math.floor(Math.random() * sources.length)];
   const similar = await api(`/api/items/${source.id}/similar`).catch(() => []);
@@ -1240,6 +1250,7 @@ function applyHomePayload(payload) {
   rebuildResumeFractions(mediaProgressRows);
   watchedItemIds = new Set(mediaProgressRows.filter((r) => r?.completed).map((r) => Number(r.itemId)).filter(Boolean));
   watchedShowKeys = new Set((payload.showProgress || []).filter((r) => r?.completed).map((r) => showKey(r.libraryId, r.showTitle)));
+  anchorShowKeys = new Set((payload.showProgress || []).filter((r) => r?.completed || Number(r?.completedCount || 0) >= 2).map((r) => showKey(r.libraryId, r.showTitle)));
   const watchlist = payload.watchlist || { items: [], shows: [] };
   watchlistItemIds = new Set((watchlist.items || []).map((i) => Number(i.id)).filter(Boolean));
   watchlistShowKeys = new Set((watchlist.shows || []).map((s) => showKey(s.libraryId, s.title)));

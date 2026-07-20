@@ -101,6 +101,7 @@ fun PopcornApp() {
     var completedItems by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var resumeFractionById by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
     var completedShows by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var heroAnchorShows by remember { mutableStateOf<Set<String>>(emptySet()) }
     var watchlistItems by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var watchlistShows by remember { mutableStateOf<Set<String>>(emptySet()) }
     var watchlistMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
@@ -152,6 +153,7 @@ fun PopcornApp() {
                 completedItems = progress.filter { it.completed }.map { it.itemId }.toSet()
                 resumeFractionById = resumeFractionMap(progress)
                 completedShows = showProgress.filter { it.completed }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
+                heroAnchorShows = showProgress.filter { it.completed || it.completedCount >= 2 }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
             }
         }
     }
@@ -227,6 +229,7 @@ fun PopcornApp() {
         completedItems = payload.progress.filter { it.completed }.map { it.itemId }.toSet()
         resumeFractionById = resumeFractionMap(payload.progress)
         completedShows = payload.showProgress.filter { it.completed }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
+        heroAnchorShows = payload.showProgress.filter { it.completed || it.completedCount >= 2 }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
         watchlistMovies = payload.watchlist.items.filter { it.kind == "movie" }
         watchlistTvShows = payload.watchlist.shows
         watchlistItems = payload.watchlist.items.map { it.id }.toSet()
@@ -499,6 +502,7 @@ fun PopcornApp() {
                         completedItems = progress.filter { it.completed }.map { it.itemId }.toSet()
                         resumeFractionById = resumeFractionMap(progress)
                         completedShows = showProgress.filter { it.completed }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
+                        heroAnchorShows = showProgress.filter { it.completed || it.completedCount >= 2 }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
                     }
 
                     val list = watchlistDeferred.await()
@@ -845,6 +849,7 @@ fun PopcornApp() {
             shows = homeShows,
             completedItems = completedItems,
             completedShows = completedShows,
+            heroAnchorShows = heroAnchorShows,
             watchlistItems = watchlistItems,
             watchlistShows = watchlistShows,
             continueMovies = continueMovies,

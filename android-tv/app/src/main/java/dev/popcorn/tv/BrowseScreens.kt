@@ -95,6 +95,7 @@ fun HomeView(
     shows: List<ShowSummary>,
     completedItems: Set<Long>,
     completedShows: Set<String>,
+    heroAnchorShows: Set<String>,
     watchlistItems: Set<Long>,
     watchlistShows: Set<String>,
     continueMovies: List<PopItem>,
@@ -159,6 +160,7 @@ fun HomeView(
                 shows = shows,
                 completedItems = completedItems,
                 completedShows = completedShows,
+                heroAnchorShows = heroAnchorShows,
                 watchlistItems = watchlistItems,
                 watchlistShows = watchlistShows,
                 continueMovies = continueMovies,
@@ -1275,6 +1277,7 @@ private fun heroPicks(
     shows: List<ShowSummary>,
     completedItems: Set<Long>,
     completedShows: Set<String>,
+    heroAnchorShows: Set<String>,
     continueMovies: List<PopItem>,
     continueEpisodes: List<PopItem>,
     recentMovies: List<PopItem>,
@@ -1293,8 +1296,9 @@ private fun heroPicks(
     // "Because you watched X": a same-genre match, anchored on titles that
     // were actually finished — a movie started for two minutes is not
     // "watched" and makes a poor recommendation anchor.
+    fun showAnchorable(show: ShowSummary) = heroAnchorShows.contains("${show.libraryId}\n${show.title.lowercase()}")
     val watchedSources = movies.filter { itemSeen(it) }.map { it.title to heroGenres(it.genres) } +
-        shows.filter { showSeen(it) }.map { it.title to heroGenres(it.genres) }
+        shows.filter { showAnchorable(it) }.map { it.title to heroGenres(it.genres) }
     for ((source, sourceGenres) in watchedSources.shuffled().take(4)) {
         val genre = sourceGenres.firstOrNull() ?: continue
         val matches = movies.filter { !itemSeen(it) && it.title != source && it.rating >= 6.5 && heroGenres(it.genres).any { g -> g.equals(genre, ignoreCase = true) } }
@@ -1415,6 +1419,7 @@ fun CuratedLanding(
     shows: List<ShowSummary>,
     completedItems: Set<Long>,
     completedShows: Set<String>,
+    heroAnchorShows: Set<String>,
     watchlistItems: Set<Long>,
     watchlistShows: Set<String>,
     continueMovies: List<PopItem>,
@@ -1437,8 +1442,8 @@ fun CuratedLanding(
         EmptyState("No media found")
         return
     }
-    val heroEntries = remember(movies, shows, completedItems, completedShows, continueMovies, continueEpisodes, recentMovies, recentShows, watchlistMovies, watchlistTvShows) {
-        heroPicks(movies, shows, completedItems, completedShows, continueMovies, continueEpisodes, recentMovies, recentShows, watchlistMovies, watchlistTvShows)
+    val heroEntries = remember(movies, shows, completedItems, completedShows, heroAnchorShows, continueMovies, continueEpisodes, recentMovies, recentShows, watchlistMovies, watchlistTvShows) {
+        heroPicks(movies, shows, completedItems, completedShows, heroAnchorShows, continueMovies, continueEpisodes, recentMovies, recentShows, watchlistMovies, watchlistTvShows)
     }
     var initialFocusPending by remember { mutableStateOf(true) }
     // DOWN from the full-width hero would otherwise focus whatever card sits

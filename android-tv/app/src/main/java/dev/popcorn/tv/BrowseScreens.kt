@@ -239,12 +239,28 @@ fun AppChrome(
         }
     }
     Row(Modifier.fillMaxSize()) {
-        SideNavigation(libraries, selected, onHome, onLibrary, onWatchlist, onSearch, resolvedNavFocusRequester, onSideNavigationExit, suppressSideNavigationExpansion, onFocusChange = { sideNavigationHasFocus = it })
+        SideNavigation(
+            session = session,
+            libraries = libraries,
+            selected = selected,
+            showUpdate = showUpdate,
+            onHome = onHome,
+            onLibrary = onLibrary,
+            onWatchlist = onWatchlist,
+            onSearch = onSearch,
+            onUpdates = onUpdates,
+            onScan = onScan,
+            onLogout = onLogout,
+            firstFocusRequester = resolvedNavFocusRequester,
+            onExit = onSideNavigationExit,
+            expansionSuppressed = suppressSideNavigationExpansion,
+            onFocusChange = { sideNavigationHasFocus = it },
+        )
         Column(Modifier.fillMaxSize()) {
             if (topBar != null) {
                 topBar()
             } else {
-                PageTopActions(session, showUpdate, onUpdates, onScan, onLogout)
+                PageTopActions()
             }
             content()
         }
@@ -252,7 +268,23 @@ fun AppChrome(
 }
 
 @Composable
-fun SideNavigation(libraries: List<Library>, selected: String, onHome: () -> Unit, onLibrary: (Library) -> Unit, onWatchlist: () -> Unit, onSearch: () -> Unit, firstFocusRequester: FocusRequester, onExit: (() -> Boolean)? = null, expansionSuppressed: Boolean = false, onFocusChange: (Boolean) -> Unit = {}) {
+fun SideNavigation(
+    session: Session?,
+    libraries: List<Library>,
+    selected: String,
+    showUpdate: Boolean,
+    onHome: () -> Unit,
+    onLibrary: (Library) -> Unit,
+    onWatchlist: () -> Unit,
+    onSearch: () -> Unit,
+    onUpdates: () -> Unit,
+    onScan: () -> Unit,
+    onLogout: () -> Unit,
+    firstFocusRequester: FocusRequester,
+    onExit: (() -> Boolean)? = null,
+    expansionSuppressed: Boolean = false,
+    onFocusChange: (Boolean) -> Unit = {},
+) {
     val movieLibrary = libraries.firstOrNull { it.type == "movies" || it.type == "movie" }
     val tvLibrary = libraries.firstOrNull { it.type == "tv" }
     Column(
@@ -268,7 +300,9 @@ fun SideNavigation(libraries: List<Library>, selected: String, onHome: () -> Uni
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("P", color = Accent, fontSize = 24.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(bottom = 18.dp))
+        Box(Modifier.padding(bottom = 18.dp)) {
+            UserMenuButton(session, showUpdate, onUpdates, onScan, onLogout)
+        }
         SideNavigationItem(icon = Icons.Filled.Home, label = "Home", selected = selected == "home", focusRequester = firstFocusRequester, onRight = onExit, onClick = onHome)
         if (movieLibrary != null) {
             SideNavigationItem(icon = Icons.Filled.Movie, label = movieLibrary.name, selected = selected == movieLibrary.id, onRight = onExit, onClick = { onLibrary(movieLibrary) })
@@ -323,7 +357,7 @@ fun SideNavigationItem(icon: ImageVector, label: String, selected: Boolean, focu
 }
 
 @Composable
-fun PageTopActions(session: Session?, showUpdate: Boolean, onUpdates: () -> Unit, onScan: () -> Unit, onLogout: () -> Unit) {
+fun PageTopActions() {
     Row(
         Modifier
             .fillMaxWidth()
@@ -333,8 +367,6 @@ fun PageTopActions(session: Session?, showUpdate: Boolean, onUpdates: () -> Unit
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text("Popcorn", color = TextColor, fontSize = 18.sp, fontWeight = FontWeight.Black)
-        Spacer(Modifier.weight(1f))
-        UserMenuButton(session, showUpdate, onUpdates, onScan, onLogout)
     }
 }
 
@@ -591,8 +623,6 @@ fun LibraryPageView(
             backShortcutEnabled = !filterMenuOpen,
             topBar = {
                 LibraryFilterBar(
-                    session = session,
-                    showUpdate = showUpdate,
                     activeLibrary = activeLibrary,
                     count = if (activeLibrary.type == "tv") shows.size else items.size,
                     selectedGenre = selectedGenre,
@@ -612,9 +642,6 @@ fun LibraryPageView(
                         filterMenuOpen = open
                         suppressSideNavigationExpansion = open
                     },
-                    onUpdates = onUpdates,
-                    onScan = onScan,
-                    onLogout = onLogout,
                 )
             },
         ) {
@@ -810,8 +837,6 @@ private fun BrowseBackdropLayer(session: Session?, preview: BrowseBackdropPrevie
 
 @Composable
 fun LibraryFilterBar(
-    session: Session?,
-    showUpdate: Boolean,
     activeLibrary: Library,
     count: Int,
     selectedGenre: String,
@@ -828,9 +853,6 @@ fun LibraryFilterBar(
     onMinRating: (Double) -> Unit,
     onSeenStatus: (String) -> Unit,
     onMenuOpenChange: (Boolean) -> Unit = {},
-    onUpdates: () -> Unit,
-    onScan: () -> Unit,
-    onLogout: () -> Unit,
 ) {
     var openDropdown by remember(activeLibrary.id) { mutableStateOf<LibraryDropdown?>(null) }
     LaunchedEffect(openDropdown) {
@@ -869,8 +891,6 @@ fun LibraryFilterBar(
             Pill(text = ratingLabel(selectedMinRating), selected = openDropdown == LibraryDropdown.Rating || selectedMinRating > 0.0, onClick = { openDropdown = LibraryDropdown.Rating })
             Pill(text = genreLabel, selected = openDropdown == LibraryDropdown.Genre || selectedGenres.isNotEmpty(), onClick = { openDropdown = LibraryDropdown.Genre })
             Pill(text = decadeLabel, selected = openDropdown == LibraryDropdown.Decade || selectedDecadeList.isNotEmpty(), onClick = { openDropdown = LibraryDropdown.Decade })
-            Spacer(Modifier.weight(1f))
-            UserMenuButton(session, showUpdate, onUpdates, onScan, onLogout)
         }
         when (openDropdown) {
             LibraryDropdown.Sort -> FilterPopup("Sort", sortDropdownOptions().map { option ->
@@ -981,7 +1001,7 @@ private fun UserMenuButton(session: Session?, showUpdate: Boolean, onUpdates: ()
                     open = false
                 })
             }
-            FilterPopup(title = session?.username.orEmpty().ifBlank { "User" }, options = options, alignEnd = true, onClose = { open = false })
+            FilterPopup(title = session?.username.orEmpty().ifBlank { "User" }, options = options, navigationMenu = true, onClose = { open = false })
         }
         if (settingsOpen) {
             PlaybackSettingsDialog(onClose = { settingsOpen = false })
@@ -999,7 +1019,7 @@ private fun AvatarButton(url: String, session: Session?, selected: Boolean, onCl
     }
     Box(
         Modifier
-            .size(32.dp)
+            .size(40.dp)
             .clip(CircleShape)
             .border(2.dp, border, CircleShape)
             .onFocusChanged { focused = it.isFocused }
@@ -1078,16 +1098,25 @@ private fun PlaybackSettingsDialog(onClose: () -> Unit) {
 }
 
 @Composable
-private fun FilterPopup(title: String, options: List<FilterOption>, multiSelect: Boolean = false, alignEnd: Boolean = false, onClose: () -> Unit) {
+private fun FilterPopup(
+    title: String,
+    options: List<FilterOption>,
+    multiSelect: Boolean = false,
+    navigationMenu: Boolean = false,
+    onClose: () -> Unit,
+) {
     val firstFocus = remember { FocusRequester() }
     LaunchedEffect(options.size) {
         delay(80)
         firstFocus.requestFocus()
     }
-    Popup(alignment = if (alignEnd) Alignment.TopEnd else Alignment.TopStart, onDismissRequest = onClose, properties = PopupProperties(focusable = true)) {
+    Popup(alignment = Alignment.TopStart, onDismissRequest = onClose, properties = PopupProperties(focusable = true)) {
         Column(
             Modifier
-                .padding(top = 58.dp, start = if (alignEnd) 0.dp else 270.dp, end = if (alignEnd) 24.dp else 0.dp)
+                .padding(
+                    top = if (navigationMenu) 18.dp else 58.dp,
+                    start = if (navigationMenu) 74.dp else 270.dp,
+                )
                 .width(if (multiSelect) 360.dp else 300.dp)
                 .clip(RoundedCornerShape(10.dp))
                 .background(Surface2.copy(alpha = .98f))

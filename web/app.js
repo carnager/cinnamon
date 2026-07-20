@@ -41,6 +41,7 @@ let libraryGenres = [];
 let pageHasNext = false;
 let libraryGridEl = null;
 let libraryObserver = null;
+let libraryTopObserver = null;
 let libraryLoading = false;
 let scanPollTimer = 0;
 let lastScanSignature = "";
@@ -767,6 +768,12 @@ function render(skipHistory) {
     return;
   }
 
+  let topSentinel = null;
+  if (libraryBaseOffset > 0) {
+    topSentinel = el("div", "scroll-sentinel");
+    frag.append(topSentinel);
+  }
+
   libraryGridEl = el("div", library.type === "tv" ? "grid show-grid" : "grid");
   for (const item of libraryItems) {
     libraryGridEl.append(library.type === "tv" ? showCard(item) : itemCard(item));
@@ -783,6 +790,7 @@ function render(skipHistory) {
     ? alphabetRail(alphabetIndex, currentLetter, (entry) => jumpToLetter(entry).catch(console.error))
     : null);
   observeLibraryScroll(sentinel);
+  observeLibraryScrollTop(topSentinel);
 }
 
 function observeLibraryScroll(sentinel) {
@@ -792,6 +800,51 @@ function observeLibraryScroll(sentinel) {
     if (entries.some((e) => e.isIntersecting)) loadMoreLibrary().catch(console.error);
   }, { rootMargin: "600px 0px" });
   libraryObserver.observe(sentinel);
+}
+
+/* After a letter jump the list starts mid-library; scrolling up loads the
+   pages before the jump point and prepends them. */
+function observeLibraryScrollTop(sentinel) {
+  if (libraryTopObserver) { libraryTopObserver.disconnect(); libraryTopObserver = null; }
+  if (!sentinel || libraryBaseOffset <= 0) return;
+  libraryTopObserver = new IntersectionObserver((entries) => {
+    if (entries.some((e) => e.isIntersecting)) loadPrevLibrary().catch(console.error);
+  }, { rootMargin: "200px 0px" });
+  libraryTopObserver.observe(sentinel);
+}
+
+async function loadPrevLibrary() {
+  if (libraryLoading || libraryBaseOffset <= 0) return;
+  const library = activeLibrary();
+  if (!library || !libraryGridEl) return;
+  libraryLoading = true;
+  try {
+    const start = Math.max(0, libraryBaseOffset - perPage);
+    const limit = libraryBaseOffset - start;
+    const page = library.type === "tv"
+      ? await fetchShowsPage(library.id, { limit, offset: start, genre: currentGenre })
+      : await fetchItemsPage(library.id, { limit, offset: start, genre: currentGenre });
+    const items = page || [];
+    if (items.length) {
+      libraryItems = items.concat(libraryItems);
+      const scrollBefore = window.scrollY;
+      const heightBefore = document.documentElement.scrollHeight;
+      const cards = document.createDocumentFragment();
+      for (const item of items) cards.append(library.type === "tv" ? showCard(item) : itemCard(item));
+      libraryGridEl.prepend(cards);
+      // Keep the viewport anchored on what the user was looking at. The
+      // absolute scrollTo (from the captured scrollY) also neutralizes any
+      // native scroll-anchoring adjustment, so it can't double-compensate.
+      const delta = document.documentElement.scrollHeight - heightBefore;
+      window.scrollTo({ top: scrollBefore + delta, behavior: "instant" });
+      const count = document.querySelector(".library-count");
+      if (count) count.textContent = library.type === "tv" ? `${libraryItems.length} shows` : `${libraryItems.length} movies`;
+    }
+    libraryBaseOffset = start;
+    if (libraryBaseOffset <= 0 && libraryTopObserver) { libraryTopObserver.disconnect(); libraryTopObserver = null; }
+  } finally {
+    libraryLoading = false;
+  }
 }
 
 async function loadMoreLibrary() {
@@ -1208,6 +1261,7 @@ async function loadLibraryPage(skipHistory) {
   currentSeason = null;
   currentPage = 1;
   if (libraryObserver) { libraryObserver.disconnect(); libraryObserver = null; }
+  if (libraryTopObserver) { libraryTopObserver.disconnect(); libraryTopObserver = null; }
   search.value = "";
   renderNav();
   setLoading();

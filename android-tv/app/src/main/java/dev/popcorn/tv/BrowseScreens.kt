@@ -3,6 +3,8 @@ package dev.popcorn.tv
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
@@ -163,6 +165,8 @@ fun HomeView(
                 continueEpisodes = continueEpisodes,
                 recentMovies = recentMovies,
                 recentShows = recentShows,
+                watchlistMovies = watchlistMovies,
+                watchlistTvShows = watchlistTvShows,
                 onItem = onItem,
                 onShow = onShow,
                 onMoreContinueMovies = onMoreContinueMovies,
@@ -1151,6 +1155,174 @@ fun BrowserHeader(title: String, subtitle: String) {
     }
 }
 
+/* ── Home hero (rotating suggestion) ──
+   Mirrors the web client's pickHeroItem: the hero cycles through suggestions
+   with a reason (resume prompts, "because you watched X" genre matches, fresh
+   arrivals, watchlist reminders, hidden gems) instead of pinning one item. */
+private data class HeroPick(
+    val key: String,
+    val kick: String,
+    val heading: String,
+    val meta: String,
+    val overview: String,
+    val rating: Double,
+    val backdropId: Long,
+    val backdropVersion: Long,
+    val item: PopItem?,
+    val show: ShowSummary?,
+)
+
+private fun heroGenres(genres: String): List<String> =
+    genres.split(",", "/", "|").map { it.trim() }.filter { it.isNotBlank() }
+
+private fun heroItemPick(item: PopItem, kick: String): HeroPick? {
+    if (item.backdropPath.isBlank()) return null
+    val heading = if (item.kind == "episode") item.showTitle.ifBlank { item.title } else item.title
+    val meta = if (item.kind == "episode") {
+        listOfNotNull(
+            "S%02dE%02d".format(item.seasonNumber, item.episodeNumber),
+            item.episodeTitle.ifBlank { null },
+        ).joinToString(" · ")
+    } else {
+        listOfNotNull(
+            item.year.takeIf { it > 0 }?.toString(),
+            fmtDuration(item.durationMs).ifBlank { null },
+            heroGenres(item.genres).take(2).joinToString(", ").ifBlank { null },
+        ).joinToString(" · ")
+    }
+    return HeroPick("item:${item.id}", kick, heading, meta, item.overview, item.rating, item.id, item.backdropMtimeUnix, item, null)
+}
+
+private fun heroShowPick(show: ShowSummary, kick: String): HeroPick? {
+    if (show.backdropItemId <= 0) return null
+    val meta = listOfNotNull(
+        show.yearsLabel().ifBlank { null },
+        "${show.seasonCount} " + if (show.seasonCount == 1) "season" else "seasons",
+        heroGenres(show.genres).take(2).joinToString(", ").ifBlank { null },
+    ).joinToString(" · ")
+    return HeroPick("show:${show.libraryId}:${show.title}", kick, show.title, meta, show.overview, show.rating, show.backdropItemId, show.backdropMtimeUnix, null, show)
+}
+
+private fun heroPicks(
+    movies: List<PopItem>,
+    shows: List<ShowSummary>,
+    completedItems: Set<Long>,
+    completedShows: Set<String>,
+    continueMovies: List<PopItem>,
+    continueEpisodes: List<PopItem>,
+    recentMovies: List<PopItem>,
+    recentShows: List<ShowSummary>,
+    watchlistMovies: List<PopItem>,
+    watchlistTvShows: List<ShowSummary>,
+): List<HeroPick> {
+    fun itemSeen(item: PopItem) = completedItems.contains(item.id)
+    fun showSeen(show: ShowSummary) = completedShows.contains("${show.libraryId}\n${show.title.lowercase()}")
+    val picks = mutableListOf<HeroPick>()
+
+    for (item in (continueMovies + continueEpisodes).take(4)) {
+        heroItemPick(item, "Continue watching")?.let(picks::add)
+    }
+
+    // "Because you watched X": a same-genre match from the loaded libraries.
+    for (played in (continueMovies + continueEpisodes).take(4)) {
+        val genre = heroGenres(played.genres).firstOrNull() ?: continue
+        val source = if (played.kind == "episode") played.showTitle.ifBlank { played.title } else played.title
+        val matches = movies.filter { !itemSeen(it) && it.title != source && it.rating >= 6.5 && heroGenres(it.genres).any { g -> g.equals(genre, ignoreCase = true) } }
+            .mapNotNull { heroItemPick(it, "Because you watched $source") } +
+            shows.filter { !showSeen(it) && it.title != source && it.rating >= 6.5 && heroGenres(it.genres).any { g -> g.equals(genre, ignoreCase = true) } }
+                .mapNotNull { heroShowPick(it, "Because you watched $source") }
+        matches.randomOrNull()?.let(picks::add)
+    }
+
+    for (item in recentMovies.take(2)) if (!itemSeen(item)) heroItemPick(item, "New in your library")?.let(picks::add)
+    for (show in recentShows.take(2)) if (!showSeen(show)) heroShowPick(show, "New in your library")?.let(picks::add)
+    for (item in watchlistMovies.take(3)) if (!itemSeen(item)) heroItemPick(item, "On your watchlist")?.let(picks::add)
+    for (show in watchlistTvShows.take(3)) if (!showSeen(show)) heroShowPick(show, "On your watchlist")?.let(picks::add)
+
+    val gems = movies.filter { !itemSeen(it) && it.rating >= 7.5 }.mapNotNull { heroItemPick(it, "Maybe you missed this") } +
+        shows.filter { !showSeen(it) && it.rating >= 7.5 }.mapNotNull { heroShowPick(it, "Maybe you missed this") }
+    gems.randomOrNull()?.let(picks::add)
+
+    if (picks.isEmpty()) {
+        val fallback = movies.mapNotNull { heroItemPick(it, "Featured") } + shows.mapNotNull { heroShowPick(it, "Featured") }
+        fallback.randomOrNull()?.let(picks::add)
+    }
+    return picks.distinctBy { it.key }.shuffled()
+}
+
+@Composable
+private fun HomeHero(
+    session: Session?,
+    picks: List<HeroPick>,
+    onItem: (PopItem) -> Unit,
+    onShow: (ShowSummary) -> Unit,
+    onContentFocus: (FocusRequester) -> Unit,
+) {
+    var index by remember(picks) { mutableStateOf(0) }
+    var focused by remember { mutableStateOf(false) }
+    val requester = remember { FocusRequester() }
+    LaunchedEffect(picks) {
+        while (picks.size > 1) {
+            delay(12_000)
+            index = (index + 1) % picks.size
+        }
+    }
+    val pick = picks.getOrNull(index) ?: picks.firstOrNull() ?: return
+    Box(
+        Modifier
+            .padding(horizontal = 28.dp, vertical = 4.dp)
+            .fillMaxWidth()
+            .height(280.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Surface2)
+            .border(2.dp, if (focused) FocusGlow else Color.Transparent, RoundedCornerShape(12.dp))
+            .focusRequester(requester)
+            .onFocusChanged {
+                focused = it.isFocused
+                if (it.isFocused) onContentFocus(requester)
+            }
+            .focusable()
+            .tvActivate { pick.item?.let(onItem) ?: pick.show?.let(onShow) },
+    ) {
+        Crossfade(targetState = pick, animationSpec = tween(700), label = "homeHero") { current ->
+            Box(Modifier.fillMaxSize()) {
+                if (session != null) {
+                    SizedAsyncImage(
+                        model = imageUrl(session, current.backdropId, "backdrop", current.backdropVersion),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                        widthPx = 1280,
+                        heightPx = 720,
+                        authToken = session.token,
+                    )
+                }
+                Box(
+                    Modifier.fillMaxSize().background(
+                        Brush.horizontalGradient(
+                            colors = listOf(Bg.copy(alpha = .96f), Bg.copy(alpha = .72f), Bg.copy(alpha = .18f), Color.Transparent),
+                        ),
+                    ),
+                )
+                Column(
+                    Modifier.align(Alignment.CenterStart).fillMaxWidth(.6f).padding(horizontal = 30.dp),
+                    verticalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
+                    Text(current.kick.uppercase(), color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
+                    Text(current.heading, color = TextColor, fontSize = 30.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        if (current.rating > 0) Text("★ %.1f".format(current.rating), color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        if (current.meta.isNotBlank()) Text(current.meta, color = Muted, fontSize = 13.sp)
+                    }
+                    if (current.overview.isNotBlank()) {
+                        Text(current.overview, color = TextColor.copy(alpha = .82f), fontSize = 12.sp, lineHeight = 17.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun CuratedLanding(
     session: Session?,
@@ -1164,6 +1336,8 @@ fun CuratedLanding(
     continueEpisodes: List<PopItem>,
     recentMovies: List<PopItem>,
     recentShows: List<ShowSummary>,
+    watchlistMovies: List<PopItem>,
+    watchlistTvShows: List<ShowSummary>,
     onItem: (PopItem) -> Unit,
     onShow: (ShowSummary) -> Unit,
     onMoreContinueMovies: () -> Unit,
@@ -1195,12 +1369,22 @@ fun CuratedLanding(
         }
     }
 
+    val heroEntries = remember(movies, shows, completedItems, completedShows, continueMovies, continueEpisodes, recentMovies, recentShows, watchlistMovies, watchlistTvShows) {
+        heroPicks(movies, shows, completedItems, completedShows, continueMovies, continueEpisodes, recentMovies, recentShows, watchlistMovies, watchlistTvShows)
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 30.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item { BrowserHeader("Home", "${movies.size} movies \u00b7 ${shows.size} shows loaded") }
+        item {
+            if (heroEntries.isEmpty()) {
+                BrowserHeader("Home", "${movies.size} movies \u00b7 ${shows.size} shows loaded")
+            } else {
+                HomeHero(session, heroEntries, onItem, onShow, onContentFocus)
+            }
+        }
         if (continueMovies.isNotEmpty()) {
             item {
                 PosterShelf("Continue Movies", "${continueMovies.size} in progress", continueMovies.take(HomeShelfLimit), key = { it.id }, autoFocusFirst = true, moreVisible = continueMovies.size > HomeShelfLimit, onMore = onMoreContinueMovies) { item, autoFocus ->

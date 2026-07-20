@@ -69,7 +69,7 @@ func main() {
 
 	scanCtx, stopScanner := context.WithCancel(context.Background())
 	defer stopScanner()
-	if cfg.ScanOnStart || cfg.AutoScan {
+	if cfg.ScanOnStart || cfg.AutoScan || cfg.ReconcileInterval > 0 {
 		go media.NewAutoScanner(cfg, store, log).Run(scanCtx)
 	}
 

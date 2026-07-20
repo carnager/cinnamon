@@ -307,7 +307,7 @@ async function renderUsers(skipHistory, selectedUserId = 0) {
     row.type = "button";
     row.addEventListener("click", () => renderUsers(true, user.id).catch(console.error));
     const display = user.displayName || user.username;
-    const avatar = el("div", "user-avatar", initials(display));
+    const avatar = userAvatarElement(user, "user-avatar");
     const main = el("div", "user-row-main");
     main.append(el("div", "user-row-name", display), el("div", "user-row-meta", user.username));
     const badges = el("div", "user-row-badges");
@@ -382,11 +382,12 @@ function userEditorCard(user) {
 
   const identity = el("div", "account-identity compact");
   identity.append(
-    el("div", "user-avatar", initials(user.displayName || user.username)),
+    userAvatarElement(user, "user-avatar large"),
     el("div", "account-identity-copy", [
       el("strong", null, user.displayName || user.username),
       el("span", null, user.username),
     ]),
+    avatarControls(user, isCurrent),
   );
 
   const form = el("form", "user-edit-form");
@@ -443,6 +444,60 @@ function userEditorCard(user) {
 
   card.append(head, identity, form);
   return card;
+}
+
+function avatarControls(user, isCurrent) {
+  const wrap = el("div", "avatar-actions");
+  const error = el("div", "form-error");
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/jpeg,image/png,image/gif,image/webp";
+  input.hidden = true;
+  const refresh = async (saved) => {
+    if (isCurrent) {
+      currentUser = saved;
+      renderUserPanel();
+    }
+    await renderUsers(true, saved.id);
+  };
+  const upload = el("button", "secondary", user.avatar ? "Change Avatar" : "Upload Avatar");
+  upload.type = "button";
+  upload.addEventListener("click", () => input.click());
+  input.addEventListener("change", async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    error.textContent = "";
+    upload.disabled = true;
+    const data = new FormData();
+    data.append("avatar", file);
+    try {
+      const saved = await api(`/api/users/${encodeURIComponent(String(user.id))}/avatar`, { method: "POST", body: data });
+      await refresh(saved);
+    } catch (err) {
+      error.textContent = cleanError(err);
+      upload.disabled = false;
+      input.value = "";
+    }
+  });
+  wrap.append(input, upload);
+  if (user.avatar) {
+    const remove = el("button", "secondary", "Remove Avatar");
+    remove.type = "button";
+    remove.addEventListener("click", async () => {
+      error.textContent = "";
+      remove.disabled = true;
+      try {
+        const saved = await api(`/api/users/${encodeURIComponent(String(user.id))}/avatar`, { method: "DELETE" });
+        await refresh(saved);
+      } catch (err) {
+        error.textContent = cleanError(err);
+        remove.disabled = false;
+      }
+    });
+    wrap.append(remove);
+  }
+  wrap.append(error);
+  return wrap;
 }
 
 async function renderSettings(skipHistory) {
@@ -869,6 +924,24 @@ function initials(value) {
   const first = parts[0]?.[0] || "U";
   const second = parts.length > 1 ? parts[parts.length - 1][0] : "";
   return `${first}${second}`.toUpperCase();
+}
+
+function avatarUrl(user) {
+  if (!user?.avatar) return "";
+  return `/api/users/${encodeURIComponent(String(user.id))}/avatar?v=${encodeURIComponent(user.avatar)}`;
+}
+
+function userAvatarElement(user, className) {
+  const display = (user && (user.displayName || user.username)) || "U";
+  const url = avatarUrl(user);
+  if (url) {
+    const img = document.createElement("img");
+    img.className = className;
+    img.src = url;
+    img.alt = display;
+    return img;
+  }
+  return el("div", className, initials(display));
 }
 
 function toggleActionButton({ active, activeLabel, inactiveLabel, onToggle, className = "secondary" }) {

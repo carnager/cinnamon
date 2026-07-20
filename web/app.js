@@ -107,7 +107,7 @@ function renderUserPanel() {
   const summary = document.createElement("summary");
   summary.className = "user-menu-trigger";
   summary.append(
-    el("span", "user-menu-avatar", initials(currentUser.displayName || currentUser.username || "U")),
+    userAvatarElement(currentUser, "user-menu-avatar"),
     el("span", "user-menu-name", currentUser.displayName || currentUser.username),
     el("span", "user-menu-caret", "▾"),
   );

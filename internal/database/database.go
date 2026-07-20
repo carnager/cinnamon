@@ -519,6 +519,7 @@ CREATE TABLE IF NOT EXISTS app_updates (
 		`CREATE INDEX IF NOT EXISTS idx_remote_commands_device ON remote_commands(device_id, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_remote_pairing_expires ON remote_pairing_codes(expires_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_app_updates_updated ON app_updates(updated_at)`,
+		`ALTER TABLE users ADD COLUMN avatar TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := db.Exec(stmt); err != nil && !isDuplicateColumn(err) {
 			return err

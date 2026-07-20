@@ -2037,6 +2037,24 @@ button, input, select { font: inherit; }
   font-size: 12px;
 }
 
+img.user-avatar,
+img.user-menu-avatar {
+  object-fit: cover;
+}
+
+.avatar-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.avatar-actions .form-error {
+  margin: 0;
+  text-align: right;
+}
+
 .settings-rows {
   display: grid;
   grid-template-columns: 150px minmax(0, 1fr);

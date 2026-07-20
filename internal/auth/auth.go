@@ -39,6 +39,9 @@ type User struct {
 	IsAdmin     bool   `json:"isAdmin"`
 	Disabled    bool   `json:"disabled,omitempty"`
 	CreatedAt   string `json:"createdAt,omitempty"`
+	// Avatar is an opaque version string ("" = no avatar); clients append it
+	// as ?v= so a replaced image busts immutable caches.
+	Avatar string `json:"avatar,omitempty"`
 }
 
 type CreateUserInput struct {
@@ -106,7 +109,7 @@ VALUES (?, ?, ?, ?)`, username, displayName, hash, boolInt(in.IsAdmin))
 }
 
 func (s *Store) Users(ctx context.Context) ([]User, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, username, display_name, is_admin, disabled, created_at FROM users ORDER BY username`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, username, display_name, is_admin, disabled, created_at, avatar FROM users ORDER BY username`)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +126,7 @@ func (s *Store) Users(ctx context.Context) ([]User, error) {
 }
 
 func (s *Store) User(ctx context.Context, id int64) (User, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, username, display_name, is_admin, disabled, created_at FROM users WHERE id = ?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id, username, display_name, is_admin, disabled, created_at, avatar FROM users WHERE id = ?`, id)
 	return scanUser(row)
 }
 
@@ -174,6 +177,11 @@ WHERE id = ?`, displayName, boolInt(isAdmin), boolInt(disabled), id)
 	return s.User(ctx, id)
 }
 
+func (s *Store) SetAvatar(ctx context.Context, id int64, version string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE users SET avatar = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, version, id)
+	return err
+}
+
 func (s *Store) EnabledAdminCount(ctx context.Context) (int, error) {
 	var count int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE is_admin = 1 AND disabled = 0`).Scan(&count)
@@ -182,12 +190,12 @@ func (s *Store) EnabledAdminCount(ctx context.Context) (int, error) {
 
 func (s *Store) Authenticate(ctx context.Context, username, password string) (User, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, username, display_name, password_hash, is_admin, disabled, created_at
+SELECT id, username, display_name, password_hash, is_admin, disabled, created_at, avatar
 FROM users WHERE username = ?`, normalizeUsername(username))
 	var user User
 	var hash string
 	var isAdmin, disabled int
-	if err := row.Scan(&user.ID, &user.Username, &user.DisplayName, &hash, &isAdmin, &disabled, &user.CreatedAt); err != nil {
+	if err := row.Scan(&user.ID, &user.Username, &user.DisplayName, &hash, &isAdmin, &disabled, &user.CreatedAt, &user.Avatar); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return User{}, ErrInvalidCredentials
 		}
@@ -222,14 +230,14 @@ func (s *Store) UserByToken(ctx context.Context, token string) (User, error) {
 		return User{}, sql.ErrNoRows
 	}
 	row := s.db.QueryRowContext(ctx, `
-SELECT u.id, u.username, u.display_name, u.is_admin, u.disabled, u.created_at, s.last_seen_at
+SELECT u.id, u.username, u.display_name, u.is_admin, u.disabled, u.created_at, u.avatar, s.last_seen_at
 FROM auth_sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.token = ? AND s.expires_at > ? AND u.disabled = 0`, token, time.Now().UTC().Format(time.RFC3339))
 	var user User
 	var isAdmin, disabled int
 	var lastSeen string
-	if err := row.Scan(&user.ID, &user.Username, &user.DisplayName, &isAdmin, &disabled, &user.CreatedAt, &lastSeen); err != nil {
+	if err := row.Scan(&user.ID, &user.Username, &user.DisplayName, &isAdmin, &disabled, &user.CreatedAt, &user.Avatar, &lastSeen); err != nil {
 		return User{}, err
 	}
 	user.IsAdmin = isAdmin != 0
@@ -267,7 +275,7 @@ func (s *Store) DeleteSession(ctx context.Context, token string) error {
 func scanUser(row interface{ Scan(dest ...any) error }) (User, error) {
 	var user User
 	var isAdmin, disabled int
-	err := row.Scan(&user.ID, &user.Username, &user.DisplayName, &isAdmin, &disabled, &user.CreatedAt)
+	err := row.Scan(&user.ID, &user.Username, &user.DisplayName, &isAdmin, &disabled, &user.CreatedAt, &user.Avatar)
 	user.IsAdmin = isAdmin != 0
 	user.Disabled = disabled != 0
 	return user, err

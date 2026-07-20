@@ -83,6 +83,8 @@ fun PopcornApp() {
                     it,
                     prefs.getString("username", "") ?: "",
                     prefs.getBoolean("isAdmin", false),
+                    prefs.getLong("userId", 0),
+                    prefs.getString("avatar", "") ?: "",
                 )
             }
         )
@@ -230,9 +232,9 @@ fun PopcornApp() {
     fun applyHomePayload(activeSession: Session, payload: HomePayload, generation: Int? = null) {
         if (generation != null && generation != loadGeneration) return
         libraries = payload.libraries
-        if (payload.user.username.isNotBlank() && (activeSession.username != payload.user.username || activeSession.isAdmin != payload.user.isAdmin)) {
-            val updated = activeSession.copy(username = payload.user.username, isAdmin = payload.user.isAdmin)
-            prefs.edit().putString("username", payload.user.username).putBoolean("isAdmin", payload.user.isAdmin).apply()
+        if (payload.user.username.isNotBlank() && (activeSession.username != payload.user.username || activeSession.isAdmin != payload.user.isAdmin || activeSession.userId != payload.user.id || activeSession.avatar != payload.user.avatar)) {
+            val updated = activeSession.copy(username = payload.user.username, isAdmin = payload.user.isAdmin, userId = payload.user.id, avatar = payload.user.avatar)
+            prefs.edit().putString("username", payload.user.username).putBoolean("isAdmin", payload.user.isAdmin).putLong("userId", payload.user.id).putString("avatar", payload.user.avatar).apply()
             session = updated
         }
         homeMovies = payload.homeMovies
@@ -731,9 +733,9 @@ fun PopcornApp() {
                 applyHomePayload(active, homePayload)
             } else {
                 val me = api.me()
-                if (active.username != me.username || active.isAdmin != me.isAdmin) {
-                    val updated = active.copy(username = me.username, isAdmin = me.isAdmin)
-                    prefs.edit().putString("username", me.username).putBoolean("isAdmin", me.isAdmin).apply()
+                if (active.username != me.username || active.isAdmin != me.isAdmin || active.userId != me.id || active.avatar != me.avatar) {
+                    val updated = active.copy(username = me.username, isAdmin = me.isAdmin, userId = me.id, avatar = me.avatar)
+                    prefs.edit().putString("username", me.username).putBoolean("isAdmin", me.isAdmin).putLong("userId", me.id).putString("avatar", me.avatar).apply()
                     session = updated
                 }
                 libraries = api.libraries()
@@ -843,7 +845,7 @@ fun PopcornApp() {
                     loading = true
                     runCatching { Api(Session(server.trimEnd('/'), "")).login(username, password) }
                         .onSuccess {
-                            prefs.edit().putString("server", it.server).putString("token", it.token).putString("username", it.username).putBoolean("isAdmin", it.isAdmin).apply()
+                            prefs.edit().putString("server", it.server).putString("token", it.token).putString("username", it.username).putBoolean("isAdmin", it.isAdmin).putLong("userId", it.userId).putString("avatar", it.avatar).apply()
                             session = it
                             screen = Screen.Loading
                         }
@@ -852,7 +854,7 @@ fun PopcornApp() {
                 }
             },
             onQrLogin = {
-                prefs.edit().putString("server", it.server).putString("token", it.token).putString("username", it.username).apply()
+                prefs.edit().putString("server", it.server).putString("token", it.token).putString("username", it.username).putBoolean("isAdmin", it.isAdmin).putLong("userId", it.userId).putString("avatar", it.avatar).apply()
                 session = it
                 screen = Screen.Loading
             },

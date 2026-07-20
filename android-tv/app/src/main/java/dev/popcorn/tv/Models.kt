@@ -32,8 +32,8 @@ val BandwidthOptions = listOf(
     BandwidthOption("15 mbit", 15000),
 )
 
-data class Session(val server: String, val token: String, val username: String = "", val isAdmin: Boolean = false)
-data class User(val id: Long, val username: String, val displayName: String, val isAdmin: Boolean)
+data class Session(val server: String, val token: String, val username: String = "", val isAdmin: Boolean = false, val userId: Long = 0, val avatar: String = "")
+data class User(val id: Long, val username: String, val displayName: String, val isAdmin: Boolean, val avatar: String = "")
 data class Library(val id: String, val name: String, val type: String)
 
 data class PlaybackPlan(

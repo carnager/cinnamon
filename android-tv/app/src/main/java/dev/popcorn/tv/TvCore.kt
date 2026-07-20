@@ -153,6 +153,11 @@ fun imageUrl(session: Session?, itemId: Long, kind: String, version: Long = 0): 
     return "${session.server}/api/items/$itemId/image/$kind$suffix"
 }
 
+fun avatarUrl(session: Session?): String {
+    if (session == null || session.userId <= 0 || session.avatar.isBlank()) return ""
+    return "${session.server}/api/users/${session.userId}/avatar?v=${session.avatar}"
+}
+
 fun actorImageUrl(session: Session?, thumb: String): String {
     val value = thumb.trim()
     if (value.isBlank()) return ""

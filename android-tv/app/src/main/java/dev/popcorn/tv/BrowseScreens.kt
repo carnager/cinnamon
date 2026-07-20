@@ -33,6 +33,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
@@ -951,7 +952,12 @@ private fun UserMenuButton(session: Session?, showUpdate: Boolean, onUpdates: ()
     var open by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     Box {
-        Pill(text = session?.username?.ifBlank { "User" } ?: "User", selected = open, onClick = { open = true })
+        val avatar = avatarUrl(session)
+        if (avatar.isNotBlank()) {
+            AvatarButton(url = avatar, session = session, selected = open, onClick = { open = true })
+        } else {
+            Pill(text = session?.username?.ifBlank { "User" } ?: "User", selected = open, onClick = { open = true })
+        }
         if (open) {
             val options = buildList {
                 if (session?.isAdmin == true) {
@@ -980,6 +986,35 @@ private fun UserMenuButton(session: Session?, showUpdate: Boolean, onUpdates: ()
         if (settingsOpen) {
             PlaybackSettingsDialog(onClose = { settingsOpen = false })
         }
+    }
+}
+
+@Composable
+private fun AvatarButton(url: String, session: Session?, selected: Boolean, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val border = when {
+        focused -> Color.White.copy(alpha = .9f)
+        selected -> Accent.copy(alpha = .6f)
+        else -> Color.White.copy(alpha = .25f)
+    }
+    Box(
+        Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .border(2.dp, border, CircleShape)
+            .onFocusChanged { focused = it.isFocused }
+            .focusable()
+            .tvActivate(onClick),
+    ) {
+        SizedAsyncImage(
+            model = url,
+            contentDescription = session?.username?.ifBlank { "User" } ?: "User",
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
+            widthPx = 96,
+            heightPx = 96,
+            authToken = session?.token.orEmpty(),
+        )
     }
 }
 

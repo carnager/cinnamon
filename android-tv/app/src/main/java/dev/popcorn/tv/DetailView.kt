@@ -24,8 +24,14 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -356,6 +362,7 @@ private fun DetailHeroContent(
     onRateMenu: () -> Unit,
     onSimilar: () -> Unit,
 ) {
+    var resumeMenuOpen by remember { mutableStateOf(false) }
     Row(
         Modifier.widthIn(max = 920.dp),
         horizontalArrangement = Arrangement.spacedBy(28.dp),
@@ -473,31 +480,14 @@ private fun DetailHeroContent(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (canResume) {
-                    PlayButton(
-                        label = "Resume",
-                        detail = fmtClock(resumePositionMs),
-                        focusRequester = playFocus,
-                        onUp = { requestDetailFocus(descriptionFocus) },
-                        onDown = { requestDetailFocus(castFocus) },
-                        onClick = onResume,
-                    )
-                    PlayButton(
-                        label = "Play",
-                        primary = false,
-                        onUp = { requestDetailFocus(descriptionFocus) },
-                        onDown = { requestDetailFocus(castFocus) },
-                        onClick = onPlayFromStart,
-                    )
-                } else {
-                    PlayButton(
-                        label = "Play",
-                        focusRequester = playFocus,
-                        onUp = { requestDetailFocus(descriptionFocus) },
-                        onDown = { requestDetailFocus(castFocus) },
-                        onClick = onPlayFromStart,
-                    )
-                }
+                PlayButton(
+                    label = "Play",
+                    detail = if (canResume) fmtClock(resumePositionMs) else null,
+                    focusRequester = playFocus,
+                    onUp = { requestDetailFocus(descriptionFocus) },
+                    onDown = { requestDetailFocus(castFocus) },
+                    onClick = { if (canResume) resumeMenuOpen = true else onPlayFromStart() },
+                )
                 ActionToggle(
                     label = "Trailer",
                     active = false,
@@ -505,23 +495,28 @@ private fun DetailHeroContent(
                     onDown = { requestDetailFocus(castFocus) },
                     onClick = onTrailer,
                 )
-                ActionToggle(
-                    label = if (watched) "Seen" else "Mark seen",
+                ActionIcon(
+                    icon = Icons.Filled.CheckCircle,
+                    contentDescription = if (watched) "Seen" else "Mark seen",
                     active = watched,
                     onUp = { requestDetailFocus(descriptionFocus) },
                     onDown = { requestDetailFocus(castFocus) },
                     onClick = onWatchedChange,
                 )
-                ActionToggle(
-                    label = if (watchlisted) "In watchlist" else "Watchlist",
+                ActionIcon(
+                    icon = Icons.Filled.Bookmark,
+                    contentDescription = if (watchlisted) "On watchlist" else "Add to watchlist",
                     active = watchlisted,
                     onUp = { requestDetailFocus(descriptionFocus) },
                     onDown = { requestDetailFocus(castFocus) },
                     onClick = onWatchlistChange,
                 )
-                ActionToggle(
-                    label = if (userRating > 0) "\u2605 $userRating/10" else "Rate",
+                ActionIcon(
+                    icon = Icons.Filled.Star,
+                    contentDescription = if (userRating > 0) "Rated $userRating of 10" else "Rate",
                     active = userRating > 0,
+                    activeTint = Gold,
+                    badge = userRating.takeIf { it > 0 }?.toString(),
                     onUp = { requestDetailFocus(descriptionFocus) },
                     onDown = { requestDetailFocus(castFocus) },
                     onClick = onRateMenu,
@@ -533,6 +528,39 @@ private fun DetailHeroContent(
                         onUp = { requestDetailFocus(descriptionFocus) },
                         onDown = { requestDetailFocus(castFocus) },
                         onClick = onSimilar,
+                    )
+                }
+            }
+        }
+    }
+
+    if (resumeMenuOpen) {
+        Dialog(onDismissRequest = { resumeMenuOpen = false }) {
+            Column(
+                Modifier
+                    .width(400.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(SurfaceColor)
+                    .border(1.dp, Line, RoundedCornerShape(10.dp))
+                    .padding(vertical = 12.dp),
+            ) {
+                Text("Continue watching?", color = Accent, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp))
+                Column(Modifier.padding(horizontal = 12.dp)) {
+                    TrackRow(
+                        label = "Resume from ${fmtClock(resumePositionMs)}",
+                        selected = true,
+                        onClick = {
+                            resumeMenuOpen = false
+                            onResume()
+                        },
+                    )
+                    TrackRow(
+                        label = "From the beginning",
+                        selected = false,
+                        onClick = {
+                            resumeMenuOpen = false
+                            onPlayFromStart()
+                        },
                     )
                 }
             }
@@ -647,6 +675,62 @@ private fun ActionToggle(
             fontWeight = FontWeight.Bold,
             maxLines = 1,
         )
+    }
+}
+
+@Composable
+private fun ActionIcon(
+    icon: ImageVector,
+    contentDescription: String,
+    active: Boolean,
+    activeTint: Color = Accent,
+    badge: String? = null,
+    onUp: (() -> Boolean)? = null,
+    onDown: (() -> Boolean)? = null,
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val bg = when {
+        focused && active -> activeTint.copy(alpha = .92f)
+        focused -> Color.White.copy(alpha = .16f)
+        active -> activeTint.copy(alpha = .26f)
+        else -> Color.White.copy(alpha = .10f)
+    }
+    val borderColor = when {
+        focused -> Color.White.copy(alpha = .78f)
+        active -> activeTint.copy(alpha = .50f)
+        else -> Color.White.copy(alpha = .18f)
+    }
+    val tint = when {
+        focused && active -> Color.Black
+        active -> activeTint
+        focused -> TextColor
+        else -> Muted
+    }
+    Row(
+        Modifier
+            .height(42.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(bg)
+            .border(1.dp, borderColor, RoundedCornerShape(999.dp))
+            .onFocusChanged { focused = it.isFocused }
+            .focusable()
+            .onPreviewKeyEvent {
+                when {
+                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionUp && onUp != null -> onUp()
+                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionDown && onDown != null -> onDown()
+                    else -> false
+                }
+            }
+            .tvActivate(onClick)
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(20.dp))
+        if (badge != null) {
+            Text(badge, color = tint, fontSize = 13.sp, fontWeight = FontWeight.Black)
+        }
     }
 }
 

@@ -106,6 +106,7 @@ data class SeasonSummary(
 data class PlaybackProgress(val itemId: Long, val positionMs: Long, val durationMs: Long, val completed: Boolean)
 data class ShowProgress(val libraryId: String, val showTitle: String, val episodeCount: Int, val completedCount: Int, val completed: Boolean)
 data class Watchlist(val items: List<PopItem>, val shows: List<ShowSummary>)
+data class UserRatingRow(val kind: String, val itemId: Long, val libraryId: String, val showTitle: String, val rating: Int)
 data class HomePayload(
     val user: User,
     val libraries: List<Library>,

@@ -68,6 +68,8 @@ fun DetailView(
     onTrailer: (Boolean) -> Unit,
     onWatchedChange: (Boolean) -> Unit,
     onWatchlistChange: (Boolean) -> Unit,
+    userRating: Int = 0,
+    onRate: (Int) -> Unit = {},
     onBack: () -> Unit,
     onHome: () -> Unit,
     onSearch: () -> Unit,
@@ -77,6 +79,7 @@ fun DetailView(
 ) {
     val streams = remember { mutableStateListOf<StreamInfo>() }
     var detailItem by remember(item.id) { mutableStateOf(item) }
+    var ratingMenuOpen by remember(item.id) { mutableStateOf(false) }
     var selectedAudio by remember(item.id) { mutableStateOf<Int?>(null) }
     var selectedSubtitle by remember(item.id) { mutableStateOf<Int?>(null) }
     var streamsLoaded by remember(item.id) { mutableStateOf(false) }
@@ -242,6 +245,8 @@ fun DetailView(
                 castFocus = castFocus,
                 watched = watched,
                 watchlisted = watchlisted,
+                userRating = userRating,
+                onRateMenu = { ratingMenuOpen = true },
                 showSimilar = similar.isNotEmpty(),
                 onAudio = { audioMenuOpen = true },
                 onSubtitle = { subtitleMenuOpen = true },
@@ -305,6 +310,17 @@ fun DetailView(
     if (fullTextOpen) {
         FullTextDialog(item = detailItem, onDismiss = { fullTextOpen = false })
     }
+
+    if (ratingMenuOpen) {
+        RatingDialog(
+            current = userRating,
+            onDismiss = { ratingMenuOpen = false },
+            onSelect = { value ->
+                ratingMenuOpen = false
+                onRate(value)
+            },
+        )
+    }
 }
 
 @Composable
@@ -336,6 +352,8 @@ private fun DetailHeroContent(
     onTrailer: () -> Unit,
     onWatchedChange: () -> Unit,
     onWatchlistChange: () -> Unit,
+    userRating: Int,
+    onRateMenu: () -> Unit,
     onSimilar: () -> Unit,
 ) {
     Row(
@@ -500,6 +518,13 @@ private fun DetailHeroContent(
                     onUp = { requestDetailFocus(descriptionFocus) },
                     onDown = { requestDetailFocus(castFocus) },
                     onClick = onWatchlistChange,
+                )
+                ActionToggle(
+                    label = if (userRating > 0) "\u2605 $userRating/10" else "Rate",
+                    active = userRating > 0,
+                    onUp = { requestDetailFocus(descriptionFocus) },
+                    onDown = { requestDetailFocus(castFocus) },
+                    onClick = onRateMenu,
                 )
                 if (showSimilar) {
                     ActionToggle(
@@ -1101,5 +1126,37 @@ private fun TrackRow(label: String, selected: Boolean, onClick: () -> Unit) {
             fontSize = 14.sp,
         )
         Text(label, color = if (selected) TextColor else Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+
+@Composable
+fun RatingDialog(current: Int, onDismiss: () -> Unit, onSelect: (Int) -> Unit) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .width(360.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(SurfaceColor)
+                .border(1.dp, Line, RoundedCornerShape(10.dp))
+                .padding(vertical = 12.dp),
+        ) {
+            Text("Your rating", color = Accent, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp))
+            androidx.compose.foundation.lazy.LazyColumn(
+                Modifier.fillMaxWidth().heightIn(max = 400.dp).padding(horizontal = 12.dp),
+            ) {
+                if (current > 0) {
+                    item { TrackRow(label = "Remove rating", selected = false, onClick = { onSelect(0) }) }
+                }
+                items(10) { i ->
+                    val value = 10 - i
+                    TrackRow(
+                        label = "\u2605".repeat(value) + "  $value/10",
+                        selected = value == current,
+                        onClick = { onSelect(value) },
+                    )
+                }
+            }
+        }
     }
 }

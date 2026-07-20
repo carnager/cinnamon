@@ -635,6 +635,36 @@ class Api(private val session: Session) {
         requestText("/api/progress/tv?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}", "DELETE", null)
     }
 
+    suspend fun userRatings(): List<UserRatingRow> = withContext(Dispatchers.IO) {
+        val arr = requestArray("/api/ratings/user")
+        (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            UserRatingRow(
+                kind = o.optString("kind"),
+                itemId = o.optLong("itemId"),
+                libraryId = o.optString("libraryId"),
+                showTitle = o.optString("showTitle"),
+                rating = o.optInt("rating"),
+            )
+        }
+    }
+
+    suspend fun setItemRating(itemId: Long, rating: Int) = withContext(Dispatchers.IO) {
+        request("/api/items/$itemId/rating", "PUT", "{\"rating\":$rating}")
+    }
+
+    suspend fun deleteItemRating(itemId: Long) = withContext(Dispatchers.IO) {
+        requestText("/api/items/$itemId/rating", "DELETE", null)
+    }
+
+    suspend fun setShowRating(libraryId: String, showTitle: String, rating: Int) = withContext(Dispatchers.IO) {
+        request("/api/ratings/tv?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}", "PUT", "{\"rating\":$rating}")
+    }
+
+    suspend fun deleteShowRating(libraryId: String, showTitle: String) = withContext(Dispatchers.IO) {
+        requestText("/api/ratings/tv?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}", "DELETE", null)
+    }
+
     suspend fun addItemWatchlist(itemId: Long) = withContext(Dispatchers.IO) {
         request("/api/items/$itemId/watchlist", "PUT", "{}")
     }

@@ -38,6 +38,35 @@ function imageItemID(item, kind) {
   return item?.posterItemId || item?.id;
 }
 
+/* userRatingControl renders a self-updating 1-10 star row for a personal
+   rating. Clicking the current rating again clears it. */
+function userRatingControl(getCurrent, save) {
+  const wrap = el("div", "user-rating");
+  const render = () => {
+    wrap.innerHTML = "";
+    const current = getCurrent();
+    wrap.append(el("span", "user-rating-label", current ? `Your rating ${current}/10` : "Rate"));
+    const stars = el("div", "user-rating-stars");
+    for (let i = 1; i <= 10; i++) {
+      const btn = el("button", i <= current ? "rating-star active" : "rating-star", "\u2605");
+      btn.type = "button";
+      btn.title = i === current ? "Clear rating" : `${i}/10`;
+      btn.addEventListener("click", async () => {
+        try {
+          await save(i === current ? 0 : i);
+        } catch (err) {
+          console.error(err);
+        }
+        render();
+      });
+      stars.append(btn);
+    }
+    wrap.append(stars);
+  };
+  render();
+  return wrap;
+}
+
 function ratingBadge(rating, className) {
   return el("div", className, `\u2605 ${Number(rating).toFixed(1)}`);
 }
@@ -545,10 +574,17 @@ function traktSection(status) {
       await fetchWatchlist();
       return renderTraktWatchlistSummary(summary);
     }));
+    const importRatings = el("button", "secondary", "Import ratings");
+    importRatings.type = "button";
+    importRatings.addEventListener("click", () => runSettingsAction(importRatings, output, async () => {
+      const summary = await api("/api/trakt/import-ratings", { method: "POST" });
+      await refreshUserRatings();
+      return renderTraktWatchlistSummary(summary);
+    }));
     section.append(settingRow({
       title: "Import from Trakt",
-      description: "Pull your watched history or watchlist into Popcorn.",
-      control: [importSeen, importWatchlist],
+      description: "Pull your watched history, watchlist or ratings into Popcorn.",
+      control: [importSeen, importWatchlist, importRatings],
     }));
   }
 
@@ -1078,7 +1114,9 @@ async function openDetail(item, skipHistory, parent = {}) {
       onToggle: (watchlisted) => setItemWatchlisted(d, watchlisted),
     }),
   );
+
   body.append(actions);
+  body.append(userRatingControl(() => userItemRating(d), (value) => setItemRating(d, value)));
 
   detail.append(posterCol, body);
   frag.append(detail);
@@ -1243,6 +1281,7 @@ async function openShow(show, skipHistory, initialSeason) {
     toggleActionButton({ active: showWatchlisted(show), activeLabel: "In Watchlist", inactiveLabel: "Add Watchlist", onToggle: (w) => setShowWatchlisted(show, w) }),
   );
   body.append(actions);
+  body.append(userRatingControl(() => userShowRating(show), (value) => setShowRating(show, value)));
   header.append(poster, body);
   frag.append(header);
 

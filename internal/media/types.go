@@ -232,6 +232,16 @@ type Watchlist struct {
 	Shows []ShowSummary `json:"shows"`
 }
 
+// UserRating is one personal rating (1-10, Trakt scale): either an item
+// (movie/episode, ItemID set) or a show (LibraryID+ShowTitle set).
+type UserRating struct {
+	Kind      string `json:"kind"`
+	ItemID    int64  `json:"itemId,omitempty"`
+	LibraryID string `json:"libraryId,omitempty"`
+	ShowTitle string `json:"showTitle,omitempty"`
+	Rating    int    `json:"rating"`
+}
+
 type SourceRatings struct {
 	IMDb           float64
 	TMDb           float64

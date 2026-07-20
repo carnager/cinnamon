@@ -3404,3 +3404,41 @@ button, input, select { font: inherit; }
 @media (max-width: 900px) {
   .alpha-rail { display: none; }
 }
+
+/* ── Personal rating ── */
+.user-rating {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.user-rating-label {
+  color: var(--text-secondary);
+  font-size: 13px;
+  min-width: 110px;
+}
+
+.user-rating-stars {
+  display: flex;
+  gap: 2px;
+}
+
+.rating-star {
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: 20px;
+  line-height: 1;
+  padding: 2px;
+  cursor: pointer;
+  transition: color var(--transition), transform var(--transition);
+}
+
+.rating-star:hover {
+  transform: scale(1.2);
+  color: var(--gold);
+}
+
+.rating-star.active {
+  color: var(--gold);
+}

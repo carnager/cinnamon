@@ -102,6 +102,7 @@ fun PopcornApp() {
     var resumeFractionById by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
     var completedShows by remember { mutableStateOf<Set<String>>(emptySet()) }
     var heroAnchorShows by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var userItemRatings by remember { mutableStateOf<Map<Long, Int>>(emptyMap()) }
     var watchlistItems by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var watchlistShows by remember { mutableStateOf<Set<String>>(emptySet()) }
     var watchlistMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
@@ -154,6 +155,20 @@ fun PopcornApp() {
                 resumeFractionById = resumeFractionMap(progress)
                 completedShows = showProgress.filter { it.completed }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
                 heroAnchorShows = showProgress.filter { it.completed || it.completedCount >= 2 }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
+                userItemRatings = api.userRatings().filter { it.kind != "show" && it.itemId > 0 }.associate { it.itemId to it.rating }
+            }
+        }
+    }
+
+    fun setItemRating(activeSession: Session, item: PopItem, rating: Int) {
+        scope.launch {
+            runCatching {
+                val api = Api(activeSession)
+                if (rating > 0) api.setItemRating(item.id, rating) else api.deleteItemRating(item.id)
+            }.onSuccess {
+                userItemRatings = if (rating > 0) userItemRatings + (item.id to rating) else userItemRatings - item.id
+            }.onFailure {
+                error = it.message ?: "Failed to save rating"
             }
         }
     }
@@ -1102,6 +1117,8 @@ fun PopcornApp() {
             onWatchlistChange = { listed ->
                 session?.let { setItemWatchlisted(it, current.item, listed) }
             },
+            userRating = userItemRatings[current.item.id] ?: 0,
+            onRate = { value -> session?.let { setItemRating(it, current.item, value) } },
             onBack = { returnFromDetail(current) },
             onHome = { screen = Screen.Home },
             onSearch = ::openSearch,

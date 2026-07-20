@@ -339,6 +339,22 @@ class Api(private val session: Session) {
         )
     }
 
+    suspend fun itemRating(itemId: Long): Int = withContext(Dispatchers.IO) {
+        val arr = requestArray("/api/ratings/user")
+        (0 until arr.length())
+            .map { arr.getJSONObject(it) }
+            .firstOrNull { it.optString("kind") != "show" && it.optLong("itemId") == itemId }
+            ?.optInt("rating") ?: 0
+    }
+
+    suspend fun setItemRating(itemId: Long, rating: Int) = withContext(Dispatchers.IO) {
+        request("/api/items/$itemId/rating", "PUT", "{\"rating\":$rating}")
+    }
+
+    suspend fun deleteItemRating(itemId: Long) = withContext(Dispatchers.IO) {
+        requestText("/api/items/$itemId/rating", "DELETE", null)
+    }
+
     suspend fun markItemWatched(item: PopItem) = withContext(Dispatchers.IO) {
         val duration = if (item.durationMs > 0) item.durationMs else 1L
         request(

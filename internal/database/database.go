@@ -308,6 +308,18 @@ CREATE TABLE IF NOT EXISTS user_watchlist (
 	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	PRIMARY KEY(user_id, watch_key)
 );
+CREATE TABLE IF NOT EXISTS user_ratings (
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	rate_key TEXT NOT NULL,
+	kind TEXT NOT NULL,
+	item_id INTEGER REFERENCES media_items(id) ON DELETE CASCADE,
+	library_id TEXT,
+	show_title TEXT,
+	rating INTEGER NOT NULL,
+	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY(user_id, rate_key)
+);
 CREATE TABLE IF NOT EXISTS external_ratings_cache (
 	item_id INTEGER PRIMARY KEY REFERENCES media_items(id) ON DELETE CASCADE,
 	imdb_id TEXT,
@@ -502,6 +514,7 @@ CREATE TABLE IF NOT EXISTS app_updates (
 		`CREATE INDEX IF NOT EXISTS idx_auth_qr_expires ON auth_qr_codes(expires_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_playback_progress_user ON playback_progress(user_id, updated_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_user_watchlist_user ON user_watchlist(user_id, updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_user_ratings_user ON user_ratings(user_id, updated_at)`,
 		`ALTER TABLE external_ratings_cache ADD COLUMN tmdb_rating REAL`,
 		`CREATE INDEX IF NOT EXISTS idx_remote_commands_device ON remote_commands(device_id, id)`,
 		`CREATE INDEX IF NOT EXISTS idx_remote_pairing_expires ON remote_pairing_codes(expires_at)`,

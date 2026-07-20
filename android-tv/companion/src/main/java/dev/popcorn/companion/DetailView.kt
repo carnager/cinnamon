@@ -37,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.content.Intent
 import android.net.Uri
+import kotlinx.coroutines.launch
 
 @Composable
 fun DetailPage(
@@ -72,6 +74,8 @@ fun DetailPage(
     var selectedAudio by remember(item.id) { mutableStateOf<Int?>(null) }
     var selectedSubtitle by remember(item.id) { mutableStateOf<Int?>(null) }
     var error by remember(item.id) { mutableStateOf("") }
+    var userRating by remember(item.id) { mutableStateOf(0) }
+    val ratingScope = rememberCoroutineScope()
     val audioTracks = streams.filter { it.type == "audio" }
     val subtitleTracks = streams.filter { it.type == "subtitle" }
 
@@ -85,6 +89,8 @@ fun DetailPage(
             .onFailure { error = it.message ?: "Could not load streams" }
         runCatching { api.ratings(item.id) }
             .onSuccess { ratings = it }
+        runCatching { api.itemRating(item.id) }
+            .onSuccess { userRating = it }
         if (item.kind == "movie") {
             similar = runCatching { api.similar(item.id) }.getOrDefault(emptyList())
         }
@@ -129,6 +135,36 @@ fun DetailPage(
                     color = if (watched) Accent else TextColor,
                     fontWeight = FontWeight.Bold,
                 )
+            }
+        }
+        item {
+            ElevatedCard(colors = CardDefaults.elevatedCardColors(containerColor = Surface1), shape = RoundedCornerShape(16.dp), modifier = Modifier.padding(horizontal = 16.dp)) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        if (userRating > 0) "Your rating \u2014 $userRating/10" else "Rate this",
+                        color = TextColor,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        for (star in 1..10) {
+                            Text(
+                                "\u2605",
+                                color = if (star <= userRating) Color(0xFFFBBF24) else Muted.copy(alpha = .45f),
+                                fontSize = 24.sp,
+                                modifier = Modifier.clickable {
+                                    val newValue = if (star == userRating) 0 else star
+                                    ratingScope.launch {
+                                        runCatching {
+                                            if (newValue > 0) api.setItemRating(item.id, newValue) else api.deleteItemRating(item.id)
+                                        }.onSuccess { userRating = newValue }
+                                            .onFailure { error = it.message ?: "Failed to save rating" }
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
             }
         }
         if (item.overview.isNotBlank()) {

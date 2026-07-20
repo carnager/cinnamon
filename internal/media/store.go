@@ -2141,6 +2141,65 @@ func (s *Store) DeleteShowWatchlist(ctx context.Context, userID int64, libraryID
 	return err
 }
 
+func (s *Store) SaveItemRating(ctx context.Context, userID int64, item Item, rating int) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO user_ratings(user_id, rate_key, kind, item_id, library_id, show_title, rating, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(user_id, rate_key) DO UPDATE SET
+	kind=excluded.kind,
+	item_id=excluded.item_id,
+	library_id=excluded.library_id,
+	show_title=excluded.show_title,
+	rating=excluded.rating,
+	updated_at=CURRENT_TIMESTAMP`,
+		userID, itemWatchKey(item.ID), item.Kind, item.ID, item.LibraryID, nullString(item.ShowTitle), rating)
+	return err
+}
+
+func (s *Store) DeleteItemRating(ctx context.Context, userID, itemID int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM user_ratings WHERE user_id = ? AND rate_key = ?`, userID, itemWatchKey(itemID))
+	return err
+}
+
+func (s *Store) SaveShowRating(ctx context.Context, userID int64, libraryID, showTitle string, rating int) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO user_ratings(user_id, rate_key, kind, library_id, show_title, rating, updated_at)
+VALUES (?, ?, 'show', ?, ?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(user_id, rate_key) DO UPDATE SET
+	kind=excluded.kind,
+	library_id=excluded.library_id,
+	show_title=excluded.show_title,
+	rating=excluded.rating,
+	updated_at=CURRENT_TIMESTAMP`, userID, showWatchKey(libraryID, showTitle), libraryID, showTitle, rating)
+	return err
+}
+
+func (s *Store) DeleteShowRating(ctx context.Context, userID int64, libraryID, showTitle string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM user_ratings WHERE user_id = ? AND rate_key = ?`, userID, showWatchKey(libraryID, showTitle))
+	return err
+}
+
+func (s *Store) ListUserRatings(ctx context.Context, userID int64) ([]UserRating, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT kind, COALESCE(item_id, 0), COALESCE(library_id, ''), COALESCE(show_title, ''), rating
+FROM user_ratings
+WHERE user_id = ?
+ORDER BY updated_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []UserRating{}
+	for rows.Next() {
+		var rating UserRating
+		if err := rows.Scan(&rating.Kind, &rating.ItemID, &rating.LibraryID, &rating.ShowTitle, &rating.Rating); err != nil {
+			return nil, err
+		}
+		out = append(out, rating)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) ListWatchlist(ctx context.Context, userID int64, limit int) (Watchlist, error) {
 	if limit <= 0 {
 		limit = 200

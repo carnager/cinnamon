@@ -33,6 +33,9 @@ let watchedShowKeys = new Set();
 // Shows that can anchor "Because you watched X": fully seen, or at least two
 // episodes finished. A show sampled once is not "watched".
 let anchorShowKeys = new Set();
+// Personal 1-10 ratings, synced with Trakt: item id -> rating, show key -> rating.
+let userItemRatings = new Map();
+let userShowRatings = new Map();
 let watchlistItemIds = new Set();
 let watchlistShowKeys = new Set();
 let currentGenre = "";
@@ -342,11 +345,13 @@ function showWatchlisted(show) {
 
 async function refreshMediaState() {
   if (!authToken) return;
-  const [progress, showProgress, watchlist] = await Promise.all([
+  const [progress, showProgress, watchlist, ratings] = await Promise.all([
     loadAllProgress().catch(() => []),
     api("/api/progress/tv").catch(() => []),
     api("/api/watchlist?limit=1000").catch(() => ({ items: [], shows: [] })),
+    api("/api/ratings/user").catch(() => []),
   ]);
+  applyUserRatings(ratings);
 
   mediaProgressRows = progress || [];
   rebuildResumeFractions(mediaProgressRows);
@@ -1245,7 +1250,50 @@ async function loadHeroSimilar() {
   }
 }
 
+function applyUserRatings(rows) {
+  userItemRatings = new Map();
+  userShowRatings = new Map();
+  for (const row of rows || []) {
+    if (row.kind === "show") userShowRatings.set(showKey(row.libraryId, row.showTitle), Number(row.rating));
+    else if (row.itemId) userItemRatings.set(Number(row.itemId), Number(row.rating));
+  }
+}
+
+async function refreshUserRatings() {
+  applyUserRatings(await api("/api/ratings/user").catch(() => []));
+}
+
+function userItemRating(item) {
+  return userItemRatings.get(Number(item?.id || 0)) || 0;
+}
+
+function userShowRating(show) {
+  return userShowRatings.get(showKey(show?.libraryId, show?.title)) || 0;
+}
+
+async function setItemRating(item, rating) {
+  if (rating > 0) {
+    await api(`/api/items/${encodeURIComponent(String(item.id))}/rating`, { method: "PUT", body: JSON.stringify({ rating }) });
+    userItemRatings.set(Number(item.id), rating);
+  } else {
+    await api(`/api/items/${encodeURIComponent(String(item.id))}/rating`, { method: "DELETE" });
+    userItemRatings.delete(Number(item.id));
+  }
+}
+
+async function setShowRating(show, rating) {
+  const params = new URLSearchParams({ libraryId: show.libraryId, showTitle: show.title });
+  if (rating > 0) {
+    await api(`/api/ratings/tv?${params}`, { method: "PUT", body: JSON.stringify({ rating }) });
+    userShowRatings.set(showKey(show.libraryId, show.title), rating);
+  } else {
+    await api(`/api/ratings/tv?${params}`, { method: "DELETE" });
+    userShowRatings.delete(showKey(show.libraryId, show.title));
+  }
+}
+
 function applyHomePayload(payload) {
+  refreshUserRatings().catch(() => {});
   mediaProgressRows = payload.progress || [];
   rebuildResumeFractions(mediaProgressRows);
   watchedItemIds = new Set(mediaProgressRows.filter((r) => r?.completed).map((r) => Number(r.itemId)).filter(Boolean));

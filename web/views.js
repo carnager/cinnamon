@@ -163,6 +163,14 @@ function showCountText(show) {
 }
 
 /* ── A-Z rail ── */
+function mountAlphabetRail(rail) {
+  document.getElementById("alphaRail")?.remove();
+  if (rail) {
+    rail.id = "alphaRail";
+    document.body.append(rail);
+  }
+}
+
 function alphabetRail(entries, activeLetter, onJump) {
   const rail = el("nav", "alpha-rail");
   rail.setAttribute("aria-label", "Jump to letter");

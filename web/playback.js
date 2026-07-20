@@ -9,6 +9,7 @@ function el(tag, className, children) {
 }
 
 function setView(content) {
+  mountAlphabetRail(null);
   view.innerHTML = "";
   if (typeof content === "string") view.innerHTML = content;
   else if (content) view.append(content);

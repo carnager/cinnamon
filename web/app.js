@@ -772,13 +772,16 @@ function render(skipHistory) {
     libraryGridEl.append(library.type === "tv" ? showCard(item) : itemCard(item));
   }
   frag.append(libraryGridEl);
-  if (alphabetRailEligible() && alphabetIndex.length > 1) {
-    frag.append(alphabetRail(alphabetIndex, currentLetter, (entry) => jumpToLetter(entry).catch(console.error)));
-  }
 
   const sentinel = el("div", "scroll-sentinel");
   frag.append(sentinel);
   setView(frag);
+  // The rail lives on <body>, not inside .view: the view-fade animation
+  // leaves a transform on .view, which would turn position:fixed into
+  // "fixed inside the scrolling content".
+  mountAlphabetRail(alphabetRailEligible() && alphabetIndex.length > 1
+    ? alphabetRail(alphabetIndex, currentLetter, (entry) => jumpToLetter(entry).catch(console.error))
+    : null);
   observeLibraryScroll(sentinel);
 }
 

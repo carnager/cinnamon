@@ -39,7 +39,6 @@ fun SidecarPlayerScreen(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
-    BackHandler(onBack = onBack)
 
     val player = remember(url, session?.token) {
         val httpFactory = DefaultHttpDataSource.Factory().apply {
@@ -96,6 +95,18 @@ fun SidecarPlayerScreen(
     fun scheduleControllerAutoHide() {
         mainHandler.removeCallbacks(autoHideRunnable)
         mainHandler.postDelayed(autoHideRunnable, 4_500)
+    }
+
+    // BACK with the OSD up only dismisses the OSD; the trailer closes when
+    // BACK is pressed with the controls already hidden.
+    BackHandler {
+        if (playerView.isControllerFullyVisible) {
+            mainHandler.removeCallbacks(autoHideRunnable)
+            playerView.hideController()
+            playerView.requestFocus()
+        } else {
+            onBack()
+        }
     }
 
     // Focusing a controller button right after showController() can fail while

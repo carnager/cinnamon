@@ -641,9 +641,22 @@ fun PlayerScreen(
         onBack()
     }
 
+    // BACK with the OSD up only dismisses the OSD; playback exits when BACK
+    // is pressed with the controls already hidden.
+    fun dismissOsdOrExit(source: String) {
+        if (playerView.isControllerFullyVisible) {
+            logClient("$source-hide-osd")
+            mainHandler.removeCallbacks(autoHideRunnable)
+            playerView.hideController()
+            playerView.requestFocus()
+        } else {
+            exitPlayer()
+        }
+    }
+
     BackHandler {
         logClient("compose-back-handler")
-        exitPlayer()
+        dismissOsdOrExit("compose-back")
     }
 
     DisposableEffect(Unit) {
@@ -654,7 +667,7 @@ fun PlayerScreen(
                 playerView.findViewWithTag<View>(NativeTrackMenuTag) != null -> false
                 isBackKey(event.keyCode) && event.action == AndroidKeyEvent.ACTION_DOWN -> {
                     logClient("player-back-dispatch", event)
-                    exitPlayer()
+                    if (event.repeatCount == 0) dismissOsdOrExit("player-back")
                     true
                 }
                 isBackKey(event.keyCode) && event.action == AndroidKeyEvent.ACTION_UP -> {
@@ -669,7 +682,7 @@ fun PlayerScreen(
                 playerView.findViewWithTag<View>(NativeTrackMenuTag) != null -> false
                 isBackKey(event.keyCode) && event.action == AndroidKeyEvent.ACTION_DOWN -> {
                     logClient("player-osd-back", event)
-                    exitPlayer()
+                    if (event.repeatCount == 0) dismissOsdOrExit("player-osd-back")
                     true
                 }
                 isBackKey(event.keyCode) && event.action == AndroidKeyEvent.ACTION_UP -> {

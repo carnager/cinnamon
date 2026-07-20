@@ -87,7 +87,7 @@ func startTestWatcher(t *testing.T, root string) *notifyRecorder {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		watchAndNotify(w, []string{root}, watched, nil, 150*time.Millisecond, rec.notify, log)
+		watchAndNotify(w, []string{root}, watched, nil, 150*time.Millisecond, rec.notify, nil, log)
 	}()
 	t.Cleanup(func() {
 		w.Close()

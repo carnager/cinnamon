@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,6 +94,37 @@ func showRootDir(root, video string) string {
 	}
 	first := strings.Split(rel, string(os.PathSeparator))[0]
 	return filepath.Join(root, first)
+}
+
+// subtitleSidecarPath finds a pre-extracted WebVTT sidecar for an embedded
+// subtitle stream: "<video base>.s<index>[.<lang>][.forced].vtt" next to the
+// video, as written by popcorn-watch on the storage host. A sidecar older
+// than the video is ignored — the video was replaced and the sidecar may no
+// longer match; the watcher re-extracts it shortly.
+func subtitleSidecarPath(videoPath string, index int) string {
+	dir := filepath.Dir(videoPath)
+	base := strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath))
+	videoInfo, err := os.Stat(videoPath)
+	if err != nil {
+		return ""
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	prefix := base + ".s" + strconv.Itoa(index) + "."
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".vtt") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || info.ModTime().Before(videoInfo.ModTime()) {
+			continue
+		}
+		return filepath.Join(dir, name)
+	}
+	return ""
 }
 
 func findNamedSidecar(dir string, names []string) string {

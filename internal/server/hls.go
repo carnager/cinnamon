@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -181,27 +182,51 @@ func (a *App) subtitle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := parseStart(r.URL.Query().Get("start"), item.DurationMS)
-	args := []string{"-hide_banner", "-loglevel", "error"}
-	if start > 0 {
-		args = append(args, "-ss", strconv.FormatFloat(start, 'f', 3, 64))
-	}
 	path := media.ResolveExistingPath(item.Path)
 	if path == "" {
 		http.Error(w, "media unavailable", http.StatusNotFound)
 		return
 	}
+	// Pre-extracted sidecars carry the full-file timeline, so they only
+	// replace unshifted conversions.
+	if start == 0 {
+		if sidecar := subtitleSidecarPath(path, index); sidecar != "" {
+			w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("X-Popcorn-Start", "0.000")
+			http.ServeFile(w, r, sidecar)
+			return
+		}
+	}
+	args := []string{"-hide_banner", "-loglevel", "error"}
+	if start > 0 {
+		args = append(args, "-ss", strconv.FormatFloat(start, 'f', 3, 64))
+	}
+	// Extracting an embedded subtitle demuxes the entire file, which can take
+	// well over the client's ~8s HTTP read timeout on big files. Stream the
+	// conversion instead of buffering it: -flush_packets pushes each cue
+	// through ffmpeg's output buffer immediately (a whole movie's VTT is
+	// smaller than that buffer), and flushing per chunk keeps bytes moving so
+	// the client never sees a silent connection.
 	args = append(args,
 		"-i", path,
 		"-map", fmt.Sprintf("0:%d", index),
 		"-c:s", "webvtt",
 		"-f", "webvtt",
+		"-flush_packets", "1",
 		"-",
 	)
-	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, a.cfg.FFmpegPath, args...)
-	out, err := cmd.Output()
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		http.Error(w, "subtitle conversion failed", http.StatusInternalServerError)
+		return
+	}
+	if err := cmd.Start(); err != nil {
 		a.log.Warn("subtitle conversion failed", "item", item.ID, "subtitle", index, "start", start, "error", err)
 		http.Error(w, "subtitle conversion failed", http.StatusInternalServerError)
 		return
@@ -209,7 +234,28 @@ func (a *App) subtitle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Popcorn-Start", strconv.FormatFloat(start, 'f', 3, 64))
-	_, _ = w.Write(out)
+	flusher, _ := w.(http.Flusher)
+	if flusher != nil {
+		flusher.Flush()
+	}
+	buf := make([]byte, 16<<10)
+	for {
+		n, readErr := stdout.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				break
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	if err := cmd.Wait(); err != nil && r.Context().Err() == nil {
+		a.log.Warn("subtitle conversion failed", "item", item.ID, "subtitle", index, "start", start, "error", err, "stderr", strings.TrimSpace(stderr.String()))
+	}
 }
 
 func (a *App) hlsPlaylist(w http.ResponseWriter, r *http.Request) {

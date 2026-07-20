@@ -73,6 +73,7 @@ data class WatchMenuState(
 fun PopcornApp() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("popcorn", Context.MODE_PRIVATE) }
+    remember { PlaybackPrefs.load(context) }
     val scope = rememberCoroutineScope()
     var session by remember {
         mutableStateOf(

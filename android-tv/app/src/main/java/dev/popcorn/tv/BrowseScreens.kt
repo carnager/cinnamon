@@ -947,6 +947,7 @@ private fun toggleGenre(selected: List<String>, genre: String): List<String> {
 @Composable
 private fun UserMenuButton(session: Session?, showUpdate: Boolean, onUpdates: () -> Unit, onScan: () -> Unit, onLogout: () -> Unit) {
     var open by remember { mutableStateOf(false) }
+    var settingsOpen by remember { mutableStateOf(false) }
     Box {
         Pill(text = session?.username?.ifBlank { "User" } ?: "User", selected = open, onClick = { open = true })
         if (open) {
@@ -963,12 +964,78 @@ private fun UserMenuButton(session: Session?, showUpdate: Boolean, onUpdates: ()
                         open = false
                     })
                 }
+                add(FilterOption("Settings", false) {
+                    settingsOpen = true
+                    open = false
+                })
                 add(FilterOption("Logout", false) {
                     onLogout()
                     open = false
                 })
             }
             FilterPopup(title = session?.username.orEmpty().ifBlank { "User" }, options = options, alignEnd = true, onClose = { open = false })
+        }
+        if (settingsOpen) {
+            PlaybackSettingsDialog(onClose = { settingsOpen = false })
+        }
+    }
+}
+
+@Composable
+private fun PlaybackSettingsDialog(onClose: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val audioOptions = listOf("" to "Track default") + prefLanguageChoices
+    val subtitleOptions = listOf(
+        PlaybackPrefs.SUBS_OFF to "Off",
+        PlaybackPrefs.TRACK_DEFAULT to "Track default",
+    ) + prefLanguageChoices
+    val firstFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        delay(80)
+        runCatching { firstFocus.requestFocus() }
+    }
+    Popup(alignment = Alignment.TopEnd, onDismissRequest = onClose, properties = PopupProperties(focusable = true)) {
+        Column(
+            Modifier
+                .padding(top = 58.dp, end = 24.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(Surface2.copy(alpha = .98f))
+                .border(1.dp, Color.White.copy(alpha = .18f), RoundedCornerShape(10.dp))
+                .onKeyEvent {
+                    if (it.type == KeyEventType.KeyUp && it.key == Key.Back) {
+                        onClose()
+                        true
+                    } else {
+                        false
+                    }
+                }
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("Playback languages", color = Accent, fontSize = 15.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.width(210.dp)) {
+                    Text("Audio", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp))
+                    audioOptions.forEachIndexed { index, option ->
+                        SingleSelectFilterRow(
+                            text = option.second,
+                            selected = PlaybackPrefs.audioLang == option.first,
+                            modifier = if (index == 0) Modifier.focusRequester(firstFocus) else Modifier,
+                            onClick = { PlaybackPrefs.setAudio(context, option.first) },
+                        )
+                    }
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.width(210.dp)) {
+                    Text("Subtitles", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp))
+                    subtitleOptions.forEach { option ->
+                        SingleSelectFilterRow(
+                            text = option.second,
+                            selected = PlaybackPrefs.subtitleLang == option.first,
+                            onClick = { PlaybackPrefs.setSubtitle(context, option.first) },
+                        )
+                    }
+                }
+            }
         }
     }
 }

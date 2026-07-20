@@ -106,11 +106,17 @@ fun DetailView(
             .onSuccess { list ->
                 streams.clear()
                 streams.addAll(list)
-                val defAudio = list.firstOrNull { it.type == "audio" && it.default }
-                    ?: list.firstOrNull { it.type == "audio" }
+                val audios = list.filter { it.type == "audio" }
+                val defAudio = audios.firstOrNull { langMatches(it.language, PlaybackPrefs.audioLang) }
+                    ?: audios.firstOrNull { it.default }
+                    ?: audios.firstOrNull()
                 selectedAudio = defAudio?.index
-                val defSub = list.firstOrNull { it.type == "subtitle" && it.default }
-                selectedSubtitle = defSub?.index
+                val subtitles = list.filter { it.type == "subtitle" }
+                selectedSubtitle = when (PlaybackPrefs.subtitleLang) {
+                    PlaybackPrefs.SUBS_OFF -> null
+                    PlaybackPrefs.TRACK_DEFAULT -> subtitles.firstOrNull { it.default }?.index
+                    else -> subtitles.firstOrNull { langMatches(it.language, PlaybackPrefs.subtitleLang) }?.index
+                }
                 streamsLoaded = true
             }
             .onFailure { streamsLoaded = true }

@@ -1290,10 +1290,13 @@ private fun heroPicks(
         heroItemPick(item, "Continue watching")?.let(picks::add)
     }
 
-    // "Because you watched X": a same-genre match from the loaded libraries.
-    for (played in (continueMovies + continueEpisodes).take(4)) {
-        val genre = heroGenres(played.genres).firstOrNull() ?: continue
-        val source = if (played.kind == "episode") played.showTitle.ifBlank { played.title } else played.title
+    // "Because you watched X": a same-genre match, anchored on titles that
+    // were actually finished — a movie started for two minutes is not
+    // "watched" and makes a poor recommendation anchor.
+    val watchedSources = movies.filter { itemSeen(it) }.map { it.title to heroGenres(it.genres) } +
+        shows.filter { showSeen(it) }.map { it.title to heroGenres(it.genres) }
+    for ((source, sourceGenres) in watchedSources.shuffled().take(4)) {
+        val genre = sourceGenres.firstOrNull() ?: continue
         val matches = movies.filter { !itemSeen(it) && it.title != source && it.rating >= 6.5 && heroGenres(it.genres).any { g -> g.equals(genre, ignoreCase = true) } }
             .mapNotNull { heroItemPick(it, "Because you watched $source") } +
             shows.filter { !showSeen(it) && it.title != source && it.rating >= 6.5 && heroGenres(it.genres).any { g -> g.equals(genre, ignoreCase = true) } }

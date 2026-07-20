@@ -56,10 +56,29 @@ func main() {
 		os.Exit(1)
 	}
 	defer w.Close()
+	watched := setupWatches(w, roots, log)
+	watchAndNotify(w, roots, watched, maps, *debounce, c.notify, log)
+}
+
+// setupWatches registers recursive watches on every root and returns the set
+// of watched directories. inotify tracks inodes, so when a directory is
+// renamed its watch silently keeps reporting events under the OLD path —
+// scans then target directories that no longer exist and nothing new under
+// the renamed tree is ever watched. The set lets watchAndNotify drop every
+// stale watch under a renamed/removed path so the matching Create re-adds the
+// tree under its real name.
+func setupWatches(w *fsnotify.Watcher, roots []string, log *slog.Logger) map[string]bool {
+	watched := map[string]bool{}
 	for _, root := range roots {
-		n := addTree(w, root, log)
+		n := addTree(w, root, watched, log)
 		log.Info("watching", "root", root, "directories", n)
 	}
+	return watched
+}
+
+// watchAndNotify consumes watcher events and calls notify with the changed
+// directories. It returns when the watcher is closed.
+func watchAndNotify(w *fsnotify.Watcher, roots []string, watched map[string]bool, maps []pathMap, debounce time.Duration, notify func([]string) error, log *slog.Logger) {
 
 	// Debounce per target path, not globally: a single global timer that
 	// resets on every event never fires while anything on the datasets is
@@ -70,7 +89,7 @@ func main() {
 	// time.
 	pending := map[string]time.Time{}
 	var mu sync.Mutex
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
 	flushDue := func() {
@@ -79,7 +98,7 @@ func main() {
 		var due []string
 		var paths []string
 		for p, lastEvent := range pending {
-			if now.Sub(lastEvent) >= *debounce {
+			if now.Sub(lastEvent) >= debounce {
 				due = append(due, p)
 				paths = append(paths, remapPath(p, maps))
 				delete(pending, p)
@@ -89,7 +108,7 @@ func main() {
 		if len(paths) == 0 {
 			return
 		}
-		if err := c.notify(paths); err != nil {
+		if err := notify(paths); err != nil {
 			// Keep the paths pending so a transient failure (server restart,
 			// expired token, network blip) delays the notification instead of
 			// silently losing it.
@@ -115,11 +134,17 @@ func main() {
 			if ignored(event.Name) {
 				continue
 			}
+			// A renamed or removed directory leaves watches behind that keep
+			// reporting events under its old name. Drop them; the rename's
+			// destination arrives as a Create and re-adds the tree.
+			if event.Op&(fsnotify.Rename|fsnotify.Remove) != 0 {
+				dropWatches(w, event.Name, watched)
+			}
 			// A newly created directory needs its own watch, and its children
-			// may already exist (e.g. a whole show folder copied in at once).
+			// may already exist (e.g. a whole show folder renamed into place).
 			if event.Op&fsnotify.Create != 0 {
 				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-					addTree(w, event.Name, log)
+					addTree(w, event.Name, watched, log)
 				}
 			}
 			target := scanTarget(event.Name, roots)
@@ -136,6 +161,18 @@ func main() {
 				return
 			}
 			log.Warn("watch error", "error", err)
+		}
+	}
+}
+
+// dropWatches removes the watch on path and everything below it. Errors are
+// ignored: deleted directories lose their watches on their own.
+func dropWatches(w *fsnotify.Watcher, path string, watched map[string]bool) {
+	prefix := path + string(filepath.Separator)
+	for p := range watched {
+		if p == path || strings.HasPrefix(p, prefix) {
+			_ = w.Remove(p)
+			delete(watched, p)
 		}
 	}
 }
@@ -165,8 +202,10 @@ func sameDir(a, b string) bool {
 	return filepath.Clean(ap) == filepath.Clean(bp)
 }
 
-func addTree(w *fsnotify.Watcher, root string, log *slog.Logger) int {
+func addTree(w *fsnotify.Watcher, root string, watched map[string]bool, log *slog.Logger) int {
 	count := 0
+	failed := 0
+	var firstErr error
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -178,10 +217,21 @@ func addTree(w *fsnotify.Watcher, root string, log *slog.Logger) int {
 			return filepath.SkipDir
 		}
 		if err := w.Add(path); err == nil {
+			watched[path] = true
 			count++
+		} else {
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 		return nil
 	})
+	if failed > 0 {
+		// Usually fs.inotify.max_user_watches exhaustion — without a watch a
+		// directory is a permanent blind spot, so this must be loud.
+		log.Warn("could not watch some directories", "root", root, "failed", failed, "error", firstErr)
+	}
 	return count
 }
 

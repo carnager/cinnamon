@@ -783,6 +783,7 @@ function formatDateTime(value) {
 function formatBytes(bytes) {
   const value = Number(bytes || 0);
   if (value <= 0) return "";
+  if (value >= 1024 * 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
   if (value >= 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${value} B`;
@@ -1031,6 +1032,11 @@ async function openDetail(item, skipHistory, parent = {}) {
   trailerBtn.addEventListener("click", () => { if (sidecars?.trailer) playTrailer(d); else youtubeTrailerSearch(d); });
   actions.append(trailerBtn);
 
+  const downloadBtn = el("a", "secondary link-button", d.sizeBytes ? `Download · ${formatBytes(d.sizeBytes)}` : "Download");
+  downloadBtn.href = `/api/items/${encodeURIComponent(String(d.id))}/download`;
+  downloadBtn.setAttribute("download", "");
+  actions.append(downloadBtn);
+
   actions.append(
     toggleActionButton({
       active: itemSeen(d),
@@ -1263,12 +1269,57 @@ async function loadShowEpisodes(show, seasonNumber, container) {
     inactiveLabel: "Mark Season Seen",
     onToggle: (seen) => setSeasonSeen(show, seasonNumber, seen, episodes),
   }));
+  if (episodes.length) {
+    const dlBtn = el("button", "secondary", "Download");
+    dlBtn.type = "button";
+    dlBtn.addEventListener("click", () => openSeasonDownloads(show, seasonLabel, episodes));
+    seasonActions.append(dlBtn);
+  }
   header.append(el("h2", null, seasonLabel), el("span", null, `${episodes.length} episodes`), seasonActions);
   container.append(header);
   if (!episodes.length) { container.append(el("div", "empty", "No episodes found")); return; }
   const grid = el("div", "episode-grid");
   for (const episode of episodes) grid.append(episodeCard(episode));
   container.append(grid);
+}
+
+/* ── Modal ── */
+function openModal(title, body) {
+  const backdrop = el("div", "modal-backdrop");
+  const panel = el("div", "modal");
+  const head = el("div", "modal-head");
+  head.append(el("h2", null, title));
+  const close = el("button", "modal-close", "✕");
+  close.type = "button";
+  close.setAttribute("aria-label", "Close");
+  head.append(close);
+  panel.append(head, body);
+  backdrop.append(panel);
+  const remove = () => { backdrop.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = (e) => { if (e.key === "Escape") remove(); };
+  close.addEventListener("click", remove);
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) remove(); });
+  document.addEventListener("keydown", onKey);
+  document.body.append(backdrop);
+  return remove;
+}
+
+function openSeasonDownloads(show, seasonLabel, episodes) {
+  const list = el("div", "download-list");
+  for (const episode of episodes) {
+    const row = el("div", "download-row");
+    const code = `S${String(episode.seasonNumber || 0).padStart(2, "0")}E${String(episode.episodeNumber || 0).padStart(2, "0")}`;
+    const info = el("div", "download-info");
+    info.append(el("div", "download-title", `${code} · ${episode.episodeTitle || episode.title}`));
+    const meta = [formatBytes(episode.sizeBytes), resolutionLabel(episode.height)].filter(Boolean).join(" · ");
+    if (meta) info.append(el("div", "download-meta", meta));
+    const dl = el("a", "secondary link-button", "Download");
+    dl.href = `/api/items/${encodeURIComponent(String(episode.id))}/download`;
+    dl.setAttribute("download", "");
+    row.append(info, dl);
+    list.append(row);
+  }
+  openModal(`${show.title} · ${seasonLabel}`, list);
 }
 
 function groupSeasons(episodes) {

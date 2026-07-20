@@ -175,6 +175,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/items/{id}/trailer", a.itemTrailer)
 	mux.HandleFunc("GET /api/tv/theme", a.showTheme)
 	mux.HandleFunc("GET /api/items/{id}/stream", a.stream)
+	mux.HandleFunc("GET /api/items/{id}/download", a.itemDownload)
 	mux.HandleFunc("GET /api/items/{id}/subtitles/{subtitle}", a.subtitle)
 	mux.HandleFunc("GET /api/items/{id}/transcode", a.transcode)
 	mux.HandleFunc("GET /api/items/{id}/hls/{session}/index.m3u8", a.hlsPlaylist)

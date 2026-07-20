@@ -3355,3 +3355,52 @@ button, input, select { font: inherit; }
 .download-row .link-button {
   flex: none;
 }
+
+/* ── A-Z rail ── */
+.alpha-rail {
+  position: fixed;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  max-height: 86vh;
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding: 6px 3px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(8px);
+}
+
+.alpha-rail::-webkit-scrollbar { display: none; }
+
+.alpha-letter {
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.alpha-letter:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.alpha-letter.active {
+  color: var(--accent);
+  background: var(--accent-glow);
+}
+
+@media (max-width: 900px) {
+  .alpha-rail { display: none; }
+}

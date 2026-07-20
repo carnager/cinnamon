@@ -162,6 +162,21 @@ function showCountText(show) {
   return `${seasons} season${seasons === 1 ? "" : "s"} \u00b7 ${episodeCount} episode${episodeCount === 1 ? "" : "s"}`;
 }
 
+/* ── A-Z rail ── */
+function alphabetRail(entries, activeLetter, onJump) {
+  const rail = el("nav", "alpha-rail");
+  rail.setAttribute("aria-label", "Jump to letter");
+  for (const entry of entries) {
+    const letter = String(entry.letter || "#");
+    const btn = el("button", letter === activeLetter ? "alpha-letter active" : "alpha-letter", letter.toUpperCase());
+    btn.type = "button";
+    btn.title = `${letter.toUpperCase()} · ${entry.count}`;
+    btn.addEventListener("click", () => onJump(entry));
+    rail.append(btn);
+  }
+  return rail;
+}
+
 function renderGrid(items) {
   const grid = el("div", "grid");
   for (const item of items) grid.append(itemCard(item));

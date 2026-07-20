@@ -17,6 +17,9 @@ let activeLibraryId = "";
 let libraryItems = [];
 let currentPage = 1;
 const perPage = 50;
+let libraryBaseOffset = 0;
+let currentLetter = "";
+let alphabetIndex = [];
 let searchTimer = 0;
 let currentItem = null;
 let currentShow = null;
@@ -769,6 +772,9 @@ function render(skipHistory) {
     libraryGridEl.append(library.type === "tv" ? showCard(item) : itemCard(item));
   }
   frag.append(libraryGridEl);
+  if (alphabetRailEligible() && alphabetIndex.length > 1) {
+    frag.append(alphabetRail(alphabetIndex, currentLetter, (entry) => jumpToLetter(entry).catch(console.error)));
+  }
 
   const sentinel = el("div", "scroll-sentinel");
   frag.append(sentinel);
@@ -792,7 +798,7 @@ async function loadMoreLibrary() {
   libraryLoading = true;
   try {
     currentPage += 1;
-    const offset = (currentPage - 1) * perPage;
+    const offset = libraryBaseOffset + (currentPage - 1) * perPage;
     const page = library.type === "tv"
       ? await fetchShowsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating })
       : await fetchItemsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating });
@@ -1203,17 +1209,55 @@ async function loadLibraryPage(skipHistory) {
   renderNav();
   setLoading();
   const offset = 0;
+  libraryBaseOffset = 0;
+  currentLetter = "";
   await refreshMediaState();
-  const [genres, page] = await Promise.all([
+  const [genres, page, alphabet] = await Promise.all([
     fetchLibraryGenres(library.id),
     library.type === "tv"
       ? fetchShowsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating })
       : fetchItemsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating }),
+    alphabetRailEligible() ? fetchAlphabet(library) : Promise.resolve([]),
   ]);
   libraryGenres = genres || [];
   libraryItems = page || [];
+  alphabetIndex = alphabet || [];
   pageHasNext = libraryItems.length >= perPage;
   render(skipHistory);
+}
+
+/* The A-Z rail jumps by offset into the title-sorted listing, so it only
+   applies while the list is title-sorted and unfiltered by seen/rating
+   (the alphabet endpoint knows nothing about those). */
+function alphabetRailEligible() {
+  return !currentSort && !currentSeenStatus && !currentMinRating;
+}
+
+async function fetchAlphabet(library) {
+  const params = new URLSearchParams({ libraryId: library.id });
+  if (library.type === "tv") params.set("kind", "tv");
+  if (currentGenre) params.set("genre", currentGenre);
+  return api(`/api/alphabet?${params}`).catch(() => []);
+}
+
+async function jumpToLetter(entry) {
+  const library = activeLibrary();
+  if (!library || libraryLoading) return;
+  libraryLoading = true;
+  try {
+    currentLetter = entry.letter;
+    libraryBaseOffset = entry.offset;
+    currentPage = 1;
+    const page = library.type === "tv"
+      ? await fetchShowsPage(library.id, { limit: perPage, offset: entry.offset, genre: currentGenre })
+      : await fetchItemsPage(library.id, { limit: perPage, offset: entry.offset, genre: currentGenre });
+    libraryItems = page || [];
+    pageHasNext = libraryItems.length >= perPage;
+  } finally {
+    libraryLoading = false;
+  }
+  render(true);
+  window.scrollTo({ top: 0 });
 }
 
 async function load() {

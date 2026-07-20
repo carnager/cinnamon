@@ -29,7 +29,7 @@ func main() {
 	watch := flag.String("watch", env("POPCORN_WATCH_DIRS", ""), "comma-separated local directories to watch")
 	remap := flag.String("map", env("POPCORN_WATCH_MAP", ""), "comma-separated local=popcorn path prefix maps (e.g. /mnt/tank/movies=/nas/movies)")
 	debounce := flag.Duration("debounce", envDuration("POPCORN_WATCH_DEBOUNCE", 2*time.Second), "coalesce events within this window before notifying")
-	ffmpeg := flag.String("ffmpeg", env("POPCORN_WATCH_FFMPEG", ""), "path to ffmpeg; enables subtitle sidecar extraction")
+	ffmpeg := flag.String("ffmpeg", env("POPCORN_WATCH_FFMPEG", ""), "path to ffmpeg; enables subtitle sidecar extraction (default: ffmpeg next to this binary, if present)")
 	ffprobe := flag.String("ffprobe", env("POPCORN_WATCH_FFPROBE", ""), "path to ffprobe (default: next to ffmpeg)")
 	backfill := flag.Bool("backfill", envBool("POPCORN_WATCH_BACKFILL"), "extract sidecars for all existing videos on startup")
 	flag.Parse()
@@ -53,19 +53,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	ffmpegPath := *ffmpeg
+	if ffmpegPath == "" {
+		ffmpegPath = siblingTool("ffmpeg")
+	}
 	var ext *extractor
-	if *ffmpeg != "" {
+	if ffmpegPath != "" {
 		probe := *ffprobe
 		if probe == "" {
-			probe = filepath.Join(filepath.Dir(*ffmpeg), "ffprobe")
+			probe = filepath.Join(filepath.Dir(ffmpegPath), "ffprobe")
 		}
-		ext = newExtractor(*ffmpeg, probe, log)
-		log.Info("subtitle extraction enabled", "ffmpeg", *ffmpeg, "ffprobe", probe)
+		ext = newExtractor(ffmpegPath, probe, log)
+		log.Info("subtitle extraction enabled", "ffmpeg", ffmpegPath, "ffprobe", probe)
 		if *backfill {
 			go ext.backfill(roots)
 		}
 	} else if *backfill {
-		log.Error("-backfill requires -ffmpeg")
+		log.Error("-backfill requires ffmpeg (pass -ffmpeg or place it next to popcorn-watch)")
 		os.Exit(2)
 	}
 
@@ -395,6 +399,22 @@ func env(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// siblingTool returns an executable living next to the popcorn-watch binary,
+// or "". Dropping a static ffmpeg beside popcorn-watch is the intended
+// zero-config install on appliance hosts like TrueNAS.
+func siblingTool(name string) string {
+	self, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	candidate := filepath.Join(filepath.Dir(self), name)
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
+		return ""
+	}
+	return candidate
 }
 
 func envBool(key string) bool {

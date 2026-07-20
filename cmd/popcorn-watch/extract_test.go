@@ -189,3 +189,22 @@ func TestExtractFileRealFFmpeg(t *testing.T) {
 		t.Fatalf("sidecar is not the expected WebVTT: %q", text)
 	}
 }
+
+func TestSiblingToolFindsExecutableNextToBinary(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Skip("no executable path")
+	}
+	dir := filepath.Dir(self)
+	tool := filepath.Join(dir, "fake-sibling-tool")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Skipf("cannot write next to test binary: %v", err)
+	}
+	defer os.Remove(tool)
+	if got := siblingTool("fake-sibling-tool"); got != tool {
+		t.Fatalf("siblingTool = %q, want %q", got, tool)
+	}
+	if got := siblingTool("does-not-exist"); got != "" {
+		t.Fatalf("siblingTool(missing) = %q, want empty", got)
+	}
+}

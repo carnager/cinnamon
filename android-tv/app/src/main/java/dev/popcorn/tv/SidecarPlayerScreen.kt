@@ -79,10 +79,16 @@ fun SidecarPlayerScreen(
     val scrubbing = remember { booleanArrayOf(false) }
 
     val autoHideRunnable = remember(playerView, player) {
-        Runnable {
-            if (player.isPlaying) {
-                playerView.hideController()
-                playerView.requestFocus()
+        object : Runnable {
+            override fun run() {
+                if (player.isPlaying) {
+                    playerView.hideController()
+                    playerView.requestFocus()
+                } else if (playerView.isControllerFullyVisible) {
+                    // Not playing yet (still buffering); keep polling instead of
+                    // leaving the controller stuck visible forever.
+                    mainHandler.postDelayed(this, 1_000)
+                }
             }
         }
     }
@@ -90,6 +96,24 @@ fun SidecarPlayerScreen(
     fun scheduleControllerAutoHide() {
         mainHandler.removeCallbacks(autoHideRunnable)
         mainHandler.postDelayed(autoHideRunnable, 4_500)
+    }
+
+    // Focusing a controller button right after showController() can fail while
+    // the controller is still laying out, so retry once shortly after — same
+    // trick as the main player's focusPlayerControl.
+    fun focusSidecarControl(focusTimeBar: Boolean = false) {
+        fun target(): View? = if (focusTimeBar) {
+            playerView.findViewById(R.id.popcorn_progress)
+        } else {
+            playerView.findViewById(R.id.popcorn_play_pause)
+        }
+        playerView.post {
+            val focused = target()?.takeIf { it.isShown && it.isEnabled }?.requestFocus() ?: false
+            if (!focused) playerView.requestFocus()
+        }
+        playerView.postDelayed({
+            target()?.takeIf { it.isShown && it.isEnabled }?.requestFocus()
+        }, 120)
     }
 
     fun isActionKey(keyCode: Int): Boolean = keyCode == AndroidKeyEvent.KEYCODE_DPAD_CENTER ||
@@ -129,14 +153,7 @@ fun SidecarPlayerScreen(
         if (playerView.isControllerFullyVisible) return false
         playerView.showController()
         scheduleControllerAutoHide()
-        playerView.post {
-            val focusTarget = if (focusTimeBar) {
-                playerView.findViewById<View>(R.id.popcorn_progress)
-            } else {
-                playerView.findViewById<View>(R.id.popcorn_play_pause)
-            }
-            focusTarget?.requestFocus() ?: playerView.requestFocus()
-        }
+        focusSidecarControl(focusTimeBar)
         return true
     }
 
@@ -157,9 +174,22 @@ fun SidecarPlayerScreen(
                     if (event.action == AndroidKeyEvent.ACTION_UP) revealController()
                     true
                 }
+                event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP && !playerView.isControllerFullyVisible -> {
+                    // Swallow UP while the OSD is hidden: media3's PlayerView would
+                    // consume it and show the controller without focusing anything.
+                    true
+                }
                 event.action == AndroidKeyEvent.ACTION_UP && playerView.isControllerFullyVisible -> {
                     scheduleControllerAutoHide()
-                    false
+                    val focused = playerView.findFocus()
+                    if (focused == null || focused === playerView) {
+                        // Focus never made it into the controller (or fell back
+                        // out); repair it so the d-pad has somewhere to go.
+                        focusSidecarControl()
+                        true
+                    } else {
+                        false
+                    }
                 }
                 else -> false
             }
@@ -295,8 +325,8 @@ fun SidecarPlayerScreen(
 
     LaunchedEffect(Unit) {
         delay(150)
-        playerView.requestFocus()
         playerView.showController()
+        focusSidecarControl()
         scheduleControllerAutoHide()
     }
 

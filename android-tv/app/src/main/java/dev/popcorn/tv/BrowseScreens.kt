@@ -1258,6 +1258,7 @@ private fun HomeHero(
     onItem: (PopItem) -> Unit,
     onShow: (ShowSummary) -> Unit,
     onContentFocus: (FocusRequester) -> Unit,
+    onDpadDown: (() -> Boolean)? = null,
 ) {
     var index by remember(picks) { mutableStateOf(0) }
     var focused by remember { mutableStateOf(false) }
@@ -1289,6 +1290,13 @@ private fun HomeHero(
                 if (it.isFocused) onContentFocus(requester)
             }
             .focusable()
+            .onKeyEvent { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && onDpadDown != null) {
+                    onDpadDown()
+                } else {
+                    false
+                }
+            }
             .tvActivate { pick.item?.let(onItem) ?: pick.show?.let(onShow) },
     ) {
         Crossfade(targetState = pick, animationSpec = tween(700), label = "homeHero") { current ->
@@ -1363,6 +1371,10 @@ fun CuratedLanding(
         heroPicks(movies, shows, completedItems, completedShows, continueMovies, continueEpisodes, recentMovies, recentShows, watchlistMovies, watchlistTvShows)
     }
     var initialFocusPending by remember { mutableStateOf(true) }
+    // DOWN from the full-width hero would otherwise focus whatever card sits
+    // under its center (and drift as the row scrolls); route it to the first
+    // card of the first shelf instead.
+    val firstShelfCardRequester = remember { FocusRequester() }
     val initialFocusTarget = when {
         heroEntries.isNotEmpty() -> "hero"
         continueMovies.isNotEmpty() -> "continueMovies"
@@ -1399,13 +1411,17 @@ fun CuratedLanding(
                         if (initialFocusTarget == "hero") initialFocusPending = false
                         onContentFocus(requester)
                     },
+                    // Falls back to default focus search when the first card is
+                    // not composed (shelf scrolled far right, empty shelves).
+                    onDpadDown = { runCatching { firstShelfCardRequester.requestFocus() }.isSuccess },
                 )
             }
         }
         if (continueMovies.isNotEmpty()) {
             item {
                 PosterShelf("Continue Movies", "${continueMovies.size} in progress", continueMovies.take(HomeShelfLimit), key = { it.id }, autoFocusFirst = true, moreVisible = continueMovies.size > HomeShelfLimit, onMore = onMoreContinueMovies) { item, autoFocus ->
-                    val requester = remember { FocusRequester() }
+                    val fallback = remember { FocusRequester() }
+                    val requester = if (autoFocus) firstShelfCardRequester else fallback
                     val focusNow = shouldInitialFocus("continueMovies", autoFocus)
                     ItemCard(session, item, watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), autoFocus = focusNow, focusRequester = requester, onFocus = { onContentFocus(requester); consumeInitialFocus("continueMovies", autoFocus) }, onClick = { onItem(item) }, onLongClick = { requester -> onItemMenu(item, requester) })
                 }
@@ -1414,7 +1430,8 @@ fun CuratedLanding(
         if (continueEpisodes.isNotEmpty()) {
             item {
                 PosterShelf("Continue TV", "${continueEpisodes.size} episodes", continueEpisodes.take(HomeShelfLimit), key = { it.id }, autoFocusFirst = continueMovies.isEmpty(), moreVisible = continueEpisodes.size > HomeShelfLimit, onMore = onMoreContinueTv) { item, autoFocus ->
-                    val requester = remember { FocusRequester() }
+                    val fallback = remember { FocusRequester() }
+                    val requester = if (autoFocus) firstShelfCardRequester else fallback
                     val focusNow = shouldInitialFocus("continueEpisodes", autoFocus)
                     ItemCard(session, item, watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), autoFocus = focusNow, focusRequester = requester, onFocus = { onContentFocus(requester); consumeInitialFocus("continueEpisodes", autoFocus) }, onClick = { onItem(item) }, onLongClick = { requester -> onItemMenu(item, requester) })
                 }
@@ -1423,7 +1440,8 @@ fun CuratedLanding(
         if (recentMovies.isNotEmpty()) {
             item {
                 PosterShelf("Recently Added Movies", "${recentMovies.size} new", recentMovies.take(HomeShelfLimit), key = { it.id }, autoFocusFirst = continueMovies.isEmpty() && continueEpisodes.isEmpty(), moreVisible = recentMovies.size > HomeShelfLimit, onMore = onMoreRecentMovies) { item, autoFocus ->
-                    val requester = remember { FocusRequester() }
+                    val fallback = remember { FocusRequester() }
+                    val requester = if (autoFocus) firstShelfCardRequester else fallback
                     val focusNow = shouldInitialFocus("recentMovies", autoFocus)
                     ItemCard(session, item, watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), autoFocus = focusNow, focusRequester = requester, onFocus = { onContentFocus(requester); consumeInitialFocus("recentMovies", autoFocus) }, onClick = { onItem(item) }, onLongClick = { requester -> onItemMenu(item, requester) })
                 }
@@ -1431,8 +1449,9 @@ fun CuratedLanding(
         }
         if (recentShows.isNotEmpty()) {
             item {
-                PosterShelf("Recently Added TV", "${recentShows.size} shows", recentShows.take(HomeShelfLimit), key = { it.title }, moreVisible = recentShows.size > HomeShelfLimit, onMore = onMoreRecentTv) { show, autoFocus ->
-                    val requester = remember { FocusRequester() }
+                PosterShelf("Recently Added TV", "${recentShows.size} shows", recentShows.take(HomeShelfLimit), key = { it.title }, autoFocusFirst = continueMovies.isEmpty() && continueEpisodes.isEmpty() && recentMovies.isEmpty(), moreVisible = recentShows.size > HomeShelfLimit, onMore = onMoreRecentTv) { show, autoFocus ->
+                    val fallback = remember { FocusRequester() }
+                    val requester = if (autoFocus) firstShelfCardRequester else fallback
                     val focusNow = shouldInitialFocus("recentShows", autoFocus)
                     ShowCard(session, show, watched = completedShows.contains("${show.libraryId}\n${show.title.lowercase()}"), watchlisted = watchlistShows.contains("${show.libraryId}\n${show.title.lowercase()}"), autoFocus = focusNow, focusRequester = requester, onFocus = { onContentFocus(requester); consumeInitialFocus("recentShows", autoFocus) }, onClick = { onShow(show) }, onLongClick = { requester -> onShowMenu(show, requester) })
                 }

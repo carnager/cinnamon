@@ -2,13 +2,8 @@ package dev.popcorn.tv
 
 import android.view.KeyEvent as AndroidKeyEvent
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
@@ -19,6 +14,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -36,12 +32,25 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -51,6 +60,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -77,6 +87,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private fun railAlphabetLetter(title: String): String {
     val ch = title.withoutLeadingArticleForRail().firstOrNull() ?: return "#"
@@ -114,6 +125,7 @@ fun HomeView(
     onHome: () -> Unit,
     onLibrary: (Library) -> Unit,
     onWatchlist: () -> Unit,
+    onHistory: () -> Unit,
     onSearch: () -> Unit,
     onUpdates: () -> Unit,
     onScan: () -> Unit,
@@ -130,31 +142,7 @@ fun HomeView(
     onShowMenu: (ShowSummary, FocusRequester?) -> Unit,
 ) {
     var restoreContentFocus by remember { mutableStateOf<FocusRequester?>(null) }
-    var selectedHomeGenre by remember { mutableStateOf("") }
-    var genreMenuOpen by remember { mutableStateOf(false) }
-    var unwatchedOnly by remember { mutableStateOf(false) }
-    val homeGenres = remember(items, shows) {
-        (items.flatMap { splitGenres(it.genres) } + shows.flatMap { splitGenres(it.genres) })
-            .distinctBy { it.lowercase() }
-            .sortedWith(String.CASE_INSENSITIVE_ORDER)
-    }
-    fun itemVisible(item: PopItem): Boolean {
-        val genreMatches = selectedHomeGenre.isBlank() || splitGenres(item.genres).any { it.equals(selectedHomeGenre, ignoreCase = true) }
-        return genreMatches && (!unwatchedOnly || item.id !in completedItems)
-    }
-    fun showVisible(show: ShowSummary): Boolean {
-        val genreMatches = selectedHomeGenre.isBlank() || splitGenres(show.genres).any { it.equals(selectedHomeGenre, ignoreCase = true) }
-        val showKey = "${show.libraryId}\n${show.title.lowercase()}"
-        return genreMatches && (!unwatchedOnly || showKey !in completedShows)
-    }
-    val visibleItems = items.filter(::itemVisible)
-    val visibleShows = shows.filter(::showVisible)
-    val visibleContinueMovies = if (unwatchedOnly) emptyList() else continueMovies.filter(::itemVisible)
-    val visibleContinueEpisodes = if (unwatchedOnly) emptyList() else continueEpisodes.filter(::itemVisible)
-    val visibleRecentMovies = recentMovies.filter(::itemVisible)
-    val visibleRecentShows = recentShows.filter(::showVisible)
-    val visibleWatchlistMovies = watchlistMovies.filter(::itemVisible)
-    val visibleWatchlistShows = watchlistTvShows.filter(::showVisible)
+    val sideNavigationFocus = remember { FocusRequester() }
     AppChrome(
         session,
         libraries,
@@ -163,10 +151,12 @@ fun HomeView(
         onHome = onHome,
         onLibrary = onLibrary,
         onWatchlist = onWatchlist,
+        onHistory = onHistory,
         onSearch = onSearch,
         onUpdates = onUpdates,
         onScan = onScan,
         onLogout = onLogout,
+        navFocusRequester = sideNavigationFocus,
         onSideNavigationExit = {
             val target = restoreContentFocus
             if (target != null) {
@@ -178,21 +168,11 @@ fun HomeView(
         },
         headerActions = {
             Pill(
-                text = selectedHomeGenre.ifBlank { "Genres" },
-                selected = genreMenuOpen || selectedHomeGenre.isNotBlank(),
-                onClick = { genreMenuOpen = true },
-            )
-            Pill(
-                text = "Unwatched",
-                selected = unwatchedOnly,
-                onClick = { unwatchedOnly = !unwatchedOnly },
-            )
-            Pill(
                 text = "Surprise Me",
                 selected = false,
                 onClick = {
-                    val unseenMovies = visibleItems.filter { it.id !in completedItems }
-                    val unseenShows = visibleShows.filter { "${it.libraryId}\n${it.title.lowercase()}" !in completedShows }
+                    val unseenMovies = items.filter { it.id !in completedItems }
+                    val unseenShows = shows.filter { "${it.libraryId}\n${it.title.lowercase()}" !in completedShows }
                     val ratedMovies = unseenMovies.filter { it.rating >= 6.5 }
                     val ratedShows = unseenShows.filter { it.rating >= 6.5 }
                     val hasRatedPicks = ratedMovies.isNotEmpty() || ratedShows.isNotEmpty()
@@ -217,19 +197,19 @@ fun HomeView(
         } else {
             CuratedLanding(
                 session = session,
-                movies = visibleItems,
-                shows = visibleShows,
+                movies = items,
+                shows = shows,
                 completedItems = completedItems,
                 completedShows = completedShows,
                 heroAnchorShows = heroAnchorShows,
                 watchlistItems = watchlistItems,
                 watchlistShows = watchlistShows,
-                continueMovies = visibleContinueMovies,
-                continueEpisodes = visibleContinueEpisodes,
-                recentMovies = visibleRecentMovies,
-                recentShows = visibleRecentShows,
-                watchlistMovies = visibleWatchlistMovies,
-                watchlistTvShows = visibleWatchlistShows,
+                continueMovies = continueMovies,
+                continueEpisodes = continueEpisodes,
+                recentMovies = recentMovies,
+                recentShows = recentShows,
+                watchlistMovies = watchlistMovies,
+                watchlistTvShows = watchlistTvShows,
                 onPlayItem = onPlayItem,
                 onPlayShow = onPlayShow,
                 onItem = onItem,
@@ -241,25 +221,9 @@ fun HomeView(
                 onItemMenu = onItemMenu,
                 onShowMenu = onShowMenu,
                 onContentFocus = { restoreContentFocus = it },
+                onHeroLeft = { runCatching { sideNavigationFocus.requestFocus() }.isSuccess },
             )
         }
-    }
-    if (genreMenuOpen) {
-        FilterPopup(
-            title = "Genres",
-            options = listOf(
-                FilterOption("All genres", selectedHomeGenre.isBlank()) {
-                    selectedHomeGenre = ""
-                    genreMenuOpen = false
-                },
-            ) + homeGenres.map { genre ->
-                FilterOption(genre, selectedHomeGenre.equals(genre, ignoreCase = true)) {
-                    selectedHomeGenre = genre
-                    genreMenuOpen = false
-                }
-            },
-            onClose = { genreMenuOpen = false },
-        )
     }
 }
 
@@ -272,6 +236,7 @@ fun AppChrome(
     onHome: () -> Unit,
     onLibrary: (Library) -> Unit,
     onWatchlist: () -> Unit,
+    onHistory: () -> Unit,
     onSearch: () -> Unit,
     onUpdates: () -> Unit,
     onScan: () -> Unit,
@@ -328,6 +293,7 @@ fun AppChrome(
                 onHome = onHome,
                 onLibrary = onLibrary,
                 onWatchlist = onWatchlist,
+                onHistory = onHistory,
                 onSearch = onSearch,
                 onUpdates = onUpdates,
                 onScan = onScan,
@@ -367,6 +333,7 @@ fun SideNavigation(
     onHome: () -> Unit,
     onLibrary: (Library) -> Unit,
     onWatchlist: () -> Unit,
+    onHistory: () -> Unit,
     onSearch: () -> Unit,
     onUpdates: () -> Unit,
     onScan: () -> Unit,
@@ -401,7 +368,7 @@ fun SideNavigation(
         SideNavigationItem(icon = Icons.Filled.Bookmark, label = "Watchlist", selected = selected == "watchlist", onRight = onExit, onClick = onWatchlist)
         SideNavigationItem(icon = Icons.Filled.Search, label = "Search", selected = selected == "search", onRight = onExit, onClick = onSearch)
         Spacer(Modifier.weight(1f))
-        UserMenuButton(session, showUpdate, onUpdates, onScan, onLogout)
+        UserMenuButton(session, showUpdate, onHistory, onUpdates, onScan, onLogout)
     }
 }
 
@@ -500,6 +467,7 @@ fun WatchlistView(
     onHome: () -> Unit,
     onLibrary: (Library) -> Unit,
     onWatchlist: () -> Unit,
+    onHistory: () -> Unit,
     onSearch: () -> Unit,
     onUpdates: () -> Unit,
     onScan: () -> Unit,
@@ -519,6 +487,7 @@ fun WatchlistView(
         onHome = onHome,
         onLibrary = onLibrary,
         onWatchlist = onWatchlist,
+        onHistory = onHistory,
         onSearch = onSearch,
         onUpdates = onUpdates,
         onScan = onScan,
@@ -615,6 +584,152 @@ fun GridSectionHeader(title: String, subtitle: String, compact: Boolean = false)
 }
 
 @Composable
+fun HistoryView(
+    session: Session?,
+    libraries: List<Library>,
+    showUpdate: Boolean,
+    onHome: () -> Unit,
+    onLibrary: (Library) -> Unit,
+    onWatchlist: () -> Unit,
+    onHistory: () -> Unit,
+    onSearch: () -> Unit,
+    onUpdates: () -> Unit,
+    onScan: () -> Unit,
+    onLogout: () -> Unit,
+    onItem: (PopItem) -> Unit,
+) {
+    var history by remember(session?.token) { mutableStateOf<WatchHistory?>(null) }
+    var error by remember(session?.token) { mutableStateOf("") }
+    var restoreContentFocus by remember { mutableStateOf<FocusRequester?>(null) }
+
+    LaunchedEffect(session?.token) {
+        val active = session ?: return@LaunchedEffect
+        runCatching { Api(active).watchHistory() }
+            .onSuccess {
+                history = it
+                error = ""
+            }
+            .onFailure { error = it.message ?: "Failed to load watch history" }
+    }
+
+    AppChrome(
+        session = session,
+        libraries = libraries,
+        selected = "history",
+        showUpdate = showUpdate,
+        onHome = onHome,
+        onLibrary = onLibrary,
+        onWatchlist = onWatchlist,
+        onHistory = onHistory,
+        onSearch = onSearch,
+        onUpdates = onUpdates,
+        onScan = onScan,
+        onLogout = onLogout,
+        onSideNavigationExit = {
+            restoreContentFocus?.let {
+                it.requestFocus()
+                true
+            } ?: false
+        },
+    ) {
+        when {
+            error.isNotBlank() -> EmptyState(error, error = true)
+            history == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(26.dp))
+            }
+            history!!.items.isEmpty() -> EmptyState("No watch history yet")
+            else -> {
+                val result = history!!
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(start = 32.dp, end = 32.dp, top = 16.dp, bottom = 28.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    item {
+                        GridSectionHeader(
+                            "Watch History",
+                            if (result.source == "trakt") "${result.items.size} plays · Trakt" else "${result.items.size} plays · This server",
+                        )
+                    }
+                    itemsIndexed(result.items, key = { index, entry -> "${entry.id}:$index" }) { index, entry ->
+                        val requester = remember { FocusRequester() }
+                        HistoryListRow(
+                            entry = entry,
+                            autoFocus = index == 0,
+                            focusRequester = requester,
+                            onFocus = { restoreContentFocus = requester },
+                            onClick = { entry.item?.let(onItem) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HistoryListRow(
+    entry: WatchHistoryEntry,
+    autoFocus: Boolean,
+    focusRequester: FocusRequester,
+    onFocus: () -> Unit,
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    LaunchedEffect(autoFocus) {
+        if (autoFocus) {
+            delay(160)
+            focusRequester.requestFocus()
+        }
+    }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(66.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.Transparent)
+            .border(1.dp, if (focused) Accent else Color.Transparent, RoundedCornerShape(12.dp))
+            .focusRequester(focusRequester)
+            .onFocusChanged {
+                focused = it.isFocused
+                if (it.isFocused) onFocus()
+            }
+            .focusable()
+            .tvActivate(onClick)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Icon(
+            if (entry.kind == "movie") Icons.Filled.Movie else Icons.Filled.LiveTv,
+            contentDescription = entry.kind,
+            tint = if (entry.kind == "movie") Accent else Teal,
+            modifier = Modifier.size(22.dp),
+        )
+        Column(Modifier.weight(1f)) {
+            Text(entry.title, color = TextColor, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            val details = listOfNotNull(
+                entry.subtitle.takeIf { it.isNotBlank() },
+                entry.year.takeIf { it > 0 }?.toString(),
+            ).joinToString(" · ")
+            if (details.isNotBlank()) {
+                Text(details, color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            Text(historyTimestamp(entry.watchedAt), color = Muted, fontSize = 10.sp)
+            if (entry.item == null) Text("Trakt", color = Teal, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+private fun historyTimestamp(value: String): String {
+    val normalized = value.trim().replace('T', ' ')
+    if (normalized.length < 16) return normalized
+    return "${normalized.substring(0, 10)} · ${normalized.substring(11, 16)}"
+}
+
+@Composable
 fun LibraryPageView(
     session: Session?,
     libraries: List<Library>,
@@ -642,17 +757,14 @@ fun LibraryPageView(
     onHome: () -> Unit,
     onLibrary: (Library) -> Unit,
     onWatchlist: () -> Unit,
+    onHistory: () -> Unit,
     onSearch: () -> Unit,
     onUpdates: () -> Unit,
     onScan: () -> Unit,
     onLogout: () -> Unit,
     onPreviousPage: () -> Unit,
     onNextPage: () -> Unit,
-    onGenre: (String) -> Unit,
-    onDecades: (String) -> Unit,
-    onSort: (String) -> Unit,
-    onMinRating: (Double) -> Unit,
-    onSeenStatus: (String) -> Unit,
+    onFilters: (String, String, Double, String, String) -> Unit,
     onAlphabet: (AlphabetEntry) -> Unit,
     onItem: (PopItem) -> Unit,
     onShow: (ShowSummary) -> Unit,
@@ -665,6 +777,7 @@ fun LibraryPageView(
     var suppressSideNavigationExpansion by remember { mutableStateOf(false) }
     var refocusAlphabetAfterJump by remember { mutableStateOf(false) }
     var filterMenuOpen by remember(activeLibrary.id) { mutableStateOf(false) }
+    var gridEntryFocusPending by remember(activeLibrary.id) { mutableStateOf(true) }
     val navFocusRequester = remember { FocusRequester() }
     val filterFocusRequester = remember { FocusRequester() }
     val alphabetFocusRequester = remember { FocusRequester() }
@@ -691,6 +804,7 @@ fun LibraryPageView(
             onHome = onHome,
             onLibrary = onLibrary,
             onWatchlist = onWatchlist,
+            onHistory = onHistory,
             onSearch = onSearch,
             onUpdates = onUpdates,
             onScan = onScan,
@@ -711,6 +825,7 @@ fun LibraryPageView(
                 LibraryFilterBar(
                     activeLibrary = activeLibrary,
                     count = if (activeLibrary.type == "tv") shows.size else items.size,
+                    loading = loading,
                     selectedGenre = selectedGenre,
                     selectedDecades = selectedDecades,
                     selectedSort = selectedSort,
@@ -719,11 +834,7 @@ fun LibraryPageView(
                     genres = genres,
                     decades = decades,
                     firstFocusRequester = filterFocusRequester,
-                    onSort = onSort,
-                    onGenre = onGenre,
-                    onDecades = onDecades,
-                    onMinRating = onMinRating,
-                    onSeenStatus = onSeenStatus,
+                    onApply = onFilters,
                     onMenuOpenChange = { open ->
                         filterMenuOpen = open
                         suppressSideNavigationExpansion = open
@@ -744,6 +855,7 @@ fun LibraryPageView(
                         entries = shows,
                         key = { showFocusKey(it) },
                         initialFocusKey = initialFocusKey,
+                        autoFocusOnEntry = gridEntryFocusPending,
                         alphabetTitle = { it.title },
                         alphabetEntries = alphabet.takeIf { selectedSort.isBlank() } ?: emptyList(),
                         onAlphabet = { entry ->
@@ -771,6 +883,7 @@ fun LibraryPageView(
                             autoFocus = autoFocus,
                             focusRequester = focusRequester,
                             onFocus = {
+                                gridEntryFocusPending = false
                                 restoreGridFocus = focusRequester
                                 focusedAlphabetLetter = railAlphabetLetter(show.title)
                                 focusedBackdrop = show.backdropPreview()
@@ -803,6 +916,7 @@ fun LibraryPageView(
                         entries = items,
                         key = { it.id },
                         initialFocusKey = initialFocusKey,
+                        autoFocusOnEntry = gridEntryFocusPending,
                         alphabetTitle = { it.title },
                         alphabetEntries = alphabet.takeIf { selectedSort.isBlank() } ?: emptyList(),
                         onAlphabet = { entry ->
@@ -830,6 +944,7 @@ fun LibraryPageView(
                             autoFocus = autoFocus,
                             focusRequester = focusRequester,
                             onFocus = {
+                                gridEntryFocusPending = false
                                 restoreGridFocus = focusRequester
                                 focusedAlphabetLetter = railAlphabetLetter(item.title)
                                 focusedBackdrop = item.backdropPreview()
@@ -925,6 +1040,7 @@ private fun BrowseBackdropLayer(session: Session?, preview: BrowseBackdropPrevie
 fun LibraryFilterBar(
     activeLibrary: Library,
     count: Int,
+    loading: Boolean,
     selectedGenre: String,
     selectedDecades: String,
     selectedSort: String,
@@ -933,18 +1049,44 @@ fun LibraryFilterBar(
     genres: List<String>,
     decades: List<Int>,
     firstFocusRequester: FocusRequester? = null,
-    onSort: (String) -> Unit,
-    onGenre: (String) -> Unit,
-    onDecades: (String) -> Unit,
-    onMinRating: (Double) -> Unit,
-    onSeenStatus: (String) -> Unit,
+    onApply: (String, String, Double, String, String) -> Unit,
     onMenuOpenChange: (Boolean) -> Unit = {},
 ) {
-    var openDropdown by remember(activeLibrary.id) { mutableStateOf<LibraryDropdown?>(null) }
-    LaunchedEffect(openDropdown) {
-        onMenuOpenChange(openDropdown != null)
+    var drawerPage by remember(activeLibrary.id) { mutableStateOf<LibraryFilterPage?>(null) }
+    var restoreFocus by remember(activeLibrary.id) { mutableStateOf<FocusRequester?>(null) }
+    var filterReloadPending by remember(activeLibrary.id) { mutableStateOf(false) }
+    val sortFocus = firstFocusRequester ?: remember { FocusRequester() }
+    val seenFocus = remember { FocusRequester() }
+    val ratingFocus = remember { FocusRequester() }
+    val genreFocus = remember { FocusRequester() }
+    val decadeFocus = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
+
+    fun openDrawer(page: LibraryFilterPage, requester: FocusRequester) {
+        restoreFocus = requester
+        drawerPage = page
     }
-    BackHandler(enabled = openDropdown != null) { openDropdown = null }
+    fun closeDrawer(restoreImmediately: Boolean = true) {
+        drawerPage = null
+        if (restoreImmediately && !filterReloadPending) {
+            scope.launch {
+                delay(60)
+                restoreFocus?.let { runCatching { it.requestFocus() } }
+            }
+        }
+    }
+    fun applyingFilter() {
+        filterReloadPending = true
+    }
+    LaunchedEffect(drawerPage) { onMenuOpenChange(drawerPage != null) }
+    LaunchedEffect(loading, drawerPage, filterReloadPending) {
+        if (filterReloadPending && !loading && drawerPage == null) {
+            delay(80)
+            if (loading || drawerPage != null) return@LaunchedEffect
+            restoreFocus?.let { runCatching { it.requestFocus() } }
+            filterReloadPending = false
+        }
+    }
     val countLabel = if (activeLibrary.type == "tv") "$count shows" else "$count movies"
     val selectedGenres = splitSelectedGenres(selectedGenre)
     val genreLabel = when (selectedGenres.size) {
@@ -971,61 +1113,138 @@ fun LibraryFilterBar(
             Text(activeLibrary.name, color = TextColor, fontSize = 22.sp, fontWeight = FontWeight.Black)
             Text(countLabel, color = Muted, fontSize = 12.sp)
             Spacer(Modifier.width(10.dp))
-            Pill(text = "Sort: ${sortLabel(selectedSort)}", selected = openDropdown == LibraryDropdown.Sort || selectedSort.isNotBlank(), modifier = if (firstFocusRequester != null) Modifier.focusRequester(firstFocusRequester) else Modifier, onClick = { openDropdown = LibraryDropdown.Sort })
-            Pill(text = seenLabel(selectedSeenStatus), selected = openDropdown == LibraryDropdown.Seen || selectedSeenStatus.isNotBlank(), onClick = { openDropdown = LibraryDropdown.Seen })
-            Pill(text = ratingLabel(selectedMinRating), selected = openDropdown == LibraryDropdown.Rating || selectedMinRating > 0.0, onClick = { openDropdown = LibraryDropdown.Rating })
-            Pill(text = genreLabel, selected = openDropdown == LibraryDropdown.Genre || selectedGenres.isNotEmpty(), onClick = { openDropdown = LibraryDropdown.Genre })
-            Pill(text = decadeLabel, selected = openDropdown == LibraryDropdown.Decade || selectedDecadeList.isNotEmpty(), onClick = { openDropdown = LibraryDropdown.Decade })
+            Pill(text = "Sort: ${sortLabel(selectedSort)}", selected = selectedSort.isNotBlank(), modifier = Modifier.focusRequester(sortFocus), onClick = { openDrawer(LibraryFilterPage.Sort, sortFocus) })
+            Pill(text = seenLabel(selectedSeenStatus), selected = selectedSeenStatus.isNotBlank(), modifier = Modifier.focusRequester(seenFocus), onClick = { openDrawer(LibraryFilterPage.Seen, seenFocus) })
+            Pill(text = ratingLabel(selectedMinRating), selected = selectedMinRating > 0.0, modifier = Modifier.focusRequester(ratingFocus), onClick = { openDrawer(LibraryFilterPage.Rating, ratingFocus) })
+            Pill(text = genreLabel, selected = selectedGenres.isNotEmpty(), modifier = Modifier.focusRequester(genreFocus), onClick = { openDrawer(LibraryFilterPage.Genre, genreFocus) })
+            Pill(text = decadeLabel, selected = selectedDecadeList.isNotEmpty(), modifier = Modifier.focusRequester(decadeFocus), onClick = { openDrawer(LibraryFilterPage.Decade, decadeFocus) })
         }
-        when (openDropdown) {
-            LibraryDropdown.Sort -> FilterPopup("Sort", sortDropdownOptions().map { option ->
-                FilterOption(option.label, selectedSort == option.sort) {
-                    onSort(option.sort)
-                    openDropdown = null
-                }
-            }, onClose = { openDropdown = null })
-            LibraryDropdown.Seen -> FilterPopup("Seen status", seenOptions().map { (status, label) ->
-                FilterOption(label, selectedSeenStatus == status) {
-                    onSeenStatus(status)
-                    openDropdown = null
-                }
-            }, onClose = { openDropdown = null })
-            LibraryDropdown.Rating -> FilterPopup("IMDb rating", ratingOptions().map { (rating, label) ->
-                FilterOption(label, selectedMinRating == rating) {
-                    onMinRating(rating)
-                    openDropdown = null
-                }
-            }, onClose = { openDropdown = null })
-            LibraryDropdown.Genre -> FilterPopup(
-                title = "Genres",
-                options = listOf(FilterOption("All", selectedGenres.isEmpty()) { onGenre("") }) + genres.map { genre ->
-                    FilterOption(genre, selectedGenres.any { it.equals(genre, ignoreCase = true) }) {
-                        onGenre(toggleGenre(selectedGenres, genre).joinToString(","))
-                    }
+        drawerPage?.let { page ->
+            LibraryFilterDrawer(
+                page = page,
+                sort = selectedSort,
+                seen = selectedSeenStatus,
+                rating = selectedMinRating,
+                selectedGenres = selectedGenres,
+                selectedDecades = selectedDecadeList,
+                genres = genres,
+                decades = decades,
+                onSort = { value ->
+                    applyingFilter()
+                    onApply(value, selectedSeenStatus, selectedMinRating, selectedGenre, selectedDecades)
+                    closeDrawer(restoreImmediately = false)
                 },
-                multiSelect = true,
-                onClose = { openDropdown = null },
-            )
-            LibraryDropdown.Decade -> FilterPopup(
-                title = "Decades",
-                options = listOf(FilterOption("All", selectedDecadeList.isEmpty()) { onDecades("") }) + decades.sortedDescending().map { decade ->
-                    val value = decade.toString()
-                    FilterOption("${decade}s", selectedDecadeList.contains(value)) {
-                        onDecades(toggleGenre(selectedDecadeList, value).joinToString(","))
-                    }
+                onSeen = { value ->
+                    applyingFilter()
+                    onApply(selectedSort, value, selectedMinRating, selectedGenre, selectedDecades)
+                    closeDrawer(restoreImmediately = false)
                 },
-                multiSelect = true,
-                onClose = { openDropdown = null },
+                onRating = { value ->
+                    applyingFilter()
+                    onApply(selectedSort, selectedSeenStatus, value, selectedGenre, selectedDecades)
+                    closeDrawer(restoreImmediately = false)
+                },
+                onGenres = { values ->
+                    applyingFilter()
+                    onApply(selectedSort, selectedSeenStatus, selectedMinRating, values.joinToString(","), selectedDecades)
+                },
+                onDecades = { values ->
+                    applyingFilter()
+                    onApply(selectedSort, selectedSeenStatus, selectedMinRating, selectedGenre, values.joinToString(","))
+                },
+                onClose = { closeDrawer() },
             )
-            null -> Unit
         }
     }
 }
 
-private enum class LibraryDropdown { Sort, Seen, Rating, Genre, Decade }
+private enum class LibraryFilterPage { Sort, Seen, Rating, Genre, Decade }
+
+@Composable
+private fun LibraryFilterDrawer(
+    page: LibraryFilterPage,
+    sort: String,
+    seen: String,
+    rating: Double,
+    selectedGenres: List<String>,
+    selectedDecades: List<String>,
+    genres: List<String>,
+    decades: List<Int>,
+    onSort: (String) -> Unit,
+    onSeen: (String) -> Unit,
+    onRating: (Double) -> Unit,
+    onGenres: (List<String>) -> Unit,
+    onDecades: (List<String>) -> Unit,
+    onClose: () -> Unit,
+) {
+    val firstFocus = remember { FocusRequester() }
+    val entries = when (page) {
+        LibraryFilterPage.Sort -> sortDropdownOptions().map { option ->
+            UserDrawerEntry(option.label, Icons.AutoMirrored.Filled.Sort, active = sort == option.sort) { onSort(option.sort) }
+        }
+        LibraryFilterPage.Seen -> seenOptions().map { option ->
+            UserDrawerEntry(option.second, Icons.Filled.Visibility, active = seen == option.first) { onSeen(option.first) }
+        }
+        LibraryFilterPage.Rating -> ratingOptions().map { option ->
+            UserDrawerEntry(option.second, Icons.Filled.Star, active = rating == option.first) { onRating(option.first) }
+        }
+        LibraryFilterPage.Genre ->
+            listOf(UserDrawerEntry("All genres", Icons.Filled.Category, active = selectedGenres.isEmpty()) { onGenres(emptyList()) }) +
+            genres.map { genre ->
+                UserDrawerEntry(genre, Icons.Filled.Category, active = selectedGenres.any { it.equals(genre, ignoreCase = true) }) {
+                    onGenres(toggleGenre(selectedGenres, genre))
+                }
+            }
+        LibraryFilterPage.Decade ->
+            listOf(UserDrawerEntry("All decades", Icons.Filled.DateRange, active = selectedDecades.isEmpty()) { onDecades(emptyList()) }) +
+            decades.sortedDescending().map { decade ->
+                val value = decade.toString()
+                UserDrawerEntry("${decade}s", Icons.Filled.DateRange, active = value in selectedDecades) {
+                    onDecades(toggleGenre(selectedDecades, value))
+                }
+            }
+    }
+    BackHandler(onBack = onClose)
+    LaunchedEffect(page) {
+        delay(45)
+        runCatching { firstFocus.requestFocus() }
+    }
+    Popup(alignment = Alignment.Center, onDismissRequest = onClose, properties = PopupProperties(focusable = true)) {
+        Box(
+            Modifier.fillMaxSize().background(Color.Black.copy(alpha = .32f)).onKeyEvent {
+                it.type == KeyEventType.KeyDown && (it.key == Key.DirectionLeft || it.key == Key.DirectionRight)
+            },
+            contentAlignment = Alignment.CenterEnd,
+        ) {
+            Column(
+                Modifier.fillMaxHeight().width(356.dp).background(Bg.copy(alpha = .98f)).border(1.dp, Color.White.copy(alpha = .10f)).padding(horizontal = 28.dp, vertical = 42.dp),
+            ) {
+                Text("FILTERS", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                Spacer(Modifier.height(7.dp))
+                Text(
+                    when (page) {
+                        LibraryFilterPage.Sort -> "Sort"
+                        LibraryFilterPage.Seen -> "Seen status"
+                        LibraryFilterPage.Rating -> "IMDb rating"
+                        LibraryFilterPage.Genre -> "Genres"
+                        LibraryFilterPage.Decade -> "Decades"
+                    },
+                    color = TextColor,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Black,
+                )
+                Spacer(Modifier.height(18.dp))
+                LazyColumn(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    itemsIndexed(entries) { index, entry ->
+                        UserDrawerAction(entry, if (index == 0) Modifier.focusRequester(firstFocus) else Modifier)
+                    }
+                }
+            }
+        }
+    }
+}
 
 private data class SortOption(val sort: String, val label: String)
-private data class FilterOption(val label: String, val selected: Boolean, val onClick: () -> Unit)
 
 private fun sortDropdownOptions(): List<SortOption> = listOf(
     SortOption("", "Name A-Z"),
@@ -1054,49 +1273,65 @@ private fun toggleGenre(selected: List<String>, genre: String): List<String> {
 }
 
 @Composable
-private fun UserMenuButton(session: Session?, showUpdate: Boolean, onUpdates: () -> Unit, onScan: () -> Unit, onLogout: () -> Unit) {
+private fun UserMenuButton(
+    session: Session?,
+    showUpdate: Boolean,
+    onHistory: () -> Unit,
+    onUpdates: () -> Unit,
+    onScan: () -> Unit,
+    onLogout: () -> Unit,
+) {
     var open by remember { mutableStateOf(false) }
-    var settingsOpen by remember { mutableStateOf(false) }
+    var page by remember { mutableStateOf(UserMenuPage.Root) }
+    val buttonFocus = remember { FocusRequester() }
+    val scope = rememberCoroutineScope()
+    fun close(restoreFocus: Boolean = true) {
+        open = false
+        page = UserMenuPage.Root
+        if (restoreFocus) {
+            scope.launch {
+                delay(60)
+                runCatching { buttonFocus.requestFocus() }
+            }
+        }
+    }
     Box {
         val avatar = avatarUrl(session)
         if (avatar.isNotBlank()) {
-            AvatarButton(url = avatar, session = session, selected = open, onClick = { open = true })
+            AvatarButton(url = avatar, session = session, selected = open, focusRequester = buttonFocus, onClick = { open = true })
         } else {
-            Pill(text = session.userDisplayName(), selected = open, onClick = { open = true })
+            Pill(text = session.userDisplayName(), selected = open, modifier = Modifier.focusRequester(buttonFocus), onClick = { open = true })
         }
         if (open) {
-            val options = buildList {
-                if (session?.isAdmin == true) {
-                    add(FilterOption("Update libraries", false) {
-                        onScan()
-                        open = false
-                    })
-                }
-                if (showUpdate) {
-                    add(FilterOption("Update app", false) {
-                        onUpdates()
-                        open = false
-                    })
-                }
-                add(FilterOption("Settings", false) {
-                    settingsOpen = true
-                    open = false
-                })
-                add(FilterOption("Logout", false) {
+            UserMenuDrawer(
+                session = session,
+                page = page,
+                showUpdate = showUpdate,
+                onPage = { page = it },
+                onHistory = {
+                    close(restoreFocus = false)
+                    onHistory()
+                },
+                onUpdates = {
+                    close(restoreFocus = false)
+                    onUpdates()
+                },
+                onScan = {
+                    close()
+                    onScan()
+                },
+                onLogout = {
+                    close(restoreFocus = false)
                     onLogout()
-                    open = false
-                })
-            }
-            FilterPopup(title = session.userDisplayName(), options = options, navigationMenu = true, onClose = { open = false })
-        }
-        if (settingsOpen) {
-            PlaybackSettingsDialog(onClose = { settingsOpen = false })
+                },
+                onClose = { close() },
+            )
         }
     }
 }
 
 @Composable
-private fun AvatarButton(url: String, session: Session?, selected: Boolean, onClick: () -> Unit) {
+private fun AvatarButton(url: String, session: Session?, selected: Boolean, focusRequester: FocusRequester, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val border = when {
         focused -> Color.White.copy(alpha = .9f)
@@ -1108,6 +1343,7 @@ private fun AvatarButton(url: String, session: Session?, selected: Boolean, onCl
             .size(40.dp)
             .clip(CircleShape)
             .border(2.dp, border, CircleShape)
+            .focusRequester(focusRequester)
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .tvActivate(onClick),
@@ -1124,8 +1360,28 @@ private fun AvatarButton(url: String, session: Session?, selected: Boolean, onCl
     }
 }
 
+private enum class UserMenuPage { Root, Audio, Subtitles }
+
+data class UserDrawerEntry(
+    val label: String,
+    val icon: ImageVector,
+    val detail: String = "",
+    val active: Boolean = false,
+    val action: () -> Unit,
+)
+
 @Composable
-private fun PlaybackSettingsDialog(onClose: () -> Unit) {
+private fun UserMenuDrawer(
+    session: Session?,
+    page: UserMenuPage,
+    showUpdate: Boolean,
+    onPage: (UserMenuPage) -> Unit,
+    onHistory: () -> Unit,
+    onUpdates: () -> Unit,
+    onScan: () -> Unit,
+    onLogout: () -> Unit,
+    onClose: () -> Unit,
+) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val audioOptions = listOf("" to "Track default") + prefLanguageChoices
     val subtitleOptions = listOf(
@@ -1133,227 +1389,114 @@ private fun PlaybackSettingsDialog(onClose: () -> Unit) {
         PlaybackPrefs.TRACK_DEFAULT to "Track default",
     ) + prefLanguageChoices
     val firstFocus = remember { FocusRequester() }
-    LaunchedEffect(Unit) {
-        delay(80)
+    val entries = when (page) {
+        UserMenuPage.Root -> buildList {
+            add(UserDrawerEntry("Watch history", Icons.Filled.History, action = onHistory))
+            add(UserDrawerEntry("Preferred audio", Icons.AutoMirrored.Filled.VolumeUp, audioOptions.firstOrNull { it.first == PlaybackPrefs.audioLang }?.second.orEmpty(), action = { onPage(UserMenuPage.Audio) }))
+            add(UserDrawerEntry("Preferred subtitles", Icons.Filled.Subtitles, subtitleOptions.firstOrNull { it.first == PlaybackPrefs.subtitleLang }?.second.orEmpty(), action = { onPage(UserMenuPage.Subtitles) }))
+            if (session?.isAdmin == true) add(UserDrawerEntry("Update libraries", Icons.Filled.Refresh, action = onScan))
+            if (showUpdate) add(UserDrawerEntry("Update app", Icons.Filled.SystemUpdate, action = onUpdates))
+            add(UserDrawerEntry("Logout", Icons.AutoMirrored.Filled.Logout, action = onLogout))
+        }
+        UserMenuPage.Audio -> listOf(UserDrawerEntry("Back", Icons.AutoMirrored.Filled.ArrowBack, action = { onPage(UserMenuPage.Root) })) +
+            audioOptions.map { option ->
+                UserDrawerEntry(option.second, Icons.AutoMirrored.Filled.VolumeUp, active = PlaybackPrefs.audioLang == option.first) {
+                    PlaybackPrefs.setAudio(context, option.first)
+                    onPage(UserMenuPage.Root)
+                }
+            }
+        UserMenuPage.Subtitles -> listOf(UserDrawerEntry("Back", Icons.AutoMirrored.Filled.ArrowBack, action = { onPage(UserMenuPage.Root) })) +
+            subtitleOptions.map { option ->
+                UserDrawerEntry(option.second, Icons.Filled.Subtitles, active = PlaybackPrefs.subtitleLang == option.first) {
+                    PlaybackPrefs.setSubtitle(context, option.first)
+                    onPage(UserMenuPage.Root)
+                }
+            }
+    }
+    BackHandler {
+        if (page == UserMenuPage.Root) onClose() else onPage(UserMenuPage.Root)
+    }
+    LaunchedEffect(page, entries.size) {
+        delay(45)
         runCatching { firstFocus.requestFocus() }
     }
-    Popup(alignment = Alignment.TopEnd, onDismissRequest = onClose, properties = PopupProperties(focusable = true)) {
-        Column(
-            Modifier
-                .padding(top = 58.dp, end = 24.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(Surface2.copy(alpha = .98f))
-                .border(1.dp, Color.White.copy(alpha = .18f), RoundedCornerShape(10.dp))
-                .onKeyEvent {
-                    if (it.type == KeyEventType.KeyUp && it.key == Key.Back) {
-                        onClose()
-                        true
-                    } else {
-                        false
-                    }
-                }
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("Playback languages", color = Accent, fontSize = 15.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.width(210.dp)) {
-                    Text("Audio", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp))
-                    audioOptions.forEachIndexed { index, option ->
-                        SingleSelectFilterRow(
-                            text = option.second,
-                            selected = PlaybackPrefs.audioLang == option.first,
-                            modifier = if (index == 0) Modifier.focusRequester(firstFocus) else Modifier,
-                            onClick = { PlaybackPrefs.setAudio(context, option.first) },
-                        )
-                    }
-                }
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.width(210.dp)) {
-                    Text("Subtitles", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 8.dp))
-                    subtitleOptions.forEach { option ->
-                        SingleSelectFilterRow(
-                            text = option.second,
-                            selected = PlaybackPrefs.subtitleLang == option.first,
-                            onClick = { PlaybackPrefs.setSubtitle(context, option.first) },
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FilterPopup(
-    title: String,
-    options: List<FilterOption>,
-    multiSelect: Boolean = false,
-    navigationMenu: Boolean = false,
-    onClose: () -> Unit,
-) {
-    val firstFocus = remember { FocusRequester() }
-    LaunchedEffect(options.size) {
-        delay(80)
-        firstFocus.requestFocus()
-    }
-    Popup(alignment = Alignment.TopStart, onDismissRequest = onClose, properties = PopupProperties(focusable = true)) {
-        Column(
-            Modifier
-                .padding(
-                    top = if (navigationMenu) 18.dp else 58.dp,
-                    start = if (navigationMenu) 74.dp else 270.dp,
-                )
-                .width(if (multiSelect) 360.dp else 300.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(Surface2.copy(alpha = .98f))
-                .border(1.dp, Color.White.copy(alpha = .18f), RoundedCornerShape(10.dp))
-                .onKeyEvent {
-                    if (it.type == KeyEventType.KeyUp && (it.key == Key.Back || it.key == Key.DirectionLeft || it.key == Key.DirectionRight)) {
-                        onClose()
-                        true
-                    } else {
-                        false
-                    }
-                }
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text(title, color = Accent, fontSize = 15.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
-            LazyColumn(
-                modifier = Modifier.height(if (options.size > 8) 330.dp else ((options.size * 42) + 8).dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                itemsIndexed(options, key = { index, option -> "$index-${option.label}" }) { index, option ->
-                    if (multiSelect) {
-                        MultiSelectFilterRow(
-                            text = option.label,
-                            selected = option.selected,
-                            modifier = if (index == 0) Modifier.focusRequester(firstFocus) else Modifier,
-                            onClick = option.onClick,
-                        )
-                    } else {
-                        SingleSelectFilterRow(
-                            text = option.label,
-                            selected = option.selected,
-                            modifier = if (index == 0) Modifier.focusRequester(firstFocus) else Modifier,
-                            onClick = option.onClick,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SingleSelectFilterRow(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
-    val background = when {
-        selected && focused -> Accent
-        selected -> AccentDim
-        focused -> Surface3
-        else -> Color.Transparent
-    }
-    val border = when {
-        selected && focused -> Color.White
-        focused -> FocusGlow
-        selected -> Accent.copy(alpha = .55f)
-        else -> Color.Transparent
-    }
-    Row(
-        modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .background(background)
-            .border(1.dp, border, RoundedCornerShape(6.dp))
-            .onFocusChanged { focused = it.isFocused }
-            .focusable()
-            .tvActivate(onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
+    Popup(alignment = Alignment.Center, onDismissRequest = onClose, properties = PopupProperties(focusable = true)) {
         Box(
             Modifier
-                .width(4.dp)
-                .height(20.dp)
-                .clip(RoundedCornerShape(99.dp))
-                .background(if (selected) (if (focused) Color.Black else Accent) else Color.Transparent),
-        )
-        Text(
-            text,
-            color = if (selected) Color.Black else TextColor,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        if (selected) {
-            Box(
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = .32f))
+                .onKeyEvent {
+                    it.type == KeyEventType.KeyDown && (it.key == Key.DirectionLeft || it.key == Key.DirectionRight)
+                },
+            contentAlignment = Alignment.CenterEnd,
+        ) {
+            Column(
                 Modifier
-                    .size(8.dp)
-                    .clip(RoundedCornerShape(99.dp))
-                    .background(if (focused) Color.Black else Accent),
-            )
+                    .fillMaxHeight()
+                    .width(356.dp)
+                    .background(Bg.copy(alpha = .98f))
+                    .border(1.dp, Color.White.copy(alpha = .10f))
+                    .padding(horizontal = 28.dp, vertical = 42.dp),
+                verticalArrangement = Arrangement.Top,
+            ) {
+                Text(
+                    when (page) {
+                        UserMenuPage.Root -> "USER MENU"
+                        UserMenuPage.Audio -> "PREFERRED AUDIO"
+                        UserMenuPage.Subtitles -> "PREFERRED SUBTITLES"
+                    },
+                    color = Accent,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Black,
+                )
+                Spacer(Modifier.height(7.dp))
+                Text(
+                    if (page == UserMenuPage.Root) session.userDisplayName() else "Playback languages",
+                    color = TextColor,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(18.dp))
+                LazyColumn(
+                    Modifier.fillMaxWidth().weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    itemsIndexed(entries) { index, entry ->
+                        UserDrawerAction(
+                            entry = entry,
+                            modifier = if (index == 0) Modifier.focusRequester(firstFocus) else Modifier,
+                        )
+                    }
+                }
+            }
         }
     }
 }
 
 @Composable
-fun MultiSelectFilterRow(text: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+fun UserDrawerAction(entry: UserDrawerEntry, modifier: Modifier = Modifier) {
     var focused by remember { mutableStateOf(false) }
-    val background = when {
-        selected && focused -> Accent
-        selected -> AccentDim
-        focused -> Surface3
-        else -> Color.Transparent
-    }
-    val border = when {
-        selected && focused -> Color.White
-        focused -> FocusGlow
-        selected -> Accent.copy(alpha = .55f)
-        else -> Color.Transparent
-    }
+    val tint = if (focused) TextColor else if (entry.active) Accent else Muted
     Row(
         modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
-            .background(background)
-            .border(1.dp, border, RoundedCornerShape(6.dp))
+            .height(46.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (focused) Accent.copy(alpha = .08f) else Color.Transparent)
+            .border(1.dp, if (focused) Accent else Color.Transparent, RoundedCornerShape(12.dp))
             .onFocusChanged { focused = it.isFocused }
             .focusable()
-            .tvActivate(onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .tvActivate(entry.action)
+            .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(11.dp),
     ) {
-        Box(
-            Modifier
-                .size(18.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(if (selected) (if (focused) Color.Black else Accent) else Color.Transparent)
-                .border(2.dp, if (selected && focused) Color.Black else if (selected) Accent else Muted, RoundedCornerShape(4.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (selected) {
-                Box(
-                    Modifier
-                        .size(8.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(if (focused) Accent else Color.Black),
-                )
-            }
-        }
-        Text(
-            text,
-            color = if (selected) Color.Black else TextColor,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        Icon(entry.icon, contentDescription = null, tint = tint, modifier = Modifier.size(19.dp))
+        Text(entry.label, color = tint, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (entry.detail.isNotBlank()) Text(entry.detail, color = Muted, fontSize = 10.sp, maxLines = 1)
+        if (entry.active) Icon(Icons.Filled.Check, contentDescription = "Selected", tint = Accent, modifier = Modifier.size(16.dp))
     }
 }
 
@@ -1486,6 +1629,7 @@ private fun HomeHero(
     onItem: (PopItem) -> Unit,
     onShow: (ShowSummary) -> Unit,
     onContentFocus: (FocusRequester) -> Unit,
+    onDpadLeft: (() -> Boolean)? = null,
     onDpadDown: (() -> Boolean)? = null,
 ) {
     val heroRequester = remember { FocusRequester() }
@@ -1522,8 +1666,12 @@ private fun HomeHero(
                 if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
                 when (event.key) {
                     Key.DirectionLeft -> {
-                        selectedAction = 0
-                        true
+                        if (selectedAction > 0) {
+                            selectedAction = 0
+                            true
+                        } else {
+                            onDpadLeft?.invoke() ?: false
+                        }
                     }
                     Key.DirectionRight -> {
                         selectedAction = 1
@@ -1707,6 +1855,7 @@ fun CuratedLanding(
     onItemMenu: (PopItem, FocusRequester?) -> Unit,
     onShowMenu: (ShowSummary, FocusRequester?) -> Unit,
     onContentFocus: (FocusRequester) -> Unit = {},
+    onHeroLeft: (() -> Boolean)? = null,
 ) {
     if (movies.isEmpty() && shows.isEmpty()) {
         EmptyState("No media found")
@@ -1761,6 +1910,7 @@ fun CuratedLanding(
                         if (initialFocusTarget == "hero") initialFocusPending = false
                         onContentFocus(requester)
                     },
+                    onDpadLeft = onHeroLeft,
                     // Falls back to default focus search when the first card is
                     // not composed (shelf scrolled far right, empty shelves).
                     onDpadDown = { runCatching { firstShelfCardRequester.requestFocus() }.isSuccess },

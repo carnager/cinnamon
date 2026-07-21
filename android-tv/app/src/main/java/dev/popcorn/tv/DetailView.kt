@@ -91,6 +91,7 @@ fun DetailView(
     onLibrary: (Library) -> Unit,
     onSearch: () -> Unit,
     onWatchlist: () -> Unit,
+    onHistory: () -> Unit,
     onUpdates: () -> Unit,
     onScan: () -> Unit,
     onLogout: () -> Unit,
@@ -251,6 +252,7 @@ fun DetailView(
             onHome = onHome,
             onLibrary = onLibrary,
             onWatchlist = onWatchlist,
+            onHistory = onHistory,
             onSearch = onSearch,
             onUpdates = onUpdates,
             onScan = onScan,
@@ -689,7 +691,6 @@ private fun ActionToggle(
     val bg = Color.Transparent
     val borderColor = when {
         focused -> Accent.copy(alpha = .95f)
-        active -> Accent.copy(alpha = .52f)
         else -> Color.Transparent
     }
     val contentColor = when {
@@ -755,7 +756,6 @@ private fun ActionIcon(
     val bg = Color.Transparent
     val borderColor = when {
         focused -> Accent.copy(alpha = .95f)
-        active -> activeTint.copy(alpha = .52f)
         else -> Color.Transparent
     }
     val tint = when {

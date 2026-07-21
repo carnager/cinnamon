@@ -48,6 +48,8 @@ type App struct {
 	loginFails  map[string]loginAttempt
 	cache       responseCache
 	cacheGen    atomic.Uint64
+	historyMu   sync.Mutex
+	history     map[int64]historyCacheEntry
 
 	scopedMu      sync.Mutex
 	scopedPending map[string]map[string]bool
@@ -86,6 +88,7 @@ func New(opts Options) *App {
 		failHints:   map[string]time.Time{},
 		loginFails:  map[string]loginAttempt{},
 		cache:       responseCache{entries: map[string]cachedResponse{}},
+		history:     map[int64]historyCacheEntry{},
 
 		scopedPending: map[string]map[string]bool{},
 		scopedRunning: map[string]bool{},
@@ -150,6 +153,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /api/users/{id}/avatar", a.uploadUserAvatar)
 	mux.HandleFunc("DELETE /api/users/{id}/avatar", a.deleteUserAvatar)
 	mux.HandleFunc("GET /api/progress", a.progressList)
+	mux.HandleFunc("GET /api/history", a.watchHistory)
 	mux.HandleFunc("GET /api/progress/tv", a.progressShows)
 	mux.HandleFunc("PUT /api/progress/tv", a.progressShowSave)
 	mux.HandleFunc("DELETE /api/progress/tv", a.progressShowDelete)
@@ -329,14 +333,15 @@ func (a *App) search(w http.ResponseWriter, r *http.Request) {
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	a.writeCachedJSON(w, r, cacheKey(r, "search"), 20*time.Second, func() (any, error) {
 		items, err := a.store.SearchItems(r.Context(), media.SearchOptions{
-			Query:     r.URL.Query().Get("q"),
-			LibraryID: r.URL.Query().Get("libraryId"),
-			Kind:      r.URL.Query().Get("kind"),
-			Genre:     r.URL.Query().Get("genre"),
-			Sort:      r.URL.Query().Get("sort"),
-			MinRating: queryFloat(r, "minRating"),
-			Limit:     limit,
-			Offset:    offset,
+			Query:        r.URL.Query().Get("q"),
+			LibraryID:    r.URL.Query().Get("libraryId"),
+			Kind:         r.URL.Query().Get("kind"),
+			Genre:        r.URL.Query().Get("genre"),
+			Sort:         r.URL.Query().Get("sort"),
+			SearchFields: r.URL.Query().Get("fields"),
+			MinRating:    queryFloat(r, "minRating"),
+			Limit:        limit,
+			Offset:       offset,
 		})
 		if err != nil {
 			return nil, err
@@ -358,7 +363,7 @@ func (a *App) tvShows(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	a.writeCachedJSON(w, r, cacheKey(r, "tvShows", user.ID), 20*time.Second, func() (any, error) {
-		return a.store.ListShowsForUser(r.Context(), r.URL.Query().Get("libraryId"), r.URL.Query().Get("q"), r.URL.Query().Get("genre"), r.URL.Query().Get("decades"), r.URL.Query().Get("sort"), r.URL.Query().Get("seen"), user.ID, queryFloat(r, "minRating"), limit, offset)
+		return a.store.ListShowsForUserWithFields(r.Context(), r.URL.Query().Get("libraryId"), r.URL.Query().Get("q"), r.URL.Query().Get("genre"), r.URL.Query().Get("decades"), r.URL.Query().Get("sort"), r.URL.Query().Get("seen"), user.ID, queryFloat(r, "minRating"), r.URL.Query().Get("fields"), limit, offset)
 	})
 }
 

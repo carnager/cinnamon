@@ -61,11 +61,11 @@ class MainActivity : ComponentActivity() {
 data class WatchMenuState(
     val title: String,
     val watched: Boolean,
-    val watchlisted: Boolean,
+    val watchlisted: Boolean? = null,
     val onMarkWatched: () -> Unit,
     val onMarkUnwatched: () -> Unit,
-    val onAddWatchlist: () -> Unit,
-    val onRemoveWatchlist: () -> Unit,
+    val onAddWatchlist: (() -> Unit)? = null,
+    val onRemoveWatchlist: (() -> Unit)? = null,
     val restoreFocus: (() -> Unit)? = null,
 )
 
@@ -301,6 +301,24 @@ fun PopcornApp() {
         }
     }
 
+    fun setSeasonWatched(activeSession: Session, season: SeasonSummary, watched: Boolean) {
+        scope.launch {
+            runCatching {
+                val api = Api(activeSession)
+                if (watched) {
+                    api.markSeasonWatched(season.libraryId, season.showTitle, season.seasonNumber)
+                } else {
+                    api.unmarkSeasonWatched(season.libraryId, season.showTitle, season.seasonNumber)
+                }
+            }.onSuccess {
+                visibleContentRefresh++
+                refreshProgress(activeSession)
+            }.onFailure {
+                error = it.message ?: "Failed to update season watched state"
+            }
+        }
+    }
+
     fun setItemWatchlisted(activeSession: Session, item: PopItem, listed: Boolean) {
         scope.launch {
             runCatching {
@@ -405,6 +423,24 @@ fun PopcornApp() {
             onRemoveWatchlist = { setShowWatchlisted(active, show, false) },
             restoreFocus = { focusRequester?.requestFocus() },
         )
+    }
+
+    fun openSeasonWatchMenu(season: SeasonSummary, focusRequester: FocusRequester?) {
+        val active = session ?: return
+        scope.launch {
+            runCatching { Api(active).episodes(season.libraryId, season.showTitle, season.seasonNumber) }
+                .onSuccess { seasonEpisodes ->
+                    val watched = seasonEpisodes.isNotEmpty() && seasonEpisodes.all { it.id in completedItems }
+                    watchMenu = WatchMenuState(
+                        title = season.title.ifBlank { "Season ${season.seasonNumber}" },
+                        watched = watched,
+                        onMarkWatched = { setSeasonWatched(active, season, true) },
+                        onMarkUnwatched = { setSeasonWatched(active, season, false) },
+                        restoreFocus = { focusRequester?.requestFocus() },
+                    )
+                }
+                .onFailure { error = it.message ?: "Failed to load season options" }
+        }
     }
 
     fun scanSignature(statuses: List<ScanStatus>): String {
@@ -650,6 +686,7 @@ fun PopcornApp() {
 
     fun scanLibraries() {
         val active = session ?: return
+        if (!active.isAdmin) return
         scope.launch {
             runCatching {
                 val api = Api(active)
@@ -760,6 +797,8 @@ fun PopcornApp() {
             Screen.Show(s.fromShow, fromHome = s.fromHome, fromSearch = s.fromSearch, fromWatchlist = s.fromWatchlist, fromActor = s.fromActor)
         } else if (s.fromWatchlist) {
             Screen.Watchlist
+        } else if (s.fromHistory) {
+            Screen.History
         } else if (s.fromHome) {
             Screen.Home
         } else if (activeLibrary != null) {
@@ -812,6 +851,19 @@ fun PopcornApp() {
         screen = lastPlayerReturnScreen ?: lastDetail ?: Screen.Home
         lastPlayerReturnScreen = null
         session?.let { active -> refreshProgress(active) }
+    }
+
+    fun playEpisode(item: PopItem, returnScreen: Screen) {
+        val active = session ?: return
+        scope.launch {
+            val progress = runCatching { Api(active).progress(item.id) }.getOrNull()
+            val startPosition = progress
+                ?.takeIf { progressResumable(it.positionMs, it.durationMs) }
+                ?.positionMs
+                ?: 0L
+            lastPlayerReturnScreen = returnScreen
+            screen = Screen.Player(item, audioIndex = null, subtitleIndex = null, startPositionMs = startPosition)
+        }
     }
 
     BackHandler(
@@ -885,6 +937,7 @@ fun PopcornApp() {
                 session?.let { refreshWatchlist(it) }
                 screen = Screen.Watchlist
             },
+            onHistory = { screen = Screen.History },
             onSearch = ::openSearch,
             onUpdates = { updateDialogOpen = true },
             onScan = ::scanLibraries,
@@ -972,6 +1025,7 @@ fun PopcornApp() {
                 session?.let { refreshWatchlist(it) }
                 screen = Screen.Watchlist
             },
+            onHistory = { screen = Screen.History },
             onSearch = ::openSearch,
             onUpdates = { updateDialogOpen = true },
             onScan = ::scanLibraries,
@@ -987,6 +1041,27 @@ fun PopcornApp() {
             },
             onItemMenu = { item, requester -> openItemWatchMenu(item, requester) },
             onShowMenu = { show, requester -> openShowWatchMenu(show, requester) },
+        )
+        Screen.History -> HistoryView(
+            session = session,
+            libraries = libraries,
+            showUpdate = updateAvailable,
+            onHome = { session?.let { loadHome(it, libraries) } },
+            onLibrary = { library -> session?.let { loadLibraryPage(library, it, 0, "") } },
+            onWatchlist = {
+                session?.let { refreshWatchlist(it) }
+                screen = Screen.Watchlist
+            },
+            onHistory = { screen = Screen.History },
+            onSearch = ::openSearch,
+            onUpdates = { updateDialogOpen = true },
+            onScan = ::scanLibraries,
+            onLogout = {
+                prefs.edit().clear().apply()
+                session = null
+                screen = Screen.Login
+            },
+            onItem = { screen = Screen.Detail(it, null, fromHistory = true) },
         )
         is Screen.LibraryPage -> LibraryPageView(
             session = session,
@@ -1017,6 +1092,7 @@ fun PopcornApp() {
                 session?.let { refreshWatchlist(it) }
                 screen = Screen.Watchlist
             },
+            onHistory = { screen = Screen.History },
             onSearch = ::openSearch,
             onUpdates = { updateDialogOpen = true },
             onScan = ::scanLibraries,
@@ -1027,11 +1103,9 @@ fun PopcornApp() {
             },
             onPreviousPage = { session?.let { loadLibraryPage(current.library, it, pageIndex - 1) } },
             onNextPage = { session?.let { loadLibraryPage(current.library, it, pageIndex + 1) } },
-            onGenre = { genre -> session?.let { loadLibraryPage(current.library, it, 0, genre, selectedSort, selectedMinRating, selectedSeenStatus) } },
-            onDecades = { decades -> session?.let { loadLibraryPage(current.library, it, 0, selectedGenre, selectedSort, selectedMinRating, selectedSeenStatus, decades = decades) } },
-            onSort = { sort -> session?.let { loadLibraryPage(current.library, it, 0, selectedGenre, sort, selectedMinRating, selectedSeenStatus) } },
-            onMinRating = { minRating -> session?.let { loadLibraryPage(current.library, it, 0, selectedGenre, selectedSort, minRating, selectedSeenStatus) } },
-            onSeenStatus = { seenStatus -> session?.let { loadLibraryPage(current.library, it, 0, selectedGenre, selectedSort, selectedMinRating, seenStatus) } },
+            onFilters = { sort, seenStatus, minRating, genre, decades ->
+                session?.let { loadLibraryPage(current.library, it, 0, genre, sort, minRating, seenStatus, decades = decades) }
+            },
             alphabet = libraryAlphabet,
             onAlphabet = { entry -> session?.let { loadLibraryPage(current.library, it, entry.offset, selectedGenre, "", selectedMinRating, selectedSeenStatus) } },
             onItem = {
@@ -1082,14 +1156,26 @@ fun PopcornApp() {
             startWithEpisodes = false,
             completedItems = completedItems,
             watchlistItems = watchlistItems,
+            showWatched = completedShows.contains(showKey(current.show)),
+            showWatchlisted = watchlistShows.contains(showKey(current.show)),
             refreshToken = visibleContentRefresh,
+            onShowWatchedChange = {
+                session?.let { active -> setShowWatched(active, current.show, !completedShows.contains(showKey(current.show))) }
+            },
+            onShowWatchlistChange = {
+                session?.let { active -> setShowWatchlisted(active, current.show, !watchlistShows.contains(showKey(current.show))) }
+            },
             onSeason = { season ->
                 showFocusSeason = season.seasonNumber
                 seasonFocusEpisode = null
-                screen = Screen.Season(current.show, season, fromHome = current.fromHome, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist, fromActor = current.fromActor)
             },
+            onSeasonMenu = { season, requester -> openSeasonWatchMenu(season, requester) },
             onEpisodeFocus = {
                 seasonFocusEpisode = it.id
+            },
+            onPlayEpisode = { item ->
+                seasonFocusEpisode = item.id
+                playEpisode(item, current)
             },
             onEpisode = { item ->
                 lastDetail = null
@@ -1097,10 +1183,6 @@ fun PopcornApp() {
                 screen = Screen.Detail(item, current.show, fromHome = current.fromHome, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist, fromActor = current.fromActor)
             },
             onEpisodeMenu = { episode, requester -> openItemWatchMenu(episode, requester) },
-            onActor = { actor ->
-                lastActorReturnScreen = current
-                screen = Screen.Actor(actor)
-            },
         )
         is Screen.Season -> ShowView(
             session = session,
@@ -1110,14 +1192,26 @@ fun PopcornApp() {
             startWithEpisodes = true,
             completedItems = completedItems,
             watchlistItems = watchlistItems,
+            showWatched = completedShows.contains(showKey(current.show)),
+            showWatchlisted = watchlistShows.contains(showKey(current.show)),
             refreshToken = visibleContentRefresh,
+            onShowWatchedChange = {
+                session?.let { active -> setShowWatched(active, current.show, !completedShows.contains(showKey(current.show))) }
+            },
+            onShowWatchlistChange = {
+                session?.let { active -> setShowWatchlisted(active, current.show, !watchlistShows.contains(showKey(current.show))) }
+            },
             onSeason = { season ->
                 showFocusSeason = season.seasonNumber
                 seasonFocusEpisode = null
-                screen = Screen.Season(current.show, season, fromHome = current.fromHome, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist, fromActor = current.fromActor)
             },
+            onSeasonMenu = { season, requester -> openSeasonWatchMenu(season, requester) },
             onEpisodeFocus = {
                 seasonFocusEpisode = it.id
+            },
+            onPlayEpisode = { item ->
+                seasonFocusEpisode = item.id
+                playEpisode(item, current)
             },
             onEpisode = { item ->
                 lastDetail = null
@@ -1125,10 +1219,6 @@ fun PopcornApp() {
                 screen = Screen.Detail(item, current.show, fromHome = current.fromHome, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist, fromActor = current.fromActor)
             },
             onEpisodeMenu = { episode, requester -> openItemWatchMenu(episode, requester) },
-            onActor = { actor ->
-                lastActorReturnScreen = current
-                screen = Screen.Actor(actor)
-            },
         )
         is Screen.Detail -> DetailView(
             item = current.item,
@@ -1162,6 +1252,7 @@ fun PopcornApp() {
             onLibrary = { library -> session?.let { loadLibraryPage(library, it, 0, "") } },
             onSearch = ::openSearch,
             onWatchlist = { screen = Screen.Watchlist },
+            onHistory = { screen = Screen.History },
             onUpdates = { updateDialogOpen = true },
             onScan = ::scanLibraries,
             onLogout = {
@@ -1244,11 +1335,11 @@ fun PopcornApp() {
             },
             onAddWatchlist = {
                 closeWatchMenu(menu)
-                menu.onAddWatchlist()
+                menu.onAddWatchlist?.invoke()
             },
             onRemoveWatchlist = {
                 closeWatchMenu(menu)
-                menu.onRemoveWatchlist()
+                menu.onRemoveWatchlist?.invoke()
             },
             onDismiss = { closeWatchMenu(menu) },
         )

@@ -3,14 +3,20 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Popcorn</title>
+    <title>Cinnamon</title>
     <link rel="stylesheet" href="/styles.css">
     <link rel="stylesheet" href="/theater.css">
   </head>
   <body>
     <section id="authScreen" class="auth-screen">
       <form id="loginForm" class="login-panel">
-        <div class="login-brand">Popcorn</div>
+        <div class="login-brand cinnamon-brand">
+          <svg class="cinnamon-mark" viewBox="0 0 48 48" aria-hidden="true">
+            <path d="M39.3 35.1a18.5 18.5 0 1 1 0-22.2"/><path d="M34.5 30.8a12.5 12.5 0 1 1 0-13.6"/><path d="M29.8 26.6a6.4 6.4 0 1 1 0-5.2"/>
+          </svg>
+          <span>Cinnamon</span>
+        </div>
+        <p class="login-intro">Your library, beautifully at home.</p>
         <label class="field">
           <span>Username</span>
           <input id="loginUser" type="text" autocomplete="username" required>
@@ -25,12 +31,17 @@
     </section>
     <main id="appShell" class="shell hidden">
       <nav class="topnav">
-        <div class="brand"><span class="brand-dot"></span>Popcorn</div>
+        <div class="brand cinnamon-brand">
+          <svg class="cinnamon-mark" viewBox="0 0 48 48" aria-hidden="true">
+            <path d="M39.3 35.1a18.5 18.5 0 1 1 0-22.2"/><path d="M34.5 30.8a12.5 12.5 0 1 1 0-13.6"/><path d="M29.8 26.6a6.4 6.4 0 1 1 0-5.2"/>
+          </svg>
+          <span>Cinnamon</span>
+        </div>
         <nav id="libraryNav" class="primary-nav"></nav>
         <div class="topnav-right">
           <label class="search-field">
             <span>Search</span>
-            <input id="search" type="search" placeholder="Search your library…" autocomplete="off">
+            <input id="search" type="search" placeholder="Search your library…" autocomplete="off" aria-label="Search your library">
           </label>
           <div id="userPanel" class="user-panel"></div>
         </div>

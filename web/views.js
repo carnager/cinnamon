@@ -14,8 +14,18 @@ function posterBlock(item, fallbackTitle, badges = {}, width = 400) {
 function posterBadges({ seen = false, watchlisted = false } = {}) {
   if (!seen && !watchlisted) return null;
   const stack = el("div", "poster-badges");
-  if (seen) stack.append(el("span", "poster-badge seen", "Seen"));
-  if (watchlisted) stack.append(el("span", "poster-badge watchlist", "Watchlist"));
+  if (seen) {
+    const badge = el("span", "poster-badge seen", "✓");
+    badge.title = "Seen";
+    badge.setAttribute("aria-label", "Seen");
+    stack.append(badge);
+  }
+  if (watchlisted) {
+    const badge = el("span", "poster-badge watchlist", "◆");
+    badge.title = "Watchlist";
+    badge.setAttribute("aria-label", "In watchlist");
+    stack.append(badge);
+  }
   return stack;
 }
 
@@ -109,6 +119,7 @@ function sourceRatingBadge(label, value) {
 function itemCard(item) {
   const card = el("button", "item");
   card.type = "button";
+  card.dataset.title = item.title || "";
   card.addEventListener("click", () => openDetail(item).catch(console.error));
 
   const poster = posterBlock(item, item.title, { seen: itemSeen(item), watchlisted: itemWatchlisted(item) });
@@ -141,6 +152,7 @@ function itemCard(item) {
 function showCard(show) {
   const card = el("button", "item show-card");
   card.type = "button";
+  card.dataset.title = show.title || "";
   card.addEventListener("click", () => openShow(show).catch(console.error));
 
   const poster = posterBlock(showPosterSource(show), show.title, {
@@ -330,7 +342,7 @@ async function renderUsers(skipHistory, selectedUserId = 0) {
 function userCreateCard() {
   const create = el("section", "settings-card user-create-card");
   const createHead = el("div", "settings-card-header");
-  createHead.append(el("h2", null, "New User"), el("span", null, "Create a local Popcorn login"));
+  createHead.append(el("h2", null, "New User"), el("span", null, "Create a local Cinnamon login"));
   const form = el("form", "user-form");
   form.append(
     inputField("Username", "text", "username", true, "rasi"),
@@ -595,7 +607,7 @@ function traktSection(status) {
     const disconnect = el("button", "danger", "Disconnect");
     disconnect.type = "button";
     disconnect.addEventListener("click", async () => {
-      if (!confirm("Disconnect this Popcorn user from Trakt.tv?")) return;
+      if (!confirm("Disconnect this Cinnamon user from Trakt.tv?")) return;
       await runSettingsAction(disconnect, output, async () => {
         await api("/api/trakt", { method: "DELETE" });
         await renderSettings(true);
@@ -638,7 +650,7 @@ function traktSection(status) {
     }));
     section.append(settingRow({
       title: "Import from Trakt",
-      description: "Pull your watched history, watchlist or ratings into Popcorn.",
+      description: "Pull your watched history, watchlist or ratings into Cinnamon.",
       control: [importSeen, importWatchlist, importRatings],
     }));
   }
@@ -775,7 +787,7 @@ async function startTraktLink(card, output, button) {
       code,
       open,
     );
-    const confirmBtn = el("button", "primary", "I Authorized Popcorn");
+    const confirmBtn = el("button", "primary", "I Authorized Cinnamon");
     confirmBtn.type = "button";
     confirmBtn.addEventListener("click", () => finishTraktLink(device.device_code, confirmBtn, output).catch((err) => {
       output.textContent = cleanError(err);
@@ -1068,9 +1080,8 @@ async function openDetail(item, skipHistory, parent = {}) {
   const d = Object.assign({}, item, fresh || {});
   const audioStreams = (streams || []).filter((s) => s.type === "audio");
   const subtitleStreams = (streams || []).filter((s) => s.type === "subtitle");
-  const chosenAudio = (audioStreams.find((s) => s.default) || audioStreams[0]);
-  let chosenAudioIdx = chosenAudio ? chosenAudio.index : null;
-  let chosenSubIdx = null;
+  let chosenAudioIdx = preferredAudioIndex(audioStreams);
+  let chosenSubIdx = preferredSubtitleIndex(subtitleStreams);
 
   const resumeMs = (progress && !progress.completed && progress.positionMs > 30000) ? progress.positionMs : 0;
 
@@ -1141,7 +1152,7 @@ async function openDetail(item, skipHistory, parent = {}) {
       selectors.append(selectField("Audio", audioStreams, String(chosenAudioIdx ?? ""), (v) => { chosenAudioIdx = v === "" ? null : Number(v); }));
     }
     if (subtitleStreams.length) {
-      selectors.append(selectField("Subtitles", subtitleStreams, "", (v) => { chosenSubIdx = v === "" ? null : Number(v); }, true));
+      selectors.append(selectField("Subtitles", subtitleStreams, chosenSubIdx == null ? "" : String(chosenSubIdx), (v) => { chosenSubIdx = v === "" ? null : Number(v); }, true));
     }
     body.append(selectors);
   }

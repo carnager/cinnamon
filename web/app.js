@@ -42,8 +42,12 @@ let currentGenre = "";
 let currentSort = "";
 let currentSeenStatus = "";
 let currentMinRating = 0;
+let currentDecades = "";
 let currentSeason = null;
 let libraryGenres = [];
+let libraryDecades = [];
+let searchScope = "both";
+let searchFields = new Set(["title"]);
 let pageHasNext = false;
 let libraryGridEl = null;
 let libraryObserver = null;
@@ -52,6 +56,7 @@ let libraryLoading = false;
 let scanPollTimer = 0;
 let lastScanSignature = "";
 let scanRefreshInFlight = false;
+let alphabetScrollFrame = 0;
 let homeData = {
   movies: [],
   shows: [],
@@ -106,36 +111,98 @@ function renderUserPanel() {
   menu.className = "user-menu";
   const summary = document.createElement("summary");
   summary.className = "user-menu-trigger";
+  summary.setAttribute("aria-label", "User menu");
   summary.append(
     userAvatarElement(currentUser, "user-menu-avatar"),
     el("span", "user-menu-name", currentUser.displayName || currentUser.username),
     el("span", "user-menu-caret", "▾"),
   );
   const actions = el("div", "user-menu-popover");
-  if (currentUser?.isAdmin) {
-    const scan = el("button", "side-btn", "Update Libraries");
-    scan.type = "button";
-    scan.addEventListener("click", () => {
-      scanLibraries(scan).catch(console.error);
-    });
-    actions.append(scan);
-  }
-  const settings = el("button", "side-btn", "Settings");
-  settings.type = "button";
-  settings.addEventListener("click", () => {
-    menu.open = false;
-    renderSettings().catch(console.error);
-  });
-  actions.append(settings);
-  const logout = el("button", "side-btn", "Logout");
-  logout.type = "button";
-  logout.addEventListener("click", () => {
-    menu.open = false;
-    logoutUser();
-  });
-  actions.append(logout);
+  const renderRoot = () => {
+    actions.innerHTML = "";
+    const head = el("div", "user-menu-head");
+    head.append(el("span", null, "USER MENU"), el("strong", null, currentUser.displayName || currentUser.username));
+    actions.append(head);
+    actions.append(userMenuAction("Watch history", "Your recently watched movies and episodes", () => {
+      menu.open = false;
+      renderHistory().catch(console.error);
+    }, "history"));
+    actions.append(userMenuAction("Preferred audio", playbackPreferenceLabel("audio"), () => renderPreferencePage("audio"), "audio"));
+    actions.append(userMenuAction("Preferred subtitles", playbackPreferenceLabel("subtitle"), () => renderPreferencePage("subtitle"), "subtitles"));
+    if (currentUser?.isAdmin) {
+      actions.append(userMenuAction("Update libraries", "Scan for new media", (button) => scanLibraries(button).catch(console.error), "refresh"));
+      actions.append(userMenuAction("Server settings", "Users, Trakt and app builds", () => {
+        menu.open = false;
+        renderSettings().catch(console.error);
+      }, "settings"));
+    }
+    actions.append(userMenuAction("Logout", "Sign out of Cinnamon", () => {
+      menu.open = false;
+      logoutUser();
+    }, "logout", true));
+  };
+  const renderPreferencePage = (kind) => {
+    actions.innerHTML = "";
+    const head = el("div", "user-menu-head");
+    head.append(el("span", null, kind === "audio" ? "PREFERRED AUDIO" : "PREFERRED SUBTITLES"), el("strong", null, "Playback languages"));
+    actions.append(head, userMenuAction("Back", "User menu", () => renderRoot(), "back"));
+    const options = kind === "audio" ? AUDIO_PREFERENCES : SUBTITLE_PREFERENCES;
+    const current = kind === "audio" ? preferredAudioLanguage() : preferredSubtitleLanguage();
+    for (const [value, label] of options) {
+      const button = userMenuAction(label, value === current ? "Selected" : "", () => {
+        localStorage.setItem(kind === "audio" ? "cinnamonPreferredAudio" : "cinnamonPreferredSubtitle", value);
+        renderRoot();
+      }, kind === "audio" ? "audio" : "subtitles");
+      if (value === current) button.classList.add("selected");
+      actions.append(button);
+    }
+  };
+  renderRoot();
   menu.append(summary, actions);
   userPanel.append(menu);
+}
+
+const LANGUAGE_PREFERENCES = [["de", "Deutsch"], ["en", "English"], ["fr", "Français"], ["es", "Español"], ["it", "Italiano"], ["ja", "日本語"]];
+const AUDIO_PREFERENCES = [["", "Track default"], ...LANGUAGE_PREFERENCES];
+const SUBTITLE_PREFERENCES = [["off", "Off"], ["default", "Track default"], ...LANGUAGE_PREFERENCES];
+
+function userMenuAction(label, detail, onClick, icon, danger = false) {
+  const button = el("button", danger ? "user-menu-action danger-action" : "user-menu-action");
+  button.type = "button";
+  button.dataset.icon = icon || "";
+  button.append(el("span", "user-menu-action-icon"), el("span", "user-menu-action-copy", [el("strong", null, label), detail ? el("small", null, detail) : null]));
+  button.addEventListener("click", (event) => {
+    // Preference pages replace the clicked button while the event is still
+    // bubbling. Keep that detached target from looking like an outside click.
+    event.stopPropagation();
+    onClick(button);
+  });
+  return button;
+}
+
+function preferredAudioLanguage() { return localStorage.getItem("cinnamonPreferredAudio") || ""; }
+function preferredSubtitleLanguage() { return localStorage.getItem("cinnamonPreferredSubtitle") || "off"; }
+function normalizeLanguage(value) {
+  const lang = String(value || "").trim().toLowerCase();
+  return ({ ger: "de", deu: "de", eng: "en", fre: "fr", fra: "fr", spa: "es", ita: "it", jpn: "ja", kor: "ko" })[lang] || lang;
+}
+function preferredAudioIndex(tracks) {
+  const preferred = normalizeLanguage(preferredAudioLanguage());
+  return tracks.find((track) => preferred && normalizeLanguage(track.language) === preferred)?.index
+    ?? tracks.find((track) => track.default)?.index
+    ?? tracks[0]?.index
+    ?? null;
+}
+function preferredSubtitleIndex(tracks) {
+  const preferred = preferredSubtitleLanguage();
+  if (preferred === "off") return null;
+  if (preferred === "default") return tracks.find((track) => track.default)?.index ?? null;
+  return tracks.find((track) => normalizeLanguage(track.language) === normalizeLanguage(preferred))?.index ?? null;
+}
+function playbackPreferenceLabel(kind) {
+  const value = kind === "audio" ? preferredAudioLanguage() : preferredSubtitleLanguage();
+  const options = kind === "audio" ? AUDIO_PREFERENCES : SUBTITLE_PREFERENCES;
+  return options.find(([candidate]) => candidate === value)?.[1] || "Track default";
 }
 
 async function scanLibraries(button) {
@@ -302,6 +369,7 @@ function goToLibrary(libraryId, skipHistory) {
   currentSort = "";
   currentSeenStatus = "";
   currentMinRating = 0;
+  currentDecades = "";
   renderNav();
   return loadLibraryPage(skipHistory);
 }
@@ -444,7 +512,7 @@ async function setShowWatchlisted(show, watchlisted) {
 }
 
 function renderNav() {
-  appShell.classList.toggle("settings-mode", activeView === "settings");
+  appShell.classList.toggle("settings-mode", activeView === "settings" || activeView === "users");
   appShell.classList.toggle("home-mode", activeView === "home");
   libraryNav.innerHTML = "";
 
@@ -521,8 +589,9 @@ function renderTopbarControls() {
     }),
     topbarSelect("Seen", currentSeenStatus, [
       ["", "All"],
-      ["unseen", "Unseen"],
+      ["started", "Started"],
       ["seen", "Seen"],
+      ["unseen", "Unseen"],
     ], (value) => {
       currentSeenStatus = value;
       currentPage = 1;
@@ -533,7 +602,6 @@ function renderTopbarControls() {
       ["6", "6+"],
       ["7", "7+"],
       ["8", "8+"],
-      ["9", "9+"],
     ], (value) => {
       currentMinRating = Number(value || 0);
       currentPage = 1;
@@ -543,16 +611,23 @@ function renderTopbarControls() {
       currentGenre = value;
       currentPage = 1;
       loadLibraryPage().catch(console.error);
-    }),
+    }, "All genres"),
+    topbarMultiSelect("Decade", currentDecades, libraryDecades.map((decade) => [String(decade), `${decade}s`]), (value) => {
+      currentDecades = value;
+      currentPage = 1;
+      loadLibraryPage().catch(console.error);
+    }, "All decades"),
   );
 }
 
-function topbarMultiSelect(label, value, options, onChange) {
+function topbarMultiSelect(label, value, options, onChange, allLabel = "All") {
   const selected = new Set(String(value || "").split(",").map((g) => g.trim()).filter(Boolean));
   const field = el("div", "topbar-filter");
   const trigger = el("button", "topbar-filter-trigger");
   trigger.type = "button";
-  const valueLabel = selected.size === 0 ? "All" : (selected.size === 1 ? [...selected][0] : `${selected.size} selected`);
+  const selectedValue = selected.size === 1 ? [...selected][0] : "";
+  const selectedOption = options.find((option) => (Array.isArray(option) ? option[0] : option) === selectedValue);
+  const valueLabel = selected.size === 0 ? "All" : (selected.size === 1 ? (Array.isArray(selectedOption) ? selectedOption[1] : selectedValue) : `${selected.size} selected`);
   trigger.append(
     el("span", "topbar-filter-label", label),
     el("strong", "topbar-filter-value", valueLabel),
@@ -569,17 +644,18 @@ function topbarMultiSelect(label, value, options, onChange) {
   const emit = () => onChange([...selected].join(","));
   const allBtn = el("button", selected.size === 0 ? "topbar-filter-option active" : "topbar-filter-option");
   allBtn.type = "button";
-  allBtn.append(el("span", "topbar-filter-check", selected.size === 0 ? "✓" : ""), el("span", null, "All genres"));
+  allBtn.append(el("span", "topbar-filter-check", selected.size === 0 ? "✓" : ""), el("span", null, allLabel));
   allBtn.addEventListener("click", () => { selected.clear(); emit(); });
   menu.append(allBtn);
-  for (const genre of options) {
-    const active = selected.has(genre);
+  for (const option of options) {
+    const [optionValue, optionLabel] = Array.isArray(option) ? option : [option, option];
+    const active = selected.has(optionValue);
     const button = el("button", active ? "topbar-filter-option active" : "topbar-filter-option");
     button.type = "button";
-    button.append(el("span", "topbar-filter-check", active ? "✓" : ""), el("span", null, genre));
+    button.append(el("span", "topbar-filter-check", active ? "✓" : ""), el("span", null, optionLabel));
     button.addEventListener("click", () => {
-      if (selected.has(genre)) selected.delete(genre);
-      else selected.add(genre);
+      if (selected.has(optionValue)) selected.delete(optionValue);
+      else selected.add(optionValue);
       emit();
     });
     menu.append(button);
@@ -654,6 +730,24 @@ function closeTopbarMenus() {
   });
 }
 
+function updateAlphabetRailFromScroll() {
+  alphabetScrollFrame = 0;
+  if (activeView !== "library") return;
+  const rail = document.getElementById("alphaRail");
+  if (!rail || !libraryGridEl) return;
+  const threshold = Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--topbar-height")) + 72;
+  const cards = [...libraryGridEl.querySelectorAll(".item[data-title]")];
+  const visible = cards.find((card) => card.getBoundingClientRect().bottom > threshold) || cards.at(-1);
+  if (!visible) return;
+  const first = String(visible.dataset.title || "#").trim().charAt(0).toUpperCase();
+  const letter = /^[A-Z]$/.test(first) ? first : "#";
+  if (currentLetter === letter) return;
+  currentLetter = letter;
+  rail.querySelectorAll(".alpha-letter").forEach((button) => {
+    button.classList.toggle("active", button.textContent.trim().toUpperCase() === letter);
+  });
+}
+
 function makeBreadcrumb(crumbs) {
   const nav = el("nav", "breadcrumb");
   crumbs.forEach((crumb, i) => {
@@ -670,12 +764,13 @@ function makeBreadcrumb(crumbs) {
   return nav;
 }
 
-async function fetchItemsPage(libraryId, { limit = perPage, offset = 0, sort = "", genre = "", seen = "", minRating = 0 } = {}) {
+async function fetchItemsPage(libraryId, { limit = perPage, offset = 0, sort = "", genre = "", seen = "", minRating = 0, decades = "" } = {}) {
   const params = new URLSearchParams({ libraryId, limit: String(limit), offset: String(offset) });
   if (sort) params.set("sort", sort);
   if (genre) params.set("genre", genre);
   if (seen) params.set("seen", seen);
   if (minRating) params.set("minRating", String(minRating));
+  if (decades) params.set("decades", decades);
   return api(`/api/items?${params}`);
 }
 
@@ -683,17 +778,23 @@ async function fetchItem(itemId) {
   return api(`/api/items/${encodeURIComponent(String(itemId))}`);
 }
 
-async function fetchShowsPage(libraryId, { limit = perPage, offset = 0, sort = "", genre = "", seen = "", minRating = 0 } = {}) {
+async function fetchShowsPage(libraryId, { limit = perPage, offset = 0, sort = "", genre = "", seen = "", minRating = 0, decades = "" } = {}) {
   const params = new URLSearchParams({ libraryId, limit: String(limit), offset: String(offset) });
   if (sort) params.set("sort", sort);
   if (genre) params.set("genre", genre);
   if (seen) params.set("seen", seen);
   if (minRating) params.set("minRating", String(minRating));
+  if (decades) params.set("decades", decades);
   return api(`/api/tv/shows?${params}`);
 }
 
 async function fetchLibraryGenres(libraryId) {
   return api(`/api/genres?libraryId=${encodeURIComponent(libraryId)}`).catch(() => []);
+}
+
+async function fetchLibraryDecades(library) {
+  const kind = library.type === "tv" ? "tv" : "movie";
+  return api(`/api/decades?libraryId=${encodeURIComponent(library.id)}&kind=${kind}`).catch(() => []);
 }
 
 async function fetchWatchlist() {
@@ -719,6 +820,8 @@ async function loadCurrentView(skipHistory = false) {
     await renderWatchlist(skipHistory);
   } else if (activeView === "settings") {
     await renderSettings(skipHistory);
+  } else if (activeView === "history") {
+    await renderHistory(skipHistory);
   } else {
     await loadLibraryPage(skipHistory);
   }
@@ -751,12 +854,16 @@ function render(skipHistory) {
     renderSettings(skipHistory).catch(console.error);
     return;
   }
+  if (activeView === "history") {
+    renderHistory(skipHistory).catch(console.error);
+    return;
+  }
   const frag = document.createDocumentFragment();
   const library = activeLibrary();
   currentShow = null;
   currentSeason = null;
   renderTopbarControls();
-  if (!skipHistory) pushState({ view: "library", libraryId: library?.id, page: currentPage, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating });
+  if (!skipHistory) pushState({ view: "library", libraryId: library?.id, page: currentPage, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating, decades: currentDecades });
 
   if (!library) {
     frag.append(el("div", "empty", "No libraries configured"));
@@ -833,8 +940,8 @@ async function loadPrevLibrary() {
     const start = Math.max(0, libraryBaseOffset - perPage);
     const limit = libraryBaseOffset - start;
     const page = library.type === "tv"
-      ? await fetchShowsPage(library.id, { limit, offset: start, genre: currentGenre })
-      : await fetchItemsPage(library.id, { limit, offset: start, genre: currentGenre });
+      ? await fetchShowsPage(library.id, { limit, offset: start, genre: currentGenre, decades: currentDecades })
+      : await fetchItemsPage(library.id, { limit, offset: start, genre: currentGenre, decades: currentDecades });
     const items = page || [];
     if (items.length) {
       libraryItems = items.concat(libraryItems);
@@ -865,10 +972,13 @@ async function loadMoreLibrary() {
   libraryLoading = true;
   try {
     currentPage += 1;
-    const offset = libraryBaseOffset + (currentPage - 1) * perPage;
+    // The loaded window can grow upward after an A–Z jump. Derive the next
+    // offset from that window, rather than the page counter, to avoid loading
+    // duplicate rows after the user scrolls back down.
+    const offset = libraryBaseOffset + libraryItems.length;
     const page = library.type === "tv"
-      ? await fetchShowsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating })
-      : await fetchItemsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating });
+      ? await fetchShowsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating, decades: currentDecades })
+      : await fetchItemsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating, decades: currentDecades });
     const items = page || [];
     pageHasNext = items.length >= perPage;
     if (items.length && libraryGridEl) {
@@ -984,6 +1094,52 @@ async function renderWatchlist(skipHistory) {
   setView(frag);
 }
 
+async function renderHistory(skipHistory) {
+  activeView = "history";
+  renderNav();
+  currentShow = null;
+  currentSeason = null;
+  search.value = "";
+  if (!skipHistory) pushState({ view: "history" });
+  stopPlayer();
+  setLoading("Loading watch history…");
+  const data = await api("/api/history?limit=200").catch(() => ({ items: [], source: "local" }));
+  const frag = document.createDocumentFragment();
+  const header = el("div", "view-header history-header");
+  header.append(el("div", null, [el("span", "eyebrow", "YOUR ACTIVITY"), el("h1", null, "Watch history")]), el("span", null, data.traktLinked ? "Local + Trakt" : "This device"));
+  frag.append(header);
+  if (!data.items?.length) {
+    frag.append(el("div", "empty", "Nothing watched yet"));
+    setView(frag);
+    return;
+  }
+  const list = el("div", "history-list");
+  for (const entry of data.items) {
+    const row = el(entry.item ? "button" : "div", entry.item ? "history-row interactive" : "history-row");
+    if (entry.item) {
+      row.type = "button";
+      row.addEventListener("click", () => openDetail(entry.item).catch(console.error));
+    }
+    const art = el("div", "history-art");
+    if (entry.item && hasPosterImage(entry.item)) art.style.backgroundImage = `url(${imageURL(entry.item, "poster", 160)})`;
+    else art.textContent = entry.kind === "episode" ? "TV" : "FILM";
+    const copy = el("div", "history-copy");
+    copy.append(el("strong", null, entry.title), el("span", null, [entry.subtitle, entry.year].filter(Boolean).join(" · ")));
+    const watched = el("time", null, formatHistoryTime(entry.watchedAt));
+    row.append(art, copy, watched);
+    if (!entry.item) row.append(el("span", "history-source", "Trakt"));
+    list.append(row);
+  }
+  frag.append(list);
+  setView(frag);
+}
+
+function formatHistoryTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || "").replace("T", " ").slice(0, 16);
+  return date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+}
+
 async function renderSearch(skipHistory) {
   const query = search.value.trim();
   const frag = document.createDocumentFragment();
@@ -994,36 +1150,60 @@ async function renderSearch(skipHistory) {
   if (!skipHistory) pushState({ view: "search", q: query });
   stopPlayer();
 
+  frag.append(searchOptions());
+
   if (query.length < 2) {
-    frag.append(el("div", "view-header", el("h1", null, "Search"), el("span", null, "Type at least two characters")));
-    frag.append(el("div", "empty", "Search movies and shows"));
+    frag.append(el("div", "search-state", [el("strong", null, "Search your library"), el("span", null, "Titles are searched by default. Add other fields when you need them.")]));
     setView(frag);
     return;
   }
 
+  const fields = encodeURIComponent([...searchFields].join(","));
   const [movieResults, showResults] = await Promise.all([
-    api(`/api/search?limit=120&kind=movie&q=${encodeURIComponent(query)}`).then((r) => r.items || []).catch(() => []),
-    api(`/api/tv/shows?limit=120&q=${encodeURIComponent(query)}`).catch(() => []),
+    searchScope === "tv" ? Promise.resolve([]) : api(`/api/search?limit=500&kind=movie&q=${encodeURIComponent(query)}&fields=${fields}`).then((r) => r.items || []).catch(() => []),
+    searchScope === "movies" ? Promise.resolve([]) : api(`/api/tv/shows?limit=500&q=${encodeURIComponent(query)}&fields=${fields}`).catch(() => []),
   ]);
 
-  const header = el("div", "view-header");
-  header.append(el("h1", null, "Search"), el("span", null, `${movieResults.length + showResults.length} results for "${query}"`));
-  frag.append(header);
+  frag.append(el("div", "search-result-count", `${movieResults.length + showResults.length} results`));
 
   if (!movieResults.length && !showResults.length) {
-    frag.append(el("div", "empty", "No matches found"));
+    frag.append(el("div", "search-state", [el("strong", null, `Nothing found for “${query}”`), el("span", null, "Try another phrase or include another search field.")]));
     setView(frag);
     return;
   }
 
-  if (movieResults.length) {
-    frag.append(sectionTitle("Movies", `${movieResults.length} matches`), renderGrid(movieResults));
-  }
-  if (showResults.length) {
-    frag.append(sectionTitle("TV Shows", `${showResults.length} matches`));
-    renderTVShows(frag, showResults);
-  }
+  const grid = el("div", "grid search-grid");
+  for (const show of showResults) grid.append(showCard(show));
+  for (const movie of movieResults) grid.append(itemCard(movie));
+  frag.append(grid);
   setView(frag);
+}
+
+function searchOptions() {
+  const wrap = el("section", "search-page-head");
+  wrap.append(el("span", "eyebrow", "DISCOVER"), el("h1", null, "Search"));
+  const scope = el("div", "search-option-row");
+  scope.append(el("span", "search-option-label", "SCOPE"));
+  for (const [value, label] of [["both", "Movies & TV"], ["movies", "Movies"], ["tv", "TV shows"]]) {
+    const button = el("button", searchScope === value ? "search-chip active" : "search-chip", label);
+    button.type = "button";
+    button.addEventListener("click", () => { searchScope = value; renderSearch(true).catch(console.error); });
+    scope.append(button);
+  }
+  const fields = el("div", "search-option-row");
+  fields.append(el("span", "search-option-label", "SEARCH IN"));
+  for (const [value, label] of [["title", "Title"], ["original", "Original title"], ["people", "People"], ["description", "Description"]]) {
+    const button = el("button", searchFields.has(value) ? "search-chip active" : "search-chip", label);
+    button.type = "button";
+    button.addEventListener("click", () => {
+      if (searchFields.has(value) && searchFields.size > 1) searchFields.delete(value);
+      else searchFields.add(value);
+      renderSearch(true).catch(console.error);
+    });
+    fields.append(button);
+  }
+  wrap.append(scope, fields);
+  return wrap;
 }
 
 function sectionTitle(title, meta) {
@@ -1328,14 +1508,16 @@ async function loadLibraryPage(skipHistory) {
   libraryBaseOffset = 0;
   currentLetter = "";
   await refreshMediaState();
-  const [genres, page, alphabet] = await Promise.all([
+  const [genres, decades, page, alphabet] = await Promise.all([
     fetchLibraryGenres(library.id),
+    fetchLibraryDecades(library),
     library.type === "tv"
-      ? fetchShowsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating })
-      : fetchItemsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating }),
+      ? fetchShowsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating, decades: currentDecades })
+      : fetchItemsPage(library.id, { limit: perPage, offset, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating, decades: currentDecades }),
     alphabetRailEligible() ? fetchAlphabet(library) : Promise.resolve([]),
   ]);
   libraryGenres = genres || [];
+  libraryDecades = decades || [];
   libraryItems = page || [];
   alphabetIndex = alphabet || [];
   pageHasNext = libraryItems.length >= perPage;
@@ -1353,6 +1535,7 @@ async function fetchAlphabet(library) {
   const params = new URLSearchParams({ libraryId: library.id });
   if (library.type === "tv") params.set("kind", "tv");
   if (currentGenre) params.set("genre", currentGenre);
+  if (currentDecades) params.set("decades", currentDecades);
   return api(`/api/alphabet?${params}`).catch(() => []);
 }
 
@@ -1365,8 +1548,8 @@ async function jumpToLetter(entry) {
     libraryBaseOffset = entry.offset;
     currentPage = 1;
     const page = library.type === "tv"
-      ? await fetchShowsPage(library.id, { limit: perPage, offset: entry.offset, genre: currentGenre })
-      : await fetchItemsPage(library.id, { limit: perPage, offset: entry.offset, genre: currentGenre });
+      ? await fetchShowsPage(library.id, { limit: perPage, offset: entry.offset, genre: currentGenre, decades: currentDecades })
+      : await fetchItemsPage(library.id, { limit: perPage, offset: entry.offset, genre: currentGenre, decades: currentDecades });
     libraryItems = page || [];
     pageHasNext = libraryItems.length >= perPage;
   } finally {
@@ -1377,13 +1560,14 @@ async function jumpToLetter(entry) {
 }
 
 async function load() {
-  libraries = await api("/api/libraries");
+  libraries = (await api("/api/libraries")) || [];
   const route = routeFromLocation();
   if (route.q) search.value = route.q;
   if (route.page) currentPage = route.page;
   if (route.genre) currentGenre = route.genre;
   if (route.seen) currentSeenStatus = route.seen;
   if (route.minRating) currentMinRating = Number(route.minRating || 0);
+  if (route.decades) currentDecades = route.decades;
   if (route.libraryId && libraries.some((library) => library.id === route.libraryId)) {
     activeLibraryId = route.libraryId;
   } else if (!activeLibraryId && libraries.length) {
@@ -1431,6 +1615,7 @@ async function navigate(state, replaceURL = false) {
   currentSort = state.sort || "";
   currentSeenStatus = state.seen || "";
   currentMinRating = Number(state.minRating || 0);
+  currentDecades = state.decades || "";
   if (state.libraryId && libraries.some((library) => library.id === state.libraryId)) {
     activeLibraryId = state.libraryId;
   }
@@ -1443,6 +1628,8 @@ async function navigate(state, replaceURL = false) {
     await loadHome(true);
   } else if (state.view === "watchlist") {
     await renderWatchlist(true);
+  } else if (state.view === "history") {
+    await renderHistory(true);
   } else if (state.view === "settings") {
     await renderSettings(true);
   } else if (state.view === "users") {
@@ -1488,12 +1675,15 @@ function routeFromLocation() {
     sort: params.get("sort") || "",
     seen: params.get("seen") || "",
     minRating: Number(params.get("minRating") || "0"),
+    decades: params.get("decades") || "",
     q: params.get("q") || "",
   };
   if (parts[0] === "search") {
     state.view = "search";
   } else if (parts[0] === "watchlist") {
     state.view = "watchlist";
+  } else if (parts[0] === "history") {
+    state.view = "history";
   } else if (parts[0] === "settings") {
     state.view = "settings";
     if (parts[1] === "users") state.view = "users";
@@ -1525,6 +1715,7 @@ function urlForState(state) {
   if (state.view === "home") path = "/";
   else if (state.view === "search") path = "/search";
   else if (state.view === "watchlist") path = "/watchlist";
+  else if (state.view === "history") path = "/history";
   else if (state.view === "settings") path = "/settings";
   else if (state.view === "users") path = "/settings/users";
   else if (libraryId) path = `/library/${libraryId}`;
@@ -1539,6 +1730,7 @@ function urlForState(state) {
   if (state.view === "library" && state.sort) params.set("sort", state.sort);
   if (state.view === "library" && state.seen) params.set("seen", state.seen);
   if (state.view === "library" && state.minRating) params.set("minRating", String(state.minRating));
+  if (state.view === "library" && state.decades) params.set("decades", state.decades);
   if ((state.view === "show" || state.view === "season") && state.season !== undefined && state.season !== null) params.set("season", String(state.season));
   if (state.view === "detail" && state.showTitle) params.set("show", state.showTitle);
   if (state.view === "detail" && state.season !== undefined && state.season !== null) params.set("season", String(state.season));
@@ -1598,6 +1790,10 @@ document.addEventListener("click", (e) => {
     closeTopbarMenus();
   }
 });
+
+window.addEventListener("scroll", () => {
+  if (!alphabetScrollFrame) alphabetScrollFrame = requestAnimationFrame(updateAlphabetRailFromScroll);
+}, { passive: true });
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && userPanel.querySelector("details[open]")) {

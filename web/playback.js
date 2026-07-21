@@ -60,6 +60,7 @@ const QUALITY_OPTIONS = [
   { label: "8 Mbps", kbps: 8000 },
   { label: "5 Mbps", kbps: 5000 },
   { label: "3 Mbps", kbps: 3000 },
+  { label: "1.5 Mbps", kbps: 1500 },
 ];
 const UP_NEXT_LEAD_SEC = 25;
 const TEXT_SUB_CODECS = new Set(["subrip", "srt", "ass", "ssa", "webvtt", "vtt", "mov_text", "text", "dvb_subtitle"]);
@@ -223,8 +224,8 @@ async function play(item, opts = {}) {
   pb.item = item;
   currentItem = item;
   pb.bandwidthKbps = opts.bandwidthKbps !== undefined ? opts.bandwidthKbps : preferredBandwidthKbps;
-  pb.audioIndex = opts.audioIndex ?? null;
-  pb.subtitleIndex = opts.subtitleIndex ?? null;
+  pb.audioIndex = Object.prototype.hasOwnProperty.call(opts, "audioIndex") ? opts.audioIndex : null;
+  pb.subtitleIndex = Object.prototype.hasOwnProperty.call(opts, "subtitleIndex") ? opts.subtitleIndex : undefined;
   pb.upNextShown = false;
   pb.upNextDismissed = false;
   pb.lastReportedMs = -1;
@@ -239,10 +240,8 @@ async function play(item, opts = {}) {
   }
   pb.audioStreams = pb.streams.filter((s) => s.type === "audio");
   pb.subtitleStreams = pb.streams.filter((s) => s.type === "subtitle");
-  if (pb.audioIndex === null) {
-    const def = pb.audioStreams.find((s) => s.default) || pb.audioStreams[0];
-    pb.audioIndex = def ? def.index : null;
-  }
+  if (pb.audioIndex === null) pb.audioIndex = preferredAudioIndex(pb.audioStreams);
+  if (pb.subtitleIndex === undefined) pb.subtitleIndex = preferredSubtitleIndex(pb.subtitleStreams);
 
   let startMs = opts.startMs || 0;
   if (!startMs && item.kind !== "trailer") {

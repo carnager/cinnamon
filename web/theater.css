@@ -206,7 +206,7 @@ body.theater-open .app-sidebar { display: none; }
   height: 14px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 4px rgba(79, 209, 165, .25);
+  box-shadow: 0 0 0 4px rgba(244, 123, 53, .25);
   cursor: pointer;
 }
 

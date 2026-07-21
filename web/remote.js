@@ -95,7 +95,7 @@ $("pairSubmit").onclick = async () => {
   await api("/api/devices/pair", { method: "POST", body: JSON.stringify({ code: $("pairCode").value }) });
   await loadDevices();
 };
-$("pair").onclick = () => alert("Open Popcorn on the Shield. Same-account devices should appear automatically; pairing code UI on TV comes next.");
+$("pair").onclick = () => alert("Open Cinnamon on the Shield. Same-account devices should appear automatically; pairing code UI on TV comes next.");
 
 let searchTimer = 0;
 $("query").oninput = () => {

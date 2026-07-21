@@ -1,27 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#111319"/>
-      <stop offset=".65" stop-color="#08090c"/>
-      <stop offset="1" stop-color="#062017"/>
-    </linearGradient>
-    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#65f0bd"/>
-      <stop offset="1" stop-color="#36b887"/>
+    <radialGradient id="bg" cx="72%" cy="22%" r="90%">
+      <stop offset="0" stop-color="#172832"/>
+      <stop offset=".55" stop-color="#091218"/>
+      <stop offset="1" stop-color="#04090c"/>
+    </radialGradient>
+    <linearGradient id="spice" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff9a58"/>
+      <stop offset="1" stop-color="#e95e22"/>
     </linearGradient>
   </defs>
-  <rect width="1280" height="720" rx="28" fill="url(#bg)"/>
-  <circle cx="1010" cy="120" r="330" fill="#4fd1a5" opacity=".07"/>
-  <g transform="translate(118 130)">
-    <circle cx="108" cy="119" r="60" fill="#fff2bf"/>
-    <circle cx="184" cy="70" r="68" fill="#fff6cf"/>
-    <circle cx="260" cy="118" r="60" fill="#ffeaa0"/>
-    <circle cx="136" cy="66" r="36" fill="#f5d15c"/>
-    <circle cx="230" cy="65" r="34" fill="#f0c040"/>
-    <path d="M70 142h230l-28 282H98z" fill="#f7f8fb"/>
-    <path d="M102 142h48l12 282h-45zM209 142h48l-19 282h-45z" fill="#d82828"/>
-    <path d="M70 142h230l-8 74H78z" fill="url(#green)"/>
+  <rect width="1280" height="720" rx="30" fill="url(#bg)"/>
+  <circle cx="1080" cy="80" r="360" fill="#f47b35" opacity=".045"/>
+  <circle cx="1040" cy="680" r="320" fill="#42c7bd" opacity=".035"/>
+  <g transform="translate(150 190)" fill="none" stroke="url(#spice)" stroke-linecap="round">
+    <path d="M244 24a160 160 0 1 0 0 248" stroke-width="25"/>
+    <path d="M218 72a105 105 0 1 0 0 152" stroke-width="23"/>
+    <path d="M193 116a55 55 0 1 0 0 64" stroke-width="21"/>
   </g>
-  <text x="470" y="314" font-family="Inter, Arial, sans-serif" font-size="110" font-weight="900" fill="#e8ecf2">Popcorn</text>
-  <text x="476" y="382" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="600" fill="#8b93a5">Movies and shows from your own library</text>
+  <text x="520" y="345" font-family="Inter, Arial, sans-serif" font-size="104" font-weight="700" fill="#f3f1ef">Cinnamon</text>
+  <text x="526" y="410" font-family="Inter, Arial, sans-serif" font-size="31" font-weight="500" fill="#99a5ad">Movies and shows from your own library</text>
 </svg>

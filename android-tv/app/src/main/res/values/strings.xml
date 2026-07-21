@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Popcorn</string>
+    <string name="app_name">Cinnamon</string>
     <string name="player_audio">Audio</string>
     <string name="player_bandwidth">Bandwidth</string>
     <string name="player_direct">Direct</string>

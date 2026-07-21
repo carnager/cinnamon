@@ -243,7 +243,15 @@ class Api(private val session: Session) {
         val body = JSONObject().put("username", username).put("password", password).toString()
         val json = request("/api/auth/login", "POST", body)
         val user = json.optJSONObject("user")
-        Session(session.server, json.getString("token"), user?.optString("username").orEmpty(), user?.optBoolean("isAdmin") ?: false, user?.optLong("id") ?: 0L, user?.optString("avatar").orEmpty())
+        Session(
+            server = session.server,
+            token = json.getString("token"),
+            username = user?.optString("username").orEmpty(),
+            isAdmin = user?.optBoolean("isAdmin") ?: false,
+            userId = user?.optLong("id") ?: 0L,
+            avatar = user?.optString("avatar").orEmpty(),
+            displayName = user?.optString("displayName").orEmpty(),
+        )
     }
 
     suspend fun me(): User = withContext(Dispatchers.IO) {
@@ -259,7 +267,15 @@ class Api(private val session: Session) {
         val json = request("/api/auth/qr/poll?code=${enc(code)}")
         if (json.optString("status") != "approved") return@withContext null
         val user = json.optJSONObject("user")
-        Session(session.server, json.getString("token"), user?.optString("username").orEmpty(), user?.optBoolean("isAdmin") ?: false, user?.optLong("id") ?: 0L, user?.optString("avatar").orEmpty())
+        Session(
+            server = session.server,
+            token = json.getString("token"),
+            username = user?.optString("username").orEmpty(),
+            isAdmin = user?.optBoolean("isAdmin") ?: false,
+            userId = user?.optLong("id") ?: 0L,
+            avatar = user?.optString("avatar").orEmpty(),
+            displayName = user?.optString("displayName").orEmpty(),
+        )
     }
 
     suspend fun libraries(): List<Library> = withContext(Dispatchers.IO) {

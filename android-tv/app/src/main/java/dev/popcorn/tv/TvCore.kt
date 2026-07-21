@@ -18,17 +18,18 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-// ── Popcorn TV palette ──
-val Bg = Color(0xFF0D0D0F)
-val SurfaceColor = Color(0xFF18181C)
-val Surface2 = Color(0xFF222228)
-val Surface3 = Color(0xFF2C2C34)
-val Line = Color(0xFF38384A)
-val TextColor = Color(0xFFF0F0F2)
-val Muted = Color(0xFF88889A)
-val Accent = Color(0xFF4FD1A5)
-val AccentDim = Color(0xFF2A8B6E)
-val Gold = Color(0xFFE5A00D)
+// ── Cinnamon TV palette ──
+val Bg = Color(0xFF050B0F)
+val SurfaceColor = Color(0xFF0C141A)
+val Surface2 = Color(0xFF111B22)
+val Surface3 = Color(0xFF19262E)
+val Line = Color(0xFF2B3942)
+val TextColor = Color(0xFFF3F1EF)
+val Muted = Color(0xFF99A5AD)
+val Accent = Color(0xFFF47B35)
+val AccentDim = Color(0xFFB95525)
+val Teal = Color(0xFF42C7BD)
+val Gold = Color(0xFFF28A2E)
 val ErrorRed = Color(0xFFFF6B6B)
 val FocusGlow = Color(0xFFFFFFFF)
 val CardShape = RoundedCornerShape(6.dp)

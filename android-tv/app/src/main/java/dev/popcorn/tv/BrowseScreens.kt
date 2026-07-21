@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -54,11 +55,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -115,6 +118,8 @@ fun HomeView(
     onUpdates: () -> Unit,
     onScan: () -> Unit,
     onLogout: () -> Unit,
+    onPlayItem: (PopItem) -> Unit,
+    onPlayShow: (ShowSummary) -> Unit,
     onItem: (PopItem) -> Unit,
     onShow: (ShowSummary) -> Unit,
     onMoreContinueMovies: () -> Unit,
@@ -125,6 +130,31 @@ fun HomeView(
     onShowMenu: (ShowSummary, FocusRequester?) -> Unit,
 ) {
     var restoreContentFocus by remember { mutableStateOf<FocusRequester?>(null) }
+    var selectedHomeGenre by remember { mutableStateOf("") }
+    var genreMenuOpen by remember { mutableStateOf(false) }
+    var unwatchedOnly by remember { mutableStateOf(false) }
+    val homeGenres = remember(items, shows) {
+        (items.flatMap { splitGenres(it.genres) } + shows.flatMap { splitGenres(it.genres) })
+            .distinctBy { it.lowercase() }
+            .sortedWith(String.CASE_INSENSITIVE_ORDER)
+    }
+    fun itemVisible(item: PopItem): Boolean {
+        val genreMatches = selectedHomeGenre.isBlank() || splitGenres(item.genres).any { it.equals(selectedHomeGenre, ignoreCase = true) }
+        return genreMatches && (!unwatchedOnly || item.id !in completedItems)
+    }
+    fun showVisible(show: ShowSummary): Boolean {
+        val genreMatches = selectedHomeGenre.isBlank() || splitGenres(show.genres).any { it.equals(selectedHomeGenre, ignoreCase = true) }
+        val showKey = "${show.libraryId}\n${show.title.lowercase()}"
+        return genreMatches && (!unwatchedOnly || showKey !in completedShows)
+    }
+    val visibleItems = items.filter(::itemVisible)
+    val visibleShows = shows.filter(::showVisible)
+    val visibleContinueMovies = if (unwatchedOnly) emptyList() else continueMovies.filter(::itemVisible)
+    val visibleContinueEpisodes = if (unwatchedOnly) emptyList() else continueEpisodes.filter(::itemVisible)
+    val visibleRecentMovies = recentMovies.filter(::itemVisible)
+    val visibleRecentShows = recentShows.filter(::showVisible)
+    val visibleWatchlistMovies = watchlistMovies.filter(::itemVisible)
+    val visibleWatchlistShows = watchlistTvShows.filter(::showVisible)
     AppChrome(
         session,
         libraries,
@@ -146,6 +176,36 @@ fun HomeView(
                 false
             }
         },
+        headerActions = {
+            Pill(
+                text = selectedHomeGenre.ifBlank { "Genres" },
+                selected = genreMenuOpen || selectedHomeGenre.isNotBlank(),
+                onClick = { genreMenuOpen = true },
+            )
+            Pill(
+                text = "Unwatched",
+                selected = unwatchedOnly,
+                onClick = { unwatchedOnly = !unwatchedOnly },
+            )
+            Pill(
+                text = "Surprise Me",
+                selected = false,
+                onClick = {
+                    val unseenMovies = visibleItems.filter { it.id !in completedItems }
+                    val unseenShows = visibleShows.filter { "${it.libraryId}\n${it.title.lowercase()}" !in completedShows }
+                    val ratedMovies = unseenMovies.filter { it.rating >= 6.5 }
+                    val ratedShows = unseenShows.filter { it.rating >= 6.5 }
+                    val hasRatedPicks = ratedMovies.isNotEmpty() || ratedShows.isNotEmpty()
+                    val moviePicks = if (hasRatedPicks) ratedMovies else unseenMovies
+                    val showPicks = if (hasRatedPicks) ratedShows else unseenShows
+                    val choiceCount = moviePicks.size + showPicks.size
+                    if (choiceCount > 0) {
+                        val choice = (0 until choiceCount).random()
+                        if (choice < moviePicks.size) onItem(moviePicks[choice]) else onShow(showPicks[choice - moviePicks.size])
+                    }
+                },
+            )
+        },
     ) {
         if (error.isNotBlank()) {
             Text(error, color = ErrorRed, modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp), fontSize = 13.sp)
@@ -157,19 +217,21 @@ fun HomeView(
         } else {
             CuratedLanding(
                 session = session,
-                movies = items,
-                shows = shows,
+                movies = visibleItems,
+                shows = visibleShows,
                 completedItems = completedItems,
                 completedShows = completedShows,
                 heroAnchorShows = heroAnchorShows,
                 watchlistItems = watchlistItems,
                 watchlistShows = watchlistShows,
-                continueMovies = continueMovies,
-                continueEpisodes = continueEpisodes,
-                recentMovies = recentMovies,
-                recentShows = recentShows,
-                watchlistMovies = watchlistMovies,
-                watchlistTvShows = watchlistTvShows,
+                continueMovies = visibleContinueMovies,
+                continueEpisodes = visibleContinueEpisodes,
+                recentMovies = visibleRecentMovies,
+                recentShows = visibleRecentShows,
+                watchlistMovies = visibleWatchlistMovies,
+                watchlistTvShows = visibleWatchlistShows,
+                onPlayItem = onPlayItem,
+                onPlayShow = onPlayShow,
                 onItem = onItem,
                 onShow = onShow,
                 onMoreContinueMovies = onMoreContinueMovies,
@@ -181,6 +243,23 @@ fun HomeView(
                 onContentFocus = { restoreContentFocus = it },
             )
         }
+    }
+    if (genreMenuOpen) {
+        FilterPopup(
+            title = "Genres",
+            options = listOf(
+                FilterOption("All genres", selectedHomeGenre.isBlank()) {
+                    selectedHomeGenre = ""
+                    genreMenuOpen = false
+                },
+            ) + homeGenres.map { genre ->
+                FilterOption(genre, selectedHomeGenre.equals(genre, ignoreCase = true)) {
+                    selectedHomeGenre = genre
+                    genreMenuOpen = false
+                }
+            },
+            onClose = { genreMenuOpen = false },
+        )
     }
 }
 
@@ -201,6 +280,7 @@ fun AppChrome(
     onSideNavigationExit: (() -> Boolean)? = null,
     suppressSideNavigationExpansion: Boolean = false,
     backShortcutEnabled: Boolean = true,
+    headerActions: (@Composable () -> Unit)? = null,
     topBar: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
@@ -238,32 +318,43 @@ fun AppChrome(
             }
         }
     }
-    Row(Modifier.fillMaxSize()) {
-        SideNavigation(
-            session = session,
-            libraries = libraries,
-            selected = selected,
-            showUpdate = showUpdate,
-            onHome = onHome,
-            onLibrary = onLibrary,
-            onWatchlist = onWatchlist,
-            onSearch = onSearch,
-            onUpdates = onUpdates,
-            onScan = onScan,
-            onLogout = onLogout,
-            firstFocusRequester = resolvedNavFocusRequester,
-            onExit = onSideNavigationExit,
-            expansionSuppressed = suppressSideNavigationExpansion,
-            onFocusChange = { sideNavigationHasFocus = it },
-        )
-        Column(Modifier.fillMaxSize()) {
-            if (topBar != null) {
-                topBar()
-            } else {
-                PageTopActions()
+    Box(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxSize()) {
+            SideNavigation(
+                session = session,
+                libraries = libraries,
+                selected = selected,
+                showUpdate = showUpdate,
+                onHome = onHome,
+                onLibrary = onLibrary,
+                onWatchlist = onWatchlist,
+                onSearch = onSearch,
+                onUpdates = onUpdates,
+                onScan = onScan,
+                onLogout = onLogout,
+                firstFocusRequester = resolvedNavFocusRequester,
+                onExit = onSideNavigationExit,
+                expansionSuppressed = suppressSideNavigationExpansion,
+                onFocusChange = { sideNavigationHasFocus = it },
+            )
+            Column(Modifier.fillMaxSize()) {
+                PageTopActions(headerActions)
+                topBar?.invoke()
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .clipToBounds(),
+                ) {
+                    content()
+                }
             }
-            content()
         }
+        CinnamonBrand(
+            modifier = Modifier.align(Alignment.TopStart).padding(start = 26.dp, top = 24.dp),
+            markSize = 42,
+            fontSize = 21,
+        )
     }
 }
 
@@ -289,10 +380,9 @@ fun SideNavigation(
     val tvLibrary = libraries.firstOrNull { it.type == "tv" }
     Column(
         Modifier
-            .width(66.dp)
+            .width(76.dp)
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = .52f))
-            .border(1.dp, Color.White.copy(alpha = .10f))
+            .background(Color.Black.copy(alpha = .12f))
             .onFocusChanged {
                 onFocusChange(it.hasFocus)
             }
@@ -300,9 +390,7 @@ fun SideNavigation(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Box(Modifier.padding(bottom = 18.dp)) {
-            UserMenuButton(session, showUpdate, onUpdates, onScan, onLogout)
-        }
+        Spacer(Modifier.height(64.dp))
         SideNavigationItem(icon = Icons.Filled.Home, label = "Home", selected = selected == "home", focusRequester = firstFocusRequester, onRight = onExit, onClick = onHome)
         if (movieLibrary != null) {
             SideNavigationItem(icon = Icons.Filled.Movie, label = movieLibrary.name, selected = selected == movieLibrary.id, onRight = onExit, onClick = { onLibrary(movieLibrary) })
@@ -312,26 +400,23 @@ fun SideNavigation(
         }
         SideNavigationItem(icon = Icons.Filled.Bookmark, label = "Watchlist", selected = selected == "watchlist", onRight = onExit, onClick = onWatchlist)
         SideNavigationItem(icon = Icons.Filled.Search, label = "Search", selected = selected == "search", onRight = onExit, onClick = onSearch)
+        Spacer(Modifier.weight(1f))
+        UserMenuButton(session, showUpdate, onUpdates, onScan, onLogout)
     }
 }
 
 @Composable
 fun SideNavigationItem(icon: ImageVector, label: String, selected: Boolean, focusRequester: FocusRequester? = null, onRight: (() -> Boolean)? = null, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
-    val background = when {
-        focused && selected -> Accent.copy(alpha = .94f)
-        focused -> Color.White.copy(alpha = .16f)
-        selected -> Accent.copy(alpha = .30f)
-        else -> Color.Transparent
-    }
-    val contentColor = if (focused && selected) Color.Black else TextColor
+    val background = Color.Transparent
+    val contentColor = if (selected || focused) Accent else TextColor.copy(alpha = .82f)
     Row(
         Modifier
             .fillMaxWidth()
             .height(44.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(background)
-            .border(1.dp, if (focused) Color.White.copy(alpha = .78f) else if (selected) Accent.copy(alpha = .48f) else Color.Transparent, RoundedCornerShape(10.dp))
+            .border(1.dp, if (focused || selected) Accent.copy(alpha = if (focused) .95f else .60f) else Color.Transparent, RoundedCornerShape(10.dp))
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .onFocusChanged { focused = it.isFocused }
             .focusable()
@@ -357,16 +442,17 @@ fun SideNavigationItem(icon: ImageVector, label: String, selected: Boolean, focu
 }
 
 @Composable
-fun PageTopActions() {
+fun PageTopActions(headerActions: (@Composable () -> Unit)? = null) {
     Row(
         Modifier
             .fillMaxWidth()
-            .background(Color.Black.copy(alpha = .46f))
-            .padding(horizontal = 26.dp, vertical = 10.dp),
+            .height(70.dp)
+            .padding(start = 26.dp, end = 32.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("Popcorn", color = TextColor, fontSize = 18.sp, fontWeight = FontWeight.Black)
+        Spacer(Modifier.weight(1f))
+        headerActions?.invoke()
     }
 }
 
@@ -380,7 +466,7 @@ fun TopBar(session: Session?, libraries: List<Library>, selected: String, showUp
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("Popcorn", color = Accent, fontSize = 18.sp, fontWeight = FontWeight.Black)
+        CinnamonBrand(markSize = 30, fontSize = 19)
         Spacer(Modifier.width(12.dp))
         Pill(text = "Home", selected = selected == "home", onClick = onHome)
         libraries.forEach { library ->
@@ -799,7 +885,7 @@ private fun BrowseBackdropLayer(session: Session?, preview: BrowseBackdropPrevie
         SizedAsyncImage(
             model = imageUrl(session, preview.itemId, preview.type, preview.version),
             contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().graphicsLayer { alpha = .14f },
             contentScale = ContentScale.Crop,
             widthPx = if (preview.type == "backdrop") 1920 else 900,
             heightPx = if (preview.type == "backdrop") 1080 else 900,
@@ -875,7 +961,6 @@ fun LibraryFilterBar(
     Box(
         Modifier
             .fillMaxWidth()
-            .background(Color.Black.copy(alpha = .46f))
             .padding(horizontal = 26.dp, vertical = 10.dp),
     ) {
         Row(
@@ -959,6 +1044,7 @@ private fun ratingOptions(): List<Pair<Double, String>> = listOf(0.0 to "All", 6
 private fun seenLabel(status: String): String = "Seen: " + (seenOptions().firstOrNull { it.first == status }?.second ?: "All")
 private fun ratingLabel(rating: Double): String = "IMDb: " + (ratingOptions().firstOrNull { it.first == rating }?.second ?: "All")
 private fun splitSelectedGenres(value: String): List<String> = value.split(",", "|").map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
+private fun Session?.userDisplayName(): String = this?.displayName?.ifBlank { username }?.ifBlank { "User" } ?: "User"
 private fun toggleGenre(selected: List<String>, genre: String): List<String> {
     return if (selected.any { it.equals(genre, ignoreCase = true) }) {
         selected.filterNot { it.equals(genre, ignoreCase = true) }
@@ -976,7 +1062,7 @@ private fun UserMenuButton(session: Session?, showUpdate: Boolean, onUpdates: ()
         if (avatar.isNotBlank()) {
             AvatarButton(url = avatar, session = session, selected = open, onClick = { open = true })
         } else {
-            Pill(text = session?.username?.ifBlank { "User" } ?: "User", selected = open, onClick = { open = true })
+            Pill(text = session.userDisplayName(), selected = open, onClick = { open = true })
         }
         if (open) {
             val options = buildList {
@@ -1001,7 +1087,7 @@ private fun UserMenuButton(session: Session?, showUpdate: Boolean, onUpdates: ()
                     open = false
                 })
             }
-            FilterPopup(title = session?.username.orEmpty().ifBlank { "User" }, options = options, navigationMenu = true, onClose = { open = false })
+            FilterPopup(title = session.userDisplayName(), options = options, navigationMenu = true, onClose = { open = false })
         }
         if (settingsOpen) {
             PlaybackSettingsDialog(onClose = { settingsOpen = false })
@@ -1028,7 +1114,7 @@ private fun AvatarButton(url: String, session: Session?, selected: Boolean, onCl
     ) {
         SizedAsyncImage(
             model = url,
-            contentDescription = session?.username?.ifBlank { "User" } ?: "User",
+            contentDescription = session.userDisplayName(),
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop,
             widthPx = 96,
@@ -1392,50 +1478,68 @@ private fun heroPicks(
 private fun HomeHero(
     session: Session?,
     picks: List<HeroPick>,
+    index: Int,
+    onIndexChange: (Int) -> Unit,
     autoFocus: Boolean,
+    onPlayItem: (PopItem) -> Unit,
+    onPlayShow: (ShowSummary) -> Unit,
     onItem: (PopItem) -> Unit,
     onShow: (ShowSummary) -> Unit,
     onContentFocus: (FocusRequester) -> Unit,
     onDpadDown: (() -> Boolean)? = null,
 ) {
-    var index by remember(picks) { mutableStateOf(0) }
-    var focused by remember { mutableStateOf(false) }
-    val requester = remember { FocusRequester() }
+    val heroRequester = remember { FocusRequester() }
+    var heroFocused by remember { mutableStateOf(false) }
+    var selectedAction by remember { mutableStateOf(0) }
     LaunchedEffect(autoFocus) {
         if (autoFocus) {
             delay(200)
-            runCatching { requester.requestFocus() }
+            runCatching { heroRequester.requestFocus() }
         }
     }
-    LaunchedEffect(picks) {
-        while (picks.size > 1) {
+    LaunchedEffect(picks, index) {
+        if (picks.size > 1) {
             delay(12_000)
-            index = (index + 1) % picks.size
+            onIndexChange((index + 1) % picks.size)
         }
     }
     val pick = picks.getOrNull(index) ?: picks.firstOrNull() ?: return
     Box(
         Modifier
-            .padding(horizontal = 28.dp, vertical = 4.dp)
+            .padding(start = 24.dp, end = 28.dp, top = 5.dp, bottom = 8.dp)
             .fillMaxWidth()
-            .height(280.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .height(324.dp)
+            .clip(RoundedCornerShape(14.dp))
             .background(Surface2)
-            .border(2.dp, if (focused) FocusGlow else Color.Transparent, RoundedCornerShape(12.dp))
-            .focusRequester(requester)
+            .border(2.dp, Color.Transparent, RoundedCornerShape(14.dp))
+            .focusRequester(heroRequester)
             .onFocusChanged {
-                focused = it.isFocused
-                if (it.isFocused) onContentFocus(requester)
+                heroFocused = it.isFocused
+                if (it.isFocused) onContentFocus(heroRequester)
             }
             .focusable()
             .onKeyEvent { event ->
-                if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown && onDpadDown != null) {
-                    onDpadDown()
-                } else {
-                    false
+                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                when (event.key) {
+                    Key.DirectionLeft -> {
+                        selectedAction = 0
+                        true
+                    }
+                    Key.DirectionRight -> {
+                        selectedAction = 1
+                        true
+                    }
+                    Key.DirectionDown -> onDpadDown?.invoke() ?: false
+                    else -> false
                 }
             }
-            .tvActivate { pick.item?.let(onItem) ?: pick.show?.let(onShow) },
+            .tvActivate {
+                if (selectedAction == 0) {
+                    pick.item?.let(onPlayItem) ?: pick.show?.let(onPlayShow)
+                } else {
+                    pick.item?.let(onItem) ?: pick.show?.let(onShow)
+                }
+            },
     ) {
         Crossfade(targetState = pick, animationSpec = tween(700), label = "homeHero") { current ->
             Box(Modifier.fillMaxSize()) {
@@ -1453,26 +1557,126 @@ private fun HomeHero(
                 Box(
                     Modifier.fillMaxSize().background(
                         Brush.horizontalGradient(
-                            colors = listOf(Bg.copy(alpha = .96f), Bg.copy(alpha = .72f), Bg.copy(alpha = .18f), Color.Transparent),
+                            colors = listOf(Bg.copy(alpha = .98f), Bg.copy(alpha = .82f), Bg.copy(alpha = .24f), Color.Transparent),
+                        ),
+                    ),
+                )
+                Box(
+                    Modifier.fillMaxSize().background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Transparent, Bg.copy(alpha = .08f), Bg.copy(alpha = .62f)),
                         ),
                     ),
                 )
                 Column(
-                    Modifier.align(Alignment.CenterStart).fillMaxWidth(.6f).padding(horizontal = 30.dp),
-                    verticalArrangement = Arrangement.spacedBy(7.dp),
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .fillMaxWidth(.58f)
+                        .padding(start = 32.dp, end = 32.dp, top = 28.dp),
+                    verticalArrangement = Arrangement.spacedBy(9.dp),
                 ) {
-                    Text(current.kick.uppercase(), color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp)
-                    Text(current.heading, color = TextColor, fontSize = 30.sp, fontWeight = FontWeight.Black, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        current.kick,
+                        color = Teal,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(5.dp))
+                            .background(Teal.copy(alpha = .10f))
+                            .border(1.dp, Teal.copy(alpha = .36f), RoundedCornerShape(5.dp))
+                            .padding(horizontal = 8.dp, vertical = 3.dp),
+                    )
+                    Text(
+                        current.heading,
+                        color = TextColor,
+                        fontSize = 32.sp,
+                        lineHeight = 35.sp,
+                        fontWeight = FontWeight.Black,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         if (current.rating > 0) Text("★ %.1f".format(current.rating), color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                        if (current.meta.isNotBlank()) Text(current.meta, color = Muted, fontSize = 13.sp)
+                        if (current.meta.isNotBlank()) {
+                            Text(current.meta, color = Muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
                     }
                     if (current.overview.isNotBlank()) {
-                        Text(current.overview, color = TextColor.copy(alpha = .82f), fontSize = 12.sp, lineHeight = 17.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            current.overview,
+                            color = TextColor.copy(alpha = .82f),
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        HeroActionButton(
+                            label = "Play",
+                            icon = Icons.Filled.PlayArrow,
+                            primary = true,
+                            selected = heroFocused && selectedAction == 0,
+                        )
+                        HeroActionButton(
+                            label = "More Info",
+                            primary = false,
+                            selected = heroFocused && selectedAction == 1,
+                        )
+                    }
+                }
+                Row(
+                    Modifier.align(Alignment.BottomEnd).padding(end = 24.dp, bottom = 18.dp),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
+                    picks.take(6).forEachIndexed { dotIndex, _ ->
+                        Box(
+                            Modifier
+                                .size(if (dotIndex == index) 7.dp else 6.dp)
+                                .clip(CircleShape)
+                                .background(if (dotIndex == index) Accent else Color.White.copy(alpha = .58f)),
+                        )
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun HeroActionButton(
+    label: String,
+    icon: ImageVector? = null,
+    primary: Boolean,
+    selected: Boolean,
+) {
+    val background = when {
+        selected && primary -> Accent
+        primary -> AccentDim
+        else -> Color.Transparent
+    }
+    val outline = when {
+        selected && primary -> Color(0xFFFFA66A)
+        selected -> Accent.copy(alpha = .98f)
+        primary -> Accent.copy(alpha = .48f)
+        else -> Color.Transparent
+    }
+    Row(
+        Modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .background(background)
+            .border(1.dp, outline, RoundedCornerShape(11.dp))
+            .padding(horizontal = 18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+        }
+        Text(label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -1492,6 +1696,8 @@ fun CuratedLanding(
     recentShows: List<ShowSummary>,
     watchlistMovies: List<PopItem>,
     watchlistTvShows: List<ShowSummary>,
+    onPlayItem: (PopItem) -> Unit,
+    onPlayShow: (ShowSummary) -> Unit,
     onItem: (PopItem) -> Unit,
     onShow: (ShowSummary) -> Unit,
     onMoreContinueMovies: () -> Unit,
@@ -1509,6 +1715,8 @@ fun CuratedLanding(
     val heroEntries = remember(movies, shows, completedItems, completedShows, heroAnchorShows, continueMovies, continueEpisodes, recentMovies, recentShows, watchlistMovies, watchlistTvShows) {
         heroPicks(movies, shows, completedItems, completedShows, heroAnchorShows, continueMovies, continueEpisodes, recentMovies, recentShows, watchlistMovies, watchlistTvShows)
     }
+    val heroKeys = remember(heroEntries) { heroEntries.map { it.key } }
+    var heroIndex by remember(heroKeys) { mutableStateOf(0) }
     var initialFocusPending by remember { mutableStateOf(true) }
     // DOWN from the full-width hero would otherwise focus whatever card sits
     // under its center (and drift as the row scrolls); route it to the first
@@ -1530,10 +1738,9 @@ fun CuratedLanding(
             initialFocusPending = false
         }
     }
-
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 30.dp),
+        contentPadding = PaddingValues(top = 10.dp, bottom = 30.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item {
@@ -1543,7 +1750,11 @@ fun CuratedLanding(
                 HomeHero(
                     session = session,
                     picks = heroEntries,
+                    index = heroIndex.coerceIn(0, heroEntries.lastIndex),
+                    onIndexChange = { heroIndex = it },
                     autoFocus = initialFocusPending && initialFocusTarget == "hero",
+                    onPlayItem = onPlayItem,
+                    onPlayShow = onPlayShow,
                     onItem = onItem,
                     onShow = onShow,
                     onContentFocus = { requester ->

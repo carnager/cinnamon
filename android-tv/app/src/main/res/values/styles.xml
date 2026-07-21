@@ -2,8 +2,8 @@
     <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowActionBar">false</item>
-        <item name="android:windowBackground">#08090c</item>
-        <item name="android:colorAccent">#4fd1a5</item>
+        <item name="android:windowBackground">#050b0f</item>
+        <item name="android:colorAccent">#f47b35</item>
     </style>
 
     <style name="PopcornPlayerButton">

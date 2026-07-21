@@ -85,6 +85,7 @@ fun PopcornApp() {
                     prefs.getBoolean("isAdmin", false),
                     prefs.getLong("userId", 0),
                     prefs.getString("avatar", "") ?: "",
+                    prefs.getString("displayName", "") ?: "",
                 )
             }
         )
@@ -232,9 +233,9 @@ fun PopcornApp() {
     fun applyHomePayload(activeSession: Session, payload: HomePayload, generation: Int? = null) {
         if (generation != null && generation != loadGeneration) return
         libraries = payload.libraries
-        if (payload.user.username.isNotBlank() && (activeSession.username != payload.user.username || activeSession.isAdmin != payload.user.isAdmin || activeSession.userId != payload.user.id || activeSession.avatar != payload.user.avatar)) {
-            val updated = activeSession.copy(username = payload.user.username, isAdmin = payload.user.isAdmin, userId = payload.user.id, avatar = payload.user.avatar)
-            prefs.edit().putString("username", payload.user.username).putBoolean("isAdmin", payload.user.isAdmin).putLong("userId", payload.user.id).putString("avatar", payload.user.avatar).apply()
+        if (payload.user.username.isNotBlank() && (activeSession.username != payload.user.username || activeSession.displayName != payload.user.displayName || activeSession.isAdmin != payload.user.isAdmin || activeSession.userId != payload.user.id || activeSession.avatar != payload.user.avatar)) {
+            val updated = activeSession.copy(username = payload.user.username, displayName = payload.user.displayName, isAdmin = payload.user.isAdmin, userId = payload.user.id, avatar = payload.user.avatar)
+            prefs.edit().putString("username", payload.user.username).putString("displayName", payload.user.displayName).putBoolean("isAdmin", payload.user.isAdmin).putLong("userId", payload.user.id).putString("avatar", payload.user.avatar).apply()
             session = updated
         }
         homeMovies = payload.homeMovies
@@ -733,9 +734,9 @@ fun PopcornApp() {
                 applyHomePayload(active, homePayload)
             } else {
                 val me = api.me()
-                if (active.username != me.username || active.isAdmin != me.isAdmin || active.userId != me.id || active.avatar != me.avatar) {
-                    val updated = active.copy(username = me.username, isAdmin = me.isAdmin, userId = me.id, avatar = me.avatar)
-                    prefs.edit().putString("username", me.username).putBoolean("isAdmin", me.isAdmin).putLong("userId", me.id).putString("avatar", me.avatar).apply()
+                if (active.username != me.username || active.displayName != me.displayName || active.isAdmin != me.isAdmin || active.userId != me.id || active.avatar != me.avatar) {
+                    val updated = active.copy(username = me.username, displayName = me.displayName, isAdmin = me.isAdmin, userId = me.id, avatar = me.avatar)
+                    prefs.edit().putString("username", me.username).putString("displayName", me.displayName).putBoolean("isAdmin", me.isAdmin).putLong("userId", me.id).putString("avatar", me.avatar).apply()
                     session = updated
                 }
                 libraries = api.libraries()
@@ -845,7 +846,7 @@ fun PopcornApp() {
                     loading = true
                     runCatching { Api(Session(server.trimEnd('/'), "")).login(username, password) }
                         .onSuccess {
-                            prefs.edit().putString("server", it.server).putString("token", it.token).putString("username", it.username).putBoolean("isAdmin", it.isAdmin).putLong("userId", it.userId).putString("avatar", it.avatar).apply()
+                            prefs.edit().putString("server", it.server).putString("token", it.token).putString("username", it.username).putString("displayName", it.displayName).putBoolean("isAdmin", it.isAdmin).putLong("userId", it.userId).putString("avatar", it.avatar).apply()
                             session = it
                             screen = Screen.Loading
                         }
@@ -854,7 +855,7 @@ fun PopcornApp() {
                 }
             },
             onQrLogin = {
-                prefs.edit().putString("server", it.server).putString("token", it.token).putString("username", it.username).putBoolean("isAdmin", it.isAdmin).putLong("userId", it.userId).putString("avatar", it.avatar).apply()
+                prefs.edit().putString("server", it.server).putString("token", it.token).putString("username", it.username).putString("displayName", it.displayName).putBoolean("isAdmin", it.isAdmin).putLong("userId", it.userId).putString("avatar", it.avatar).apply()
                 session = it
                 screen = Screen.Loading
             },
@@ -910,6 +911,40 @@ fun PopcornApp() {
                 val tvLib = libraries.firstOrNull { it.type == "tv" }
                 if (active != null && tvLib != null) {
                     loadLibraryPage(tvLib, active, page = 0, genre = "", sort = "mtime", minRating = 0.0, seenStatus = "", decades = "", resetFiltersOnLibraryChange = false)
+                }
+            },
+            onPlayItem = { item ->
+                scope.launch {
+                    val progress = session?.let { active -> runCatching { Api(active).progress(item.id) }.getOrNull() }
+                    val startPosition = progress
+                        ?.takeIf { progressResumable(it.positionMs, it.durationMs) }
+                        ?.positionMs
+                        ?: 0L
+                    lastPlayerReturnScreen = Screen.Home
+                    screen = Screen.Player(item, audioIndex = null, subtitleIndex = null, startPositionMs = startPosition)
+                }
+            },
+            onPlayShow = { show ->
+                scope.launch {
+                    val active = session
+                    val episodes = if (active != null) {
+                        runCatching { Api(active).episodes(show.libraryId, show.title) }.getOrDefault(emptyList())
+                    } else {
+                        emptyList()
+                    }
+                    val episode = episodes.firstOrNull { it.id !in completedItems } ?: episodes.firstOrNull()
+                    if (episode != null) {
+                        val progress = active?.let { runCatching { Api(it).progress(episode.id) }.getOrNull() }
+                        val startPosition = progress
+                            ?.takeIf { progressResumable(it.positionMs, it.durationMs) }
+                            ?.positionMs
+                            ?: 0L
+                        lastPlayerReturnScreen = Screen.Home
+                        screen = Screen.Player(episode, audioIndex = null, subtitleIndex = null, startPositionMs = startPosition)
+                    } else {
+                        showFocusSeason = null
+                        screen = Screen.Show(show, fromHome = true)
+                    }
                 }
             },
             onItem = { screen = Screen.Detail(it, null, fromHome = true) },
@@ -1098,6 +1133,8 @@ fun PopcornApp() {
         is Screen.Detail -> DetailView(
             item = current.item,
             session = session,
+            libraries = libraries,
+            showUpdate = updateAvailable,
             watched = completedItems.contains(current.item.id),
             watchlisted = watchlistItems.contains(current.item.id),
             onPlay = { audioIndex, subtitleIndex, startPositionMs ->
@@ -1121,10 +1158,17 @@ fun PopcornApp() {
             },
             userRating = userItemRatings[current.item.id] ?: 0,
             onRate = { value -> session?.let { setItemRating(it, current.item, value) } },
-            onBack = { returnFromDetail(current) },
             onHome = { screen = Screen.Home },
+            onLibrary = { library -> session?.let { loadLibraryPage(library, it, 0, "") } },
             onSearch = ::openSearch,
             onWatchlist = { screen = Screen.Watchlist },
+            onUpdates = { updateDialogOpen = true },
+            onScan = ::scanLibraries,
+            onLogout = {
+                prefs.edit().clear().apply()
+                session = null
+                screen = Screen.Login
+            },
             onActor = { actor ->
                 lastActorReturnScreen = current
                 screen = Screen.Actor(actor)

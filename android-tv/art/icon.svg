@@ -1,26 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#111319"/>
-      <stop offset="1" stop-color="#08090c"/>
-    </linearGradient>
-    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#65f0bd"/>
-      <stop offset="1" stop-color="#36b887"/>
+    <radialGradient id="bg" cx="35%" cy="25%" r="90%">
+      <stop offset="0" stop-color="#17232a"/>
+      <stop offset="1" stop-color="#050b0f"/>
+    </radialGradient>
+    <linearGradient id="spice" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff9a58"/>
+      <stop offset="1" stop-color="#e95e22"/>
     </linearGradient>
   </defs>
   <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <circle cx="256" cy="256" r="204" fill="#151922" stroke="#283043" stroke-width="10"/>
-  <g transform="translate(91 68)">
-    <circle cx="96" cy="112" r="54" fill="#fff2bf"/>
-    <circle cx="164" cy="68" r="61" fill="#fff6cf"/>
-    <circle cx="232" cy="111" r="54" fill="#ffeaa0"/>
-    <circle cx="123" cy="64" r="33" fill="#f5d15c"/>
-    <circle cx="206" cy="62" r="31" fill="#f0c040"/>
-    <path d="M62 133h206l-25 252H87z" fill="#f7f8fb"/>
-    <path d="M91 133h43l10 252H104zM187 133h43l-17 252h-40z" fill="#d82828"/>
-    <path d="M62 133h206l-7 66H69z" fill="url(#green)"/>
-    <path d="M87 385h156" stroke="#d9dde7" stroke-width="14" stroke-linecap="round"/>
+  <rect x="18" y="18" width="476" height="476" rx="96" fill="none" stroke="#ffffff" stroke-opacity=".08" stroke-width="4"/>
+  <g fill="none" stroke="url(#spice)" stroke-linecap="round">
+    <path d="M355 132a160 160 0 1 0 0 248" stroke-width="29"/>
+    <path d="M329 180a105 105 0 1 0 0 152" stroke-width="27"/>
+    <path d="M304 224a55 55 0 1 0 0 64" stroke-width="25"/>
   </g>
-  <text x="256" y="450" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="48" font-weight="800" fill="#4fd1a5">Popcorn</text>
 </svg>

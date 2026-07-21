@@ -855,8 +855,7 @@ fun EpisodeCard(
                     .padding(horizontal = 6.dp, vertical = 2.dp),
             )
             if (item.rating > 0) PosterRating(item.rating)
-            if (watched) SeenBadge()
-            if (watchlisted) WatchlistBadge()
+            PosterStatusBadges(watched, watchlisted)
         }
         Spacer(Modifier.height(4.dp))
         Text(item.episodeTitle.ifBlank { item.title }, color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)

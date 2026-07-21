@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -30,6 +31,10 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -254,8 +259,7 @@ fun ShowCard(
         Box {
             Poster(session, show.posterItemId, Modifier.fillMaxWidth(), show.posterMtimeUnix)
             if (show.rating > 0) PosterRating(show.rating)
-            if (watched) SeenBadge()
-            if (watchlisted) WatchlistBadge()
+            PosterStatusBadges(watched, watchlisted)
         }
         Spacer(Modifier.height(5.dp))
         Text(show.title, color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -282,8 +286,7 @@ fun ItemCard(
         Box {
             Poster(session, item.id, Modifier.fillMaxWidth(), item.posterMtimeUnix)
             if (item.rating > 0) PosterRating(item.rating)
-            if (watched) SeenBadge()
-            if (watchlisted) WatchlistBadge()
+            PosterStatusBadges(watched, watchlisted)
             val progress = LocalResumeProgress.current[item.id] ?: 0f
             if (progress > 0f) PosterProgressBar(progress)
         }
@@ -300,7 +303,7 @@ fun ItemCard(
         if (item.kind == "movie" && item.genres.isNotBlank()) {
             Text(
                 item.genres.split(",", "/", "|").map { it.trim() }.filter { it.isNotBlank() }.take(2).joinToString(", "),
-                color = Accent.copy(alpha = .78f),
+                color = Teal.copy(alpha = .86f),
                 fontSize = 9.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -332,30 +335,30 @@ fun BoxScope.PosterProgressBar(fraction: Float) {
 }
 
 @Composable
-fun BoxScope.SeenBadge() {
-    Box(
+fun BoxScope.PosterStatusBadges(watched: Boolean, watchlisted: Boolean) {
+    if (!watched && !watchlisted) return
+    Column(
         Modifier
             .align(Alignment.TopStart)
-            .padding(5.dp)
-            .clip(RoundedCornerShape(4.dp))
-            .background(Accent.copy(alpha = .95f))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .padding(5.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text("Seen", color = Color.Black, fontSize = 9.sp, fontWeight = FontWeight.Black)
+        if (watched) PosterStateBadge(Icons.Filled.Check, "Seen", Accent)
+        if (watchlisted) PosterStateBadge(Icons.Filled.Bookmark, "Watchlist", Teal)
     }
 }
 
 @Composable
-fun BoxScope.WatchlistBadge() {
+private fun PosterStateBadge(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, tint: Color) {
     Box(
         Modifier
-            .align(Alignment.TopEnd)
-            .padding(5.dp)
             .clip(RoundedCornerShape(4.dp))
-            .background(Color.White.copy(alpha = .90f))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .background(Surface2)
+            .border(1.dp, tint.copy(alpha = .62f), RoundedCornerShape(4.dp))
+            .padding(4.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Text("List", color = Color.Black, fontSize = 9.sp, fontWeight = FontWeight.Black)
+        Icon(icon, contentDescription = description, tint = tint, modifier = Modifier.size(12.dp))
     }
 }
 
@@ -443,8 +446,7 @@ fun EpisodeRow(session: Session?, item: PopItem, watched: Boolean = false, watch
                 color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(4.dp).background(Color.Black.copy(alpha = .7f), RoundedCornerShape(3.dp)).padding(horizontal = 4.dp, vertical = 1.dp),
             )
-            if (watched) SeenBadge()
-            if (watchlisted) WatchlistBadge()
+            PosterStatusBadges(watched, watchlisted)
         }
         Column(Modifier.weight(1f)) {
             Text(item.episodeTitle.ifBlank { item.title }, color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
@@ -608,7 +610,7 @@ fun CardShell(
     onRightEdge: (() -> Boolean)? = null,
     onUp: (() -> Boolean)? = null,
     onDown: (() -> Boolean)? = null,
-    focusScale: Float = 1.06f,
+    focusScale: Float = 1.025f,
     onClick: () -> Unit,
     onLongClick: ((FocusRequester) -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
@@ -683,9 +685,9 @@ fun CardShell(
                 scaleY = scale
             }
             .clip(CardShape)
-            .border(2.dp, if (focused) Color.White.copy(alpha = .88f) else Color.White.copy(alpha = .10f), CardShape)
-            .background(if (focused) Color.White.copy(alpha = .13f) else Color.White.copy(alpha = .055f))
-            .padding(4.dp),
+            .border(1.dp, if (focused) Accent.copy(alpha = .95f) else Color.White.copy(alpha = .12f), CardShape)
+            .background(if (focused) Accent.copy(alpha = .035f) else Color.Black.copy(alpha = .10f))
+            .padding(3.dp),
         content = content,
     )
 }

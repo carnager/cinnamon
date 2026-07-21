@@ -283,7 +283,7 @@ private fun showNativeChoiceMenu(
 
     panel.addView(TextView(context).apply {
         text = title
-        setTextColor(0xFF4FD1A5.toInt())
+        setTextColor(0xFFF47B35.toInt())
         textSize = 15f
         typeface = Typeface.DEFAULT_BOLD
         setPadding(dp(context, 16), dp(context, 8), dp(context, 16), dp(context, 10))
@@ -304,10 +304,10 @@ private fun showNativeChoiceMenu(
             setSingleLine(true)
             ellipsize = android.text.TextUtils.TruncateAt.END
             setPadding(dp(context, 16), dp(context, 9), dp(context, 16), dp(context, 9))
-            setBackgroundColor(if (choice.selected) 0x332A8B6E else 0x00000000)
+            setBackgroundColor(if (choice.selected) 0x33B95525 else 0x00000000)
             setOnFocusChangeListener { view, focused ->
-                view.setBackgroundColor(if (focused) 0xFF263042.toInt() else if (choice.selected) 0x332A8B6E else 0x00000000)
-                (view as TextView).setTextColor(if (focused) 0xFF4FD1A5.toInt() else if (choice.selected) 0xFFFFFFFF.toInt() else 0xFFE8ECF2.toInt())
+                view.setBackgroundColor(if (focused) 0xFF19262E.toInt() else if (choice.selected) 0x33B95525 else 0x00000000)
+                (view as TextView).setTextColor(if (focused) 0xFFF47B35.toInt() else if (choice.selected) 0xFFFFFFFF.toInt() else 0xFFF3F1EF.toInt())
             }
             setOnClickListener {
                 choice.action()

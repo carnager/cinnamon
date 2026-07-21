@@ -113,7 +113,7 @@ fun LoginView(initialServer: String, error: String, onLogin: (String, String, St
             verticalArrangement = Arrangement.spacedBy(10.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("Popcorn", color = Accent, fontSize = 26.sp, fontWeight = FontWeight.Black)
+            CinnamonBrand(markSize = 48, fontSize = 26)
             Spacer(Modifier.height(4.dp))
 
             when (mode) {
@@ -142,7 +142,7 @@ fun LoginView(initialServer: String, error: String, onLogin: (String, String, St
                 "qr" -> {
                     if (setupPayload.isNotBlank()) {
                         QRCode(payload = setupPayload, modifier = Modifier.size(210.dp))
-                        Text("Scan with Popcorn Remote", color = Muted, fontSize = 12.sp)
+                        Text("Scan with Cinnamon Remote", color = Muted, fontSize = 12.sp)
                         Text(setupAddress, color = TextColor, fontSize = 12.sp, textAlign = TextAlign.Center)
                     } else {
                         Box(Modifier.size(210.dp).clip(RoundedCornerShape(8.dp)).background(Surface2), contentAlignment = Alignment.Center) {

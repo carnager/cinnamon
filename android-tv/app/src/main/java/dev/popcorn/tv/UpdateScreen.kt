@@ -300,7 +300,7 @@ private fun installApk(context: Context, apk: File): String {
 		val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
 			.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         context.startActivity(intent)
-        return "Allow Popcorn to install unknown apps, then press Install again."
+        return "Allow Cinnamon to install unknown apps, then press Install again."
     }
 
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", apk)
@@ -312,7 +312,7 @@ private fun installApk(context: Context, apk: File): String {
 	Handler(Looper.getMainLooper()).postDelayed({
 		(context as? Activity)?.finishAndRemoveTask()
 	}, 600)
-	return "Opening Android installer. Reopen Popcorn after installation."
+	return "Opening Android installer. Reopen Cinnamon after installation."
 }
 
 private fun formatBytes(bytes: Long): String {

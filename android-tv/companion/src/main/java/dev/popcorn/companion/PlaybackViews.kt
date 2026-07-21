@@ -196,6 +196,21 @@ fun RemotePage(
             }
         }
         item {
+            OutlinedButton(
+                onClick = { showBandwidthDialog = true },
+                shape = RoundedCornerShape(99.dp),
+                modifier = Modifier.widthIn(min = 190.dp),
+            ) {
+                Icon(Icons.Default.Speed, contentDescription = null, tint = Accent, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Target bitrate · ${BandwidthOptions.firstOrNull { it.kbps == selectedBandwidth }?.label ?: "Direct"}",
+                    color = TextColor,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+        item {
             Box(Modifier.fillMaxWidth(.78f).aspectRatio(1f).clip(RoundedCornerShape(26.dp)).background(Surface2), contentAlignment = Alignment.Center) {
                 if (state.itemId > 0) {
                     AuthAsyncImage(session, imageUrl(session, state.itemId, 0), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
@@ -263,7 +278,7 @@ fun RemotePage(
         item {
             Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
                 PlayerMaterialIconButton("Jump", Icons.Default.SubdirectoryArrowRight, onJump)
-                PlayerMaterialIconButton(BandwidthOptions.firstOrNull { it.kbps == selectedBandwidth }?.label ?: "Quality", Icons.Default.Speed, { showBandwidthDialog = true })
+                PlayerMaterialIconButton(BandwidthOptions.firstOrNull { it.kbps == selectedBandwidth }?.label ?: "Direct", Icons.Default.Speed, { showBandwidthDialog = true })
                 PlayerMaterialIconButton("Back 30", Icons.Default.Replay30, { onSeek(boundarySeekDelta(position, forward = false)) })
                 PlayerMaterialIconButton("Fwd 30", Icons.Default.Forward30, { onSeek(boundarySeekDelta(position, forward = true)) })
             }
@@ -575,20 +590,33 @@ private fun PlaybackTargetRow(title: String, subtitle: String, icon: ImageVector
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BandwidthDialog(selectedBandwidth: Int?, onDismiss: () -> Unit, onBandwidth: (Int?) -> Unit) {
-    AlertDialog(
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        title = { Text("Playback quality") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                BandwidthOptions.forEach { option ->
-                    TrackChoice(option.label, selectedBandwidth == option.kbps) { onBandwidth(option.kbps) }
-                }
-            }
+        containerColor = Bg,
+        contentColor = TextColor,
+        tonalElevation = 0.dp,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        dragHandle = {
+            Box(Modifier.padding(top = 11.dp, bottom = 5.dp).size(width = 38.dp, height = 4.dp).clip(RoundedCornerShape(99.dp)).background(Line))
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-    )
+    ) {
+        Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("NOW PLAYING", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.3.sp)
+            Spacer(Modifier.height(5.dp))
+            Text("Target bitrate", color = TextColor, fontSize = 22.sp, fontWeight = FontWeight.Black)
+            Text("Limit bandwidth by transcoding, or keep the original quality.", color = Muted, fontSize = 12.sp)
+            Spacer(Modifier.height(10.dp))
+            BandwidthOptions.forEach { option ->
+                TrackChoice(
+                    if (option.kbps == null) "Original quality (Direct)" else option.label,
+                    selectedBandwidth == option.kbps,
+                ) { onBandwidth(option.kbps) }
+            }
+        }
+    }
 }
 
 @Composable

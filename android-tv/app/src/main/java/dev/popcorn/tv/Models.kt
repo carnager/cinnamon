@@ -25,6 +25,7 @@ data class BandwidthOption(val label: String, val kbps: Int?)
 
 val BandwidthOptions = listOf(
     BandwidthOption("Direct", null),
+    BandwidthOption("1.5 mbit", 1500),
     BandwidthOption("3 mbit", 3000),
     BandwidthOption("5 mbit", 5000),
     BandwidthOption("8 mbit", 8000),

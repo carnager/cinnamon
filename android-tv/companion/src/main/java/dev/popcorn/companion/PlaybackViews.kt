@@ -196,21 +196,6 @@ fun RemotePage(
             }
         }
         item {
-            OutlinedButton(
-                onClick = { showBandwidthDialog = true },
-                shape = RoundedCornerShape(99.dp),
-                modifier = Modifier.widthIn(min = 190.dp),
-            ) {
-                Icon(Icons.Default.Speed, contentDescription = null, tint = Accent, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "Target bitrate · ${BandwidthOptions.firstOrNull { it.kbps == selectedBandwidth }?.label ?: "Direct"}",
-                    color = TextColor,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-        }
-        item {
             Box(Modifier.fillMaxWidth(.78f).aspectRatio(1f).clip(RoundedCornerShape(26.dp)).background(Surface2), contentAlignment = Alignment.Center) {
                 if (state.itemId > 0) {
                     AuthAsyncImage(session, imageUrl(session, state.itemId, 0), contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)

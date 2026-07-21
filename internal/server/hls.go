@@ -616,7 +616,11 @@ func transcodeArgs(cfg config.Config, input string, bandwidth int, start float64
 	args := []string{"-hide_banner", "-loglevel", "warning"}
 	inputSeek, outputSeek := transcodeSeekArgs(start)
 	args = append(args, inputSeek...)
-	args = append(args, hwInputArgs(cfg.HWAccel, videoCodec)...)
+	hardwareInput := hwInputArgs(cfg.HWAccel, videoCodec)
+	if start > 0 {
+		hardwareInput = nil
+	}
+	args = append(args, hardwareInput...)
 	args = append(args, "-i", input)
 	args = append(args, outputSeek...)
 	args = append(args, "-map", "0:v:0")
@@ -631,7 +635,7 @@ func transcodeArgs(cfg config.Config, input string, bandwidth int, start float64
 		args = append(args, "-sn")
 	}
 	args = append(args, "-dn")
-	args = append(args, hwCodecArgs(cfg.HWAccel, cfg.HWDevice, videoCodec)...)
+	args = append(args, hwCodecArgs(cfg.HWAccel, cfg.HWDevice, videoCodec, len(hardwareInput) > 0)...)
 	args = append(args,
 		"-b:v", fmt.Sprintf("%dk", videoRate),
 		"-maxrate", fmt.Sprintf("%dk", videoRate),
@@ -652,7 +656,11 @@ func hlsArgs(cfg config.Config, input, segmentPattern, playlist string, bandwidt
 	args := []string{"-hide_banner", "-loglevel", "warning"}
 	inputSeek, outputSeek := transcodeSeekArgs(start)
 	args = append(args, inputSeek...)
-	args = append(args, hwInputArgs(cfg.HWAccel, videoCodec)...)
+	hardwareInput := hwInputArgs(cfg.HWAccel, videoCodec)
+	if start > 0 {
+		hardwareInput = nil
+	}
+	args = append(args, hardwareInput...)
 	args = append(args, "-i", input)
 	args = append(args, outputSeek...)
 	args = append(args, "-map", "0:v:0")
@@ -667,7 +675,7 @@ func hlsArgs(cfg config.Config, input, segmentPattern, playlist string, bandwidt
 		args = append(args, "-sn")
 	}
 	args = append(args, "-dn")
-	args = append(args, hwCodecArgs(cfg.HWAccel, cfg.HWDevice, videoCodec)...)
+	args = append(args, hwCodecArgs(cfg.HWAccel, cfg.HWDevice, videoCodec, len(hardwareInput) > 0)...)
 	args = append(args,
 		"-b:v", fmt.Sprintf("%dk", videoRate),
 		"-maxrate", fmt.Sprintf("%dk", videoRate),
@@ -703,8 +711,13 @@ func hlsPlanArgs(cfg config.Config, input, segmentPattern, playlist string, plan
 	args := []string{"-hide_banner", "-loglevel", "warning"}
 	inputSeek, outputSeek := hlsPlanSeekArgs(start, plan.Outputs.Video.Codec)
 	args = append(args, inputSeek...)
+	hardwareInput := []string(nil)
 	if plan.Outputs.Video.Codec != "copy" {
-		args = append(args, hwInputArgs(cfg.HWAccel, plan.Item.VideoCodec)...)
+		hardwareInput = hwInputArgs(cfg.HWAccel, plan.Item.VideoCodec)
+		if start > 0 {
+			hardwareInput = nil
+		}
+		args = append(args, hardwareInput...)
 	}
 	args = append(args, "-i", input)
 	args = append(args, outputSeek...)
@@ -726,7 +739,7 @@ func hlsPlanArgs(cfg config.Config, input, segmentPattern, playlist string, plan
 	case "copy":
 		args = append(args, "-c:v", "copy")
 	default:
-		args = append(args, hwCodecArgs(cfg.HWAccel, cfg.HWDevice, plan.Item.VideoCodec)...)
+		args = append(args, hwCodecArgs(cfg.HWAccel, cfg.HWDevice, plan.Item.VideoCodec, len(hardwareInput) > 0)...)
 		args = append(args,
 			"-b:v", fmt.Sprintf("%dk", videoRate),
 			"-maxrate", fmt.Sprintf("%dk", videoRate),
@@ -1007,7 +1020,7 @@ func hwInputArgs(mode, videoCodec string) []string {
 	}
 }
 
-func hwCodecArgs(mode, device, videoCodec string) []string {
+func hwCodecArgs(mode, device, videoCodec string, hardwareInput bool) []string {
 	switch strings.ToLower(mode) {
 	case "nvenc", "cuda":
 		return []string{"-c:v", "h264_nvenc", "-preset", "p4"}
@@ -1016,7 +1029,7 @@ func hwCodecArgs(mode, device, videoCodec string) []string {
 		// GPU; h264_qsv rejects 10-bit input outright. forced_idr makes the encoder
 		// honor force_key_frames as IDR frames — without it segments grow to the
 		// encoder's default GOP (~10s) instead of the requested hls_time.
-		if qsvCanDecode(videoCodec) {
+		if hardwareInput && qsvCanDecode(videoCodec) {
 			return []string{"-vf", "vpp_qsv=format=nv12", "-c:v", "h264_qsv", "-preset", "veryfast", "-forced_idr", "1"}
 		}
 		// Software-decoded source: frames are in system memory, so convert to NV12

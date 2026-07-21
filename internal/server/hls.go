@@ -198,24 +198,13 @@ func (a *App) subtitle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	args := []string{"-hide_banner", "-loglevel", "error"}
-	if start > 0 {
-		args = append(args, "-ss", strconv.FormatFloat(start, 'f', 3, 64))
-	}
 	// Extracting an embedded subtitle demuxes the entire file, which can take
 	// well over the client's ~8s HTTP read timeout on big files. Stream the
 	// conversion instead of buffering it: -flush_packets pushes each cue
 	// through ffmpeg's output buffer immediately (a whole movie's VTT is
 	// smaller than that buffer), and flushing per chunk keeps bytes moving so
 	// the client never sees a silent connection.
-	args = append(args,
-		"-i", path,
-		"-map", fmt.Sprintf("0:%d", index),
-		"-c:s", "webvtt",
-		"-f", "webvtt",
-		"-flush_packets", "1",
-		"-",
-	)
+	args := subtitleTranscodeArgs(path, index, start)
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, a.cfg.FFmpegPath, args...)
@@ -256,6 +245,30 @@ func (a *App) subtitle(w http.ResponseWriter, r *http.Request) {
 	if err := cmd.Wait(); err != nil && r.Context().Err() == nil {
 		a.log.Warn("subtitle conversion failed", "item", item.ID, "subtitle", index, "start", start, "error", err, "stderr", strings.TrimSpace(stderr.String()))
 	}
+}
+
+// subtitleTranscodeArgs uses an accurate output seek and then rebases cues to
+// zero. Input seeking is fast, but subtitle streams seek to the previous cue;
+// that makes the resulting WebVTT offset depend on whichever cue happened to
+// precede the requested position.
+func subtitleTranscodeArgs(path string, index int, start float64) []string {
+	args := []string{"-hide_banner", "-loglevel", "error", "-i", path}
+	if start > 0 {
+		formatted := strconv.FormatFloat(start, 'f', 3, 64)
+		args = append(args, "-ss", formatted)
+	}
+	args = append(args,
+		"-map", fmt.Sprintf("0:%d", index),
+		"-c:s", "webvtt",
+	)
+	if start > 0 {
+		args = append(args, "-output_ts_offset", "-"+strconv.FormatFloat(start, 'f', 3, 64))
+	}
+	return append(args,
+		"-f", "webvtt",
+		"-flush_packets", "1",
+		"-",
+	)
 }
 
 func (a *App) hlsPlaylist(w http.ResponseWriter, r *http.Request) {

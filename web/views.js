@@ -1079,7 +1079,7 @@ async function openDetail(item, skipHistory, parent = {}) {
   ]);
   const d = Object.assign({}, item, fresh || {});
   const audioStreams = (streams || []).filter((s) => s.type === "audio");
-  const subtitleStreams = (streams || []).filter((s) => s.type === "subtitle");
+  const subtitleStreams = (streams || []).filter((s) => s.type === "subtitle" && isTextSubtitleStream(s));
   let chosenAudioIdx = preferredAudioIndex(audioStreams);
   let chosenSubIdx = preferredSubtitleIndex(subtitleStreams);
 

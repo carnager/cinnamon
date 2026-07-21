@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -127,5 +128,23 @@ func TestSubtitleSkipsSidecarForShiftedStart(t *testing.T) {
 	app.subtitle(rec, subtitleRequest(id, "?start=30"))
 	if got := rec.Body.String(); got != "WEBVTT-CONVERTED" {
 		t.Fatalf("body = %q, want conversion for shifted start", got)
+	}
+}
+
+func TestSubtitleTranscodeArgsAccuratelyRebaseShiftedCues(t *testing.T) {
+	args := subtitleTranscodeArgs("/media/movie.mkv", 7, 120.5)
+	input := slices.Index(args, "-i")
+	seek := slices.Index(args, "-ss")
+	if input < 0 || seek < input {
+		t.Fatalf("args = %v, want accurate -ss after -i", args)
+	}
+	if !containsPair(args, "-ss", "120.500") {
+		t.Fatalf("args = %v, want output seek at 120.500", args)
+	}
+	if !containsPair(args, "-output_ts_offset", "-120.500") {
+		t.Fatalf("args = %v, want cues rebased by -120.500", args)
+	}
+	if !containsPair(args, "-map", "0:7") {
+		t.Fatalf("args = %v, want subtitle stream 7", args)
 	}
 }

@@ -63,7 +63,7 @@ const QUALITY_OPTIONS = [
   { label: "1.5 Mbps", kbps: 1500 },
 ];
 const UP_NEXT_LEAD_SEC = 25;
-const TEXT_SUB_CODECS = new Set(["subrip", "srt", "ass", "ssa", "webvtt", "vtt", "mov_text", "text", "dvb_subtitle"]);
+const TEXT_SUB_CODECS = new Set(["subrip", "srt", "ass", "ssa", "webvtt", "vtt", "mov_text", "text"]);
 
 const ICONS = {
   play: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>`,
@@ -239,9 +239,12 @@ async function play(item, opts = {}) {
     pb.streams = [];
   }
   pb.audioStreams = pb.streams.filter((s) => s.type === "audio");
-  pb.subtitleStreams = pb.streams.filter((s) => s.type === "subtitle");
+  // Browsers render text subtitles as an external WebVTT track. Image-based
+  // tracks cannot be represented by HTML video and must not trigger a replan.
+  pb.subtitleStreams = pb.streams.filter((s) => s.type === "subtitle" && isTextSubtitleStream(s));
   if (pb.audioIndex === null) pb.audioIndex = preferredAudioIndex(pb.audioStreams);
   if (pb.subtitleIndex === undefined) pb.subtitleIndex = preferredSubtitleIndex(pb.subtitleStreams);
+  if (pb.subtitleIndex !== null && !isTextSubtitle(pb.subtitleIndex)) pb.subtitleIndex = null;
 
   let startMs = opts.startMs || 0;
   if (!startMs && item.kind !== "trailer") {
@@ -273,7 +276,7 @@ async function startPlan(startMs) {
   if (!plan || !plan.playable) {
     // Retry once forcing a safe transcode.
     try {
-      plan = await requestPlan(Math.round(startSec * 1000), "transcode", true);
+      plan = await requestPlan(Math.round(startSec * 1000), "transcode");
     } catch (_) { /* fall through */ }
   }
   if (!plan || !plan.playable) {
@@ -294,13 +297,15 @@ async function startPlan(startMs) {
   renderTrackButtons();
 }
 
-async function requestPlan(startPositionMs, forceModeOverride, isFallback) {
+async function requestPlan(startPositionMs, forceModeOverride) {
   const forceMode = forceModeOverride || (pb.bandwidthKbps ? "transcode" : "auto");
   const body = {
     itemId: pb.item.id,
     startPositionMs: startPositionMs,
     audioIndex: pb.audioIndex,
-    subtitleIndex: pb.mode === "direct" && !isFallback ? null : pb.subtitleIndex,
+    // Keep subtitles outside the media pipeline. Rebuilding an otherwise
+    // working HLS stream merely to mux WebVTT can shift the A/V timestamps.
+    subtitleIndex: null,
     bandwidthKbps: pb.bandwidthKbps,
     forceMode,
     profile: browserProfile(),
@@ -320,7 +325,7 @@ function attachPlan(plan, startSec) {
     if (startSec > 0) {
       player.addEventListener("loadedmetadata", () => { try { player.currentTime = startSec; } catch (_) {} }, { once: true });
     }
-    applyDirectSubtitle();
+    applyTextSubtitle();
     player.play().catch(() => setPlayerStatus(`${pb.item.title} · press play to start`));
     return;
   }
@@ -337,8 +342,10 @@ function attachPlan(plan, startSec) {
     hls.on(Hls.Events.FRAG_BUFFERED, () => clearPlayerStatus());
     hls.loadSource(plan.url);
     hls.attachMedia(player);
+    applyTextSubtitle();
   } else if (player.canPlayType("application/vnd.apple.mpegurl")) {
     player.src = plan.url;
+    applyTextSubtitle();
     player.play().catch(() => setPlayerStatus(`${pb.item.title} · press play to start`));
   } else {
     setPlayerStatus(`${pb.item.title} · HLS is not supported by this browser`);
@@ -544,13 +551,9 @@ async function switchAudio(index) {
 
 async function switchSubtitle(index) {
   pb.subtitleIndex = index;
-  // Text subtitle over direct play: overlay a WebVTT track without re-encoding.
-  if (pb.mode === "direct" && (index === null || isTextSubtitle(index))) {
-    applyDirectSubtitle();
-    renderTrackButtons();
-    return;
-  }
-  await replanAtCurrent();
+  // Subtitle changes never replace the media source. The server converts the
+  // selected text track to WebVTT on its own timeline.
+  applyTextSubtitle();
   renderTrackButtons();
 }
 
@@ -577,29 +580,38 @@ async function replanAtCurrent() {
   }
 }
 
+function isTextSubtitleStream(stream) {
+  return TEXT_SUB_CODECS.has(String(stream?.codec || "").toLowerCase());
+}
+
 function isTextSubtitle(index) {
-  const s = pb.subtitleStreams.find((x) => x.index === index);
-  return s ? TEXT_SUB_CODECS.has(String(s.codec || "").toLowerCase()) : false;
+  return isTextSubtitleStream(pb.subtitleStreams.find((stream) => stream.index === index));
 }
 
 function clearTextTracks() {
+  for (const textTrack of player.textTracks) textTrack.mode = "disabled";
   player.querySelectorAll("track").forEach((t) => t.remove());
 }
 
-function applyDirectSubtitle() {
+function applyTextSubtitle() {
   clearTextTracks();
   if (pb.subtitleIndex === null || !pb.item) return;
   if (!isTextSubtitle(pb.subtitleIndex)) return;
+  const stream = pb.subtitleStreams.find((candidate) => candidate.index === pb.subtitleIndex);
   const track = document.createElement("track");
   track.kind = "subtitles";
-  track.label = "Subtitles";
+  track.label = streamLabel(stream);
+  if (stream?.language) track.srclang = normalizeLanguage(stream.language);
   track.default = true;
-  track.src = `/api/items/${pb.item.id}/subtitles/${pb.subtitleIndex}.vtt`;
+  const start = pb.mode === "direct" ? 0 : Math.max(0, pb.startOffsetSec || 0);
+  track.src = `/api/items/${pb.item.id}/subtitles/${pb.subtitleIndex}.vtt?start=${start.toFixed(3)}`;
+  const showTrack = () => {
+    for (const textTrack of player.textTracks) textTrack.mode = "showing";
+  };
+  track.addEventListener("load", showTrack, { once: true });
   player.append(track);
-  // Enable once the browser parses it.
-  setTimeout(() => {
-    for (const t of player.textTracks) t.mode = "showing";
-  }, 150);
+  // Some browsers do not dispatch `load` for an already cached text track.
+  setTimeout(showTrack, 150);
 }
 
 /* ── Up Next ── */

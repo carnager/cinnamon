@@ -146,6 +146,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /api/auth/qr/start", a.authQRStart)
 	mux.HandleFunc("GET /api/auth/qr/poll", a.authQRPoll)
 	mux.HandleFunc("POST /api/auth/qr/complete", a.authQRComplete)
+	mux.HandleFunc("POST /api/auth/qr/claim", a.authQRClaim)
 	mux.HandleFunc("GET /api/users", a.users)
 	mux.HandleFunc("POST /api/users", a.createUser)
 	mux.HandleFunc("PUT /api/users/{id}", a.updateUser)
@@ -237,6 +238,8 @@ func publicAPIRoute(r *http.Request) bool {
 	case r.Method == http.MethodPost && r.URL.Path == "/api/auth/qr/start":
 		return true
 	case r.Method == http.MethodGet && r.URL.Path == "/api/auth/qr/poll":
+		return true
+	case r.Method == http.MethodPost && r.URL.Path == "/api/auth/qr/claim":
 		return true
 	default:
 		return false

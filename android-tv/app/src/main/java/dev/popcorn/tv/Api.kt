@@ -263,6 +263,10 @@ class Api(private val session: Session) {
         QRLoginStart(json.getString("code"), json.optString("expiresAt"))
     }
 
+    suspend fun approveQrLogin(code: String) = withContext(Dispatchers.IO) {
+        request("/api/auth/qr/complete", "POST", JSONObject().put("code", code).toString())
+    }
+
     suspend fun pollQrLogin(code: String): Session? = withContext(Dispatchers.IO) {
         val json = request("/api/auth/qr/poll?code=${enc(code)}")
         if (json.optString("status") != "approved") return@withContext null
@@ -647,14 +651,14 @@ class Api(private val session: Session) {
         outFile
     }
 
-    suspend fun saveProgress(itemId: Long, positionMs: Long, durationMs: Long, completed: Boolean, state: String) = withContext(Dispatchers.IO) {
-        val body = JSONObject()
+    suspend fun saveProgress(itemId: Long, positionMs: Long, durationMs: Long, completed: Boolean, state: String, continuousMs: Long? = null) = withContext(Dispatchers.IO) {
+        val payload = JSONObject()
             .put("positionMs", positionMs)
             .put("durationMs", durationMs)
             .put("completed", completed)
             .put("state", state)
-            .toString()
-        request("/api/items/$itemId/progress", "PUT", body)
+        if (continuousMs != null) payload.put("continuousMs", continuousMs.coerceAtLeast(0))
+        request("/api/items/$itemId/progress", "PUT", payload.toString())
     }
 
     suspend fun markItemWatched(item: PopItem) = withContext(Dispatchers.IO) {

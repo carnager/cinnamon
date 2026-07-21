@@ -88,12 +88,32 @@ fun JSONObject.optIntOrNull(name: String): Int? {
 class Api(private val session: Session) {
     suspend fun login(username: String, password: String): Session = withContext(Dispatchers.IO) {
         val json = request("/api/auth/login", "POST", JSONObject().put("username", username).put("password", password).toString())
-        val user = json.optJSONObject("user")
-        Session(session.server, json.getString("token"), user?.optString("username").orEmpty())
+        authSession(json)
     }
 
     suspend fun completeQr(code: String) = withContext(Dispatchers.IO) {
         request("/api/auth/qr/complete", "POST", JSONObject().put("code", code).toString())
+    }
+
+    suspend fun claimQr(code: String): Session = withContext(Dispatchers.IO) {
+        authSession(request("/api/auth/qr/claim", "POST", JSONObject().put("code", code).toString()))
+    }
+
+    suspend fun refreshSession(): Session = withContext(Dispatchers.IO) {
+        val user = request("/api/auth/me")
+        Session(
+            server = session.server,
+            token = session.token,
+            username = user.optString("username"),
+            isAdmin = user.optBoolean("isAdmin"),
+            userId = user.optLong("id"),
+            avatar = user.optString("avatar"),
+            displayName = user.optString("displayName"),
+        )
+    }
+
+    suspend fun logout() = withContext(Dispatchers.IO) {
+        requestText("/api/auth/logout", "POST", null)
     }
 
     suspend fun companionUpdate(currentVersionCode: Int): AppUpdateInfo = withContext(Dispatchers.IO) {
@@ -187,6 +207,21 @@ class Api(private val session: Session) {
     suspend fun genres(libraryId: String): List<String> = withContext(Dispatchers.IO) {
         val arr = requestArray("/api/genres?libraryId=${enc(libraryId)}")
         (0 until arr.length()).map { arr.getString(it) }
+    }
+
+    suspend fun decades(libraryId: String, kind: String): List<Int> = withContext(Dispatchers.IO) {
+        val arr = requestArray("/api/decades?libraryId=${enc(libraryId)}&kind=${enc(kind)}")
+        (0 until arr.length()).map { arr.optInt(it) }.filter { it > 0 }
+    }
+
+    suspend fun alphabet(libraryId: String, kind: String, filters: LibraryFilters = LibraryFilters()): List<AlphabetEntry> = withContext(Dispatchers.IO) {
+        val genreParam = if (filters.genre.isNotBlank()) "&genre=${enc(filters.genre)}" else ""
+        val decadesParam = if (filters.decades.isNotBlank()) "&decades=${enc(filters.decades)}" else ""
+        val arr = requestArray("/api/alphabet?libraryId=${enc(libraryId)}&kind=${enc(kind)}$genreParam$decadesParam")
+        (0 until arr.length()).map { index ->
+            val item = arr.getJSONObject(index)
+            AlphabetEntry(item.optString("letter"), item.optInt("offset"), item.optInt("count"))
+        }
     }
 
     suspend fun seasons(libraryId: String, showTitle: String): List<SeasonSummary> = withContext(Dispatchers.IO) {
@@ -291,17 +326,31 @@ class Api(private val session: Session) {
         )
     }
 
+    suspend fun item(itemId: Long): PopItem = withContext(Dispatchers.IO) {
+        jsonToItem(request("/api/items/$itemId"))
+    }
+
     suspend fun progressList(): List<PlaybackProgress> = withContext(Dispatchers.IO) {
-        val arr = requestArray("/api/progress?limit=5000")
-        (0 until arr.length()).map {
-            val o = arr.getJSONObject(it)
-            PlaybackProgress(
-                itemId = o.optLong("itemId"),
-                positionMs = o.optLong("positionMs"),
-                durationMs = o.optLong("durationMs"),
-                completed = o.optBoolean("completed"),
-            )
+        val out = mutableListOf<PlaybackProgress>()
+        val limit = 500
+        var offset = 0
+        while (true) {
+            val arr = requestArray("/api/progress?limit=$limit&offset=$offset")
+            for (index in 0 until arr.length()) {
+                val o = arr.getJSONObject(index)
+                out.add(
+                    PlaybackProgress(
+                        itemId = o.optLong("itemId"),
+                        positionMs = o.optLong("positionMs"),
+                        durationMs = o.optLong("durationMs"),
+                        completed = o.optBoolean("completed"),
+                    ),
+                )
+            }
+            if (arr.length() < limit) break
+            offset += limit
         }
+        out
     }
 
     suspend fun showProgress(): List<ShowProgress> = withContext(Dispatchers.IO) {
@@ -326,17 +375,44 @@ class Api(private val session: Session) {
         )
     }
 
-    suspend fun saveProgress(itemId: Long, positionMs: Long, durationMs: Long, completed: Boolean) = withContext(Dispatchers.IO) {
-        request(
-            "/api/items/$itemId/progress",
-            "PUT",
-            JSONObject()
-                .put("positionMs", positionMs)
-                .put("durationMs", durationMs)
-                .put("completed", completed)
-                .put("state", if (completed) "ended" else "")
-                .toString(),
+    suspend fun addItemWatchlist(itemId: Long) = withContext(Dispatchers.IO) {
+        request("/api/items/$itemId/watchlist", "PUT", "{}")
+    }
+
+    suspend fun removeItemWatchlist(itemId: Long) = withContext(Dispatchers.IO) {
+        requestText("/api/items/$itemId/watchlist", "DELETE", null)
+    }
+
+    suspend fun watchHistory(limit: Int = 120): WatchHistory = withContext(Dispatchers.IO) {
+        val json = request("/api/history?limit=$limit")
+        val rows = json.optJSONArray("items") ?: JSONArray()
+        WatchHistory(
+            items = (0 until rows.length()).map { index ->
+                val row = rows.getJSONObject(index)
+                WatchHistoryEntry(
+                    id = row.optString("id"),
+                    item = row.optJSONObject("item")?.let(::jsonToItem),
+                    kind = row.optString("kind"),
+                    title = row.optString("title"),
+                    subtitle = row.optString("subtitle"),
+                    year = row.optInt("year"),
+                    watchedAt = row.optString("watchedAt"),
+                    source = row.optString("source"),
+                )
+            },
+            source = json.optString("source", "local"),
+            traktLinked = json.optBoolean("traktLinked"),
         )
+    }
+
+    suspend fun saveProgress(itemId: Long, positionMs: Long, durationMs: Long, completed: Boolean, continuousMs: Long? = null) = withContext(Dispatchers.IO) {
+        val body = JSONObject()
+            .put("positionMs", positionMs)
+            .put("durationMs", durationMs)
+            .put("completed", completed)
+            .put("state", if (completed) "ended" else "")
+        if (continuousMs != null) body.put("continuousMs", continuousMs.coerceAtLeast(0))
+        request("/api/items/$itemId/progress", "PUT", body.toString())
     }
 
     suspend fun itemRating(itemId: Long): Int = withContext(Dispatchers.IO) {
@@ -393,13 +469,13 @@ class Api(private val session: Session) {
         requestText("/api/hls/${enc(sessionId)}", "DELETE", null)
     }
 
-    suspend fun searchMovies(query: String, filters: LibraryFilters = LibraryFilters()): List<PopItem> = withContext(Dispatchers.IO) {
-        val root = request("/api/search?limit=40&kind=movie&q=${enc(query)}${filterParams(filters)}")
+    suspend fun searchMovies(query: String, fields: String = "title"): List<PopItem> = withContext(Dispatchers.IO) {
+        val root = request("/api/search?limit=500&kind=movie&q=${enc(query)}&fields=${enc(fields)}")
         parseItems(root.optJSONArray("items") ?: JSONArray())
     }
 
-    suspend fun searchShows(query: String, filters: LibraryFilters = LibraryFilters()): List<ShowSummary> = withContext(Dispatchers.IO) {
-        parseShows(requestArray("/api/tv/shows?limit=40&q=${enc(query)}${filterParams(filters)}"))
+    suspend fun searchShows(query: String, fields: String = "title"): List<ShowSummary> = withContext(Dispatchers.IO) {
+        parseShows(requestArray("/api/tv/shows?limit=500&q=${enc(query)}&fields=${enc(fields)}"))
     }
 
     private fun filterParams(filters: LibraryFilters): String {
@@ -407,6 +483,8 @@ class Api(private val session: Session) {
         if (filters.genre.isNotBlank()) params += "genre=${enc(filters.genre)}"
         if (filters.minRating > 0) params += "minRating=${filters.minRating}"
         if (filters.sort.isNotBlank()) params += "sort=${enc(filters.sort)}"
+        if (filters.seenStatus.isNotBlank()) params += "seen=${enc(filters.seenStatus)}"
+        if (filters.decades.isNotBlank()) params += "decades=${enc(filters.decades)}"
         return if (params.isEmpty()) "" else "&${params.joinToString("&")}"
     }
 
@@ -420,6 +498,19 @@ class Api(private val session: Session) {
     private fun request(path: String, method: String = "GET", body: String? = null): JSONObject {
         val text = requestText(path, method, body).trim()
         return if (text.isBlank()) JSONObject() else JSONObject(text)
+    }
+
+    private fun authSession(json: JSONObject): Session {
+        val user = json.optJSONObject("user")
+        return Session(
+            server = session.server,
+            token = json.getString("token"),
+            username = user?.optString("username").orEmpty(),
+            isAdmin = user?.optBoolean("isAdmin") ?: false,
+            userId = user?.optLong("id") ?: 0L,
+            avatar = user?.optString("avatar").orEmpty(),
+            displayName = user?.optString("displayName").orEmpty(),
+        )
     }
 
     private fun requestText(path: String, method: String, body: String?): String {
@@ -455,10 +546,7 @@ class Api(private val session: Session) {
         ShowSummary(o.getString("libraryId"), o.optString("title"), o.optInt("episodeCount"), o.optInt("seasonCount"), o.optLong("posterItemId"), o.optLong("posterMtimeUnix"), o.optString("overview"), o.optString("genres"), o.optDouble("rating"), o.optInt("year"), o.optInt("endYear"), o.optLong("backdropItemId"), o.optLong("backdropMtimeUnix"))
     }
 
-    private fun parseItems(arr: JSONArray): List<PopItem> = (0 until arr.length()).map {
-        val o = arr.getJSONObject(it)
-        PopItem(o.getLong("id"), o.getString("libraryId"), o.optString("kind"), o.optString("title"), o.optInt("year"), o.optLong("durationMs"), o.optLong("posterMtimeUnix"), o.optLong("backdropMtimeUnix"), o.optString("overview"), o.optString("genres"), o.optDouble("rating"), o.optString("imdbId"), o.optString("tmdbId"), o.optString("showTitle"), o.optInt("seasonNumber"), o.optInt("episodeNumber"), o.optString("episodeTitle"), parseActors(o.optJSONArray("actors")))
-    }
+    private fun parseItems(arr: JSONArray): List<PopItem> = (0 until arr.length()).map { jsonToItem(arr.getJSONObject(it)) }
 
     private fun parseActors(arr: JSONArray?): List<Actor> {
         if (arr == null) return emptyList()
@@ -474,6 +562,24 @@ class Api(private val session: Session) {
 
     suspend fun showActors(libraryId: String, showTitle: String): List<Actor> = withContext(Dispatchers.IO) {
         parseActors(requestArray("/api/tv/shows/actors?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}"))
+    }
+
+    suspend fun actorDetail(name: String): ActorDetail = withContext(Dispatchers.IO) {
+        val root = request("/api/actors?name=${enc(name)}")
+        val actor = root.optJSONObject("actor") ?: JSONObject()
+        val info = root.optJSONObject("info") ?: JSONObject()
+        ActorDetail(
+            actor = Actor(actor.optString("name", name), actor.optString("role"), actor.optString("thumb")),
+            info = ActorInfo(
+                biography = info.optString("biography"),
+                birthday = info.optString("birthday"),
+                placeOfBirth = info.optString("placeOfBirth"),
+                knownForDepartment = info.optString("knownForDepartment"),
+            ),
+            profileUrl = root.optString("profileUrl"),
+            movies = parseItems(root.optJSONArray("movies") ?: JSONArray()),
+            shows = parseShows(root.optJSONArray("shows") ?: JSONArray()),
+        )
     }
 
     suspend fun itemSidecars(itemId: Long): SidecarStatus = withContext(Dispatchers.IO) {
@@ -506,23 +612,44 @@ private fun libraryToJson(library: Library): JSONObject = JSONObject()
     .put("type", library.type)
 
 private fun jsonToItem(o: JSONObject): PopItem = PopItem(
-    o.getLong("id"),
-    o.getString("libraryId"),
-    o.optString("kind"),
-    o.optString("title"),
-    o.optInt("year"),
-    o.optLong("durationMs"),
-    o.optLong("posterMtimeUnix"),
-    o.optLong("backdropMtimeUnix"),
-    o.optString("overview"),
-    o.optString("genres"),
-    o.optDouble("rating"),
-    o.optString("imdbId"),
-    o.optString("tmdbId"),
-    o.optString("showTitle"),
-    o.optInt("seasonNumber"),
-    o.optInt("episodeNumber"),
-    o.optString("episodeTitle"),
+    id = o.getLong("id"),
+    libraryId = o.getString("libraryId"),
+    kind = o.optString("kind"),
+    title = o.optString("title"),
+    year = o.optInt("year"),
+    durationMs = o.optLong("durationMs"),
+    posterMtimeUnix = o.optLong("posterMtimeUnix"),
+    backdropMtimeUnix = o.optLong("backdropMtimeUnix"),
+    overview = o.optString("overview"),
+    genres = o.optString("genres"),
+    rating = o.optDouble("rating"),
+    imdbId = o.optString("imdbId"),
+    tmdbId = o.optString("tmdbId"),
+    showTitle = o.optString("showTitle"),
+    seasonNumber = o.optInt("seasonNumber"),
+    episodeNumber = o.optInt("episodeNumber"),
+    episodeTitle = o.optString("episodeTitle"),
+    actors = (o.optJSONArray("actors") ?: JSONArray()).let { actors ->
+        (0 until actors.length()).map { index ->
+            actors.getJSONObject(index).let { Actor(it.optString("name"), it.optString("role"), it.optString("thumb")) }
+        }
+    },
+    originalTitle = o.optString("originalTitle"),
+    videoCodec = o.optString("videoCodec"),
+    audioCodec = o.optString("audioCodec"),
+    tvdbId = o.optString("tvdbId"),
+    width = o.optInt("width"),
+    height = o.optInt("height"),
+    posterPath = o.optString("posterPath"),
+    backdropPath = o.optString("backdropPath"),
+    tagline = o.optString("tagline"),
+    officialRating = o.optString("officialRating"),
+    tags = o.optString("tags"),
+    studios = o.optString("studios"),
+    directors = o.optString("directors"),
+    writers = o.optString("writers"),
+    countries = o.optString("countries"),
+    premiered = o.optString("premiered"),
 )
 
 private fun itemToJson(item: PopItem): JSONObject = JSONObject()
@@ -543,6 +670,25 @@ private fun itemToJson(item: PopItem): JSONObject = JSONObject()
     .put("seasonNumber", item.seasonNumber)
     .put("episodeNumber", item.episodeNumber)
     .put("episodeTitle", item.episodeTitle)
+    .put("originalTitle", item.originalTitle)
+    .put("videoCodec", item.videoCodec)
+    .put("audioCodec", item.audioCodec)
+    .put("tvdbId", item.tvdbId)
+    .put("width", item.width)
+    .put("height", item.height)
+    .put("posterPath", item.posterPath)
+    .put("backdropPath", item.backdropPath)
+    .put("tagline", item.tagline)
+    .put("officialRating", item.officialRating)
+    .put("tags", item.tags)
+    .put("studios", item.studios)
+    .put("directors", item.directors)
+    .put("writers", item.writers)
+    .put("countries", item.countries)
+    .put("premiered", item.premiered)
+    .put("actors", JSONArray().apply {
+        item.actors.forEach { actor -> put(JSONObject().put("name", actor.name).put("role", actor.role).put("thumb", actor.thumb)) }
+    })
 
 private fun jsonToShow(o: JSONObject): ShowSummary = ShowSummary(
     o.getString("libraryId"),

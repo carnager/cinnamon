@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
@@ -59,6 +60,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -88,6 +90,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 
 private fun railAlphabetLetter(title: String): String {
     val ch = title.withoutLeadingArticleForRail().firstOrNull() ?: return "#"
@@ -1360,7 +1363,7 @@ private fun AvatarButton(url: String, session: Session?, selected: Boolean, focu
     }
 }
 
-private enum class UserMenuPage { Root, Audio, Subtitles }
+private enum class UserMenuPage { Root, Audio, Subtitles, PhoneLogin }
 
 data class UserDrawerEntry(
     val label: String,
@@ -1389,9 +1392,13 @@ private fun UserMenuDrawer(
         PlaybackPrefs.TRACK_DEFAULT to "Track default",
     ) + prefLanguageChoices
     val firstFocus = remember { FocusRequester() }
+    var phoneQrPayload by remember { mutableStateOf("") }
+    var phoneQrError by remember { mutableStateOf("") }
+    var phoneQrRefresh by remember { mutableIntStateOf(0) }
     val entries = when (page) {
         UserMenuPage.Root -> buildList {
             add(UserDrawerEntry("Watch history", Icons.Filled.History, action = onHistory))
+            add(UserDrawerEntry("Sign in a phone", Icons.Filled.QrCode2, "QR code", action = { onPage(UserMenuPage.PhoneLogin) }))
             add(UserDrawerEntry("Preferred audio", Icons.AutoMirrored.Filled.VolumeUp, audioOptions.firstOrNull { it.first == PlaybackPrefs.audioLang }?.second.orEmpty(), action = { onPage(UserMenuPage.Audio) }))
             add(UserDrawerEntry("Preferred subtitles", Icons.Filled.Subtitles, subtitleOptions.firstOrNull { it.first == PlaybackPrefs.subtitleLang }?.second.orEmpty(), action = { onPage(UserMenuPage.Subtitles) }))
             if (session?.isAdmin == true) add(UserDrawerEntry("Update libraries", Icons.Filled.Refresh, action = onScan))
@@ -1412,11 +1419,29 @@ private fun UserMenuDrawer(
                     onPage(UserMenuPage.Root)
                 }
             }
+        UserMenuPage.PhoneLogin -> emptyList()
+    }
+
+    LaunchedEffect(page, phoneQrRefresh, session?.token) {
+        if (page != UserMenuPage.PhoneLogin || session == null) return@LaunchedEffect
+        phoneQrPayload = ""
+        phoneQrError = ""
+        runCatching {
+            val api = Api(session)
+            val started = api.startQrLogin("Cinnamon Android")
+            api.approveQrLogin(started.code)
+            JSONObject()
+                .put("type", "popcorn-login")
+                .put("server", session.server.trimEnd('/'))
+                .put("code", started.code)
+                .toString()
+        }.onSuccess { phoneQrPayload = it }
+            .onFailure { phoneQrError = it.message ?: "Could not create phone sign-in code" }
     }
     BackHandler {
         if (page == UserMenuPage.Root) onClose() else onPage(UserMenuPage.Root)
     }
-    LaunchedEffect(page, entries.size) {
+    LaunchedEffect(page, entries.size, phoneQrPayload, phoneQrError) {
         delay(45)
         runCatching { firstFocus.requestFocus() }
     }
@@ -1444,6 +1469,7 @@ private fun UserMenuDrawer(
                         UserMenuPage.Root -> "USER MENU"
                         UserMenuPage.Audio -> "PREFERRED AUDIO"
                         UserMenuPage.Subtitles -> "PREFERRED SUBTITLES"
+                        UserMenuPage.PhoneLogin -> "SIGN IN A PHONE"
                     },
                     color = Accent,
                     fontSize = 10.sp,
@@ -1451,7 +1477,11 @@ private fun UserMenuDrawer(
                 )
                 Spacer(Modifier.height(7.dp))
                 Text(
-                    if (page == UserMenuPage.Root) session.userDisplayName() else "Playback languages",
+                    when (page) {
+                        UserMenuPage.Root -> session.userDisplayName()
+                        UserMenuPage.PhoneLogin -> "Cinnamon Android"
+                        else -> "Playback languages"
+                    },
                     color = TextColor,
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Black,
@@ -1459,15 +1489,46 @@ private fun UserMenuDrawer(
                     overflow = TextOverflow.Ellipsis,
                 )
                 Spacer(Modifier.height(18.dp))
-                LazyColumn(
-                    Modifier.fillMaxWidth().weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    itemsIndexed(entries) { index, entry ->
+                if (page == UserMenuPage.PhoneLogin) {
+                    Column(
+                        Modifier.fillMaxWidth().weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        if (phoneQrPayload.isNotBlank()) {
+                            QRCode(phoneQrPayload, Modifier.size(218.dp))
+                            Text("Scan this code from the signed-out Cinnamon Android app.", color = TextColor, fontSize = 12.sp, lineHeight = 17.sp, textAlign = TextAlign.Center)
+                            Text("The code signs the phone in as ${session.userDisplayName()}, expires in ten minutes, and works once.", color = Muted, fontSize = 11.sp, lineHeight = 16.sp, textAlign = TextAlign.Center)
+                        } else if (phoneQrError.isBlank()) {
+                            Box(Modifier.size(218.dp).clip(RoundedCornerShape(8.dp)).background(Surface2), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+                            }
+                            Text("Creating a secure sign-in code…", color = Muted, fontSize = 12.sp)
+                        } else {
+                            Box(Modifier.size(218.dp).clip(RoundedCornerShape(8.dp)).background(Surface2).padding(20.dp), contentAlignment = Alignment.Center) {
+                                Text(phoneQrError, color = ErrorRed, fontSize = 12.sp, textAlign = TextAlign.Center)
+                            }
+                        }
+                        Spacer(Modifier.weight(1f))
                         UserDrawerAction(
-                            entry = entry,
-                            modifier = if (index == 0) Modifier.focusRequester(firstFocus) else Modifier,
+                            UserDrawerEntry("Create a new code", Icons.Filled.Refresh) { phoneQrRefresh++ },
                         )
+                        UserDrawerAction(
+                            UserDrawerEntry("Back", Icons.AutoMirrored.Filled.ArrowBack) { onPage(UserMenuPage.Root) },
+                            Modifier.focusRequester(firstFocus),
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        Modifier.fillMaxWidth().weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        itemsIndexed(entries) { index, entry ->
+                            UserDrawerAction(
+                                entry = entry,
+                                modifier = if (index == 0) Modifier.focusRequester(firstFocus) else Modifier,
+                            )
+                        }
                     }
                 }
             }

@@ -144,3 +144,73 @@ WHERE code = ? AND completed_at IS NULL`, user.ID, token, code)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "approved"})
 }
+
+// authQRClaim exchanges a pre-approved QR code for its session exactly once.
+// It is intentionally public: possession of the short-lived, high-entropy
+// code is the credential. The authenticated TV approves the code before it is
+// displayed, then the signed-out phone claims it after scanning.
+func (a *App) authQRClaim(w http.ResponseWriter, r *http.Request) {
+	if a.auth == nil {
+		http.Error(w, "auth unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var in struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	code := strings.TrimSpace(in.Code)
+	if code == "" {
+		http.Error(w, "code is required", http.StatusBadRequest)
+		return
+	}
+
+	var token sql.NullString
+	var userID sql.NullInt64
+	var expiresAt string
+	err := a.store.DB().QueryRowContext(r.Context(), `
+SELECT token, user_id, expires_at
+FROM auth_qr_codes
+WHERE code = ?`, code).Scan(&token, &userID, &expiresAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "invalid qr code", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if expiresAt <= time.Now().UTC().Format(time.RFC3339) {
+		_, _ = a.store.DB().ExecContext(r.Context(), `DELETE FROM auth_qr_codes WHERE code = ?`, code)
+		if token.Valid && token.String != "" {
+			_ = a.auth.DeleteSession(r.Context(), token.String)
+		}
+		http.Error(w, "qr code expired", http.StatusGone)
+		return
+	}
+	if !token.Valid || token.String == "" || !userID.Valid {
+		http.Error(w, "qr code is waiting for approval", http.StatusConflict)
+		return
+	}
+
+	// Only the caller that removes the row gets the session. Concurrent or
+	// repeated claims fail without leaking the same bearer token twice.
+	res, err := a.store.DB().ExecContext(r.Context(), `DELETE FROM auth_qr_codes WHERE code = ? AND token = ?`, code, token.String)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if rows, _ := res.RowsAffected(); rows != 1 {
+		http.Error(w, "qr code already claimed", http.StatusConflict)
+		return
+	}
+	user, err := a.auth.User(r.Context(), userID.Int64)
+	if err != nil {
+		_ = a.auth.DeleteSession(r.Context(), token.String)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "approved", "token": token.String, "user": user})
+}

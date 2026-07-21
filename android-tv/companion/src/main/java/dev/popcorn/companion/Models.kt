@@ -1,12 +1,31 @@
 package dev.popcorn.companion
 
-data class Session(val server: String, val token: String, val username: String = "")
+data class Session(
+    val server: String,
+    val token: String,
+    val username: String = "",
+    val isAdmin: Boolean = false,
+    val userId: Long = 0,
+    val avatar: String = "",
+    val displayName: String = "",
+)
 data class Library(val id: String, val name: String, val type: String)
 data class Device(val id: String, val name: String, val kind: String)
 data class PlayerState(val itemId: Long, val title: String, val state: String, val positionMs: Long, val durationMs: Long)
 data class PlaybackProgress(val itemId: Long, val positionMs: Long, val durationMs: Long, val completed: Boolean)
 data class ShowProgress(val libraryId: String, val showTitle: String, val episodeCount: Int, val completedCount: Int, val completed: Boolean)
 data class Watchlist(val items: List<PopItem>, val shows: List<ShowSummary>)
+data class WatchHistoryEntry(
+    val id: String,
+    val item: PopItem?,
+    val kind: String,
+    val title: String,
+    val subtitle: String,
+    val year: Int,
+    val watchedAt: String,
+    val source: String,
+)
+data class WatchHistory(val items: List<WatchHistoryEntry>, val source: String, val traktLinked: Boolean)
 data class HomeContinue(val movies: List<PopItem>, val episodes: List<PopItem>, val resume: Map<Long, Float>)
 data class AppUpdateInfo(
     val configured: Boolean,
@@ -68,9 +87,38 @@ data class PopItem(
     val episodeNumber: Int,
     val episodeTitle: String,
     val actors: List<Actor> = emptyList(),
+    val originalTitle: String = "",
+    val videoCodec: String = "",
+    val audioCodec: String = "",
+    val tvdbId: String = "",
+    val width: Int = 0,
+    val height: Int = 0,
+    val posterPath: String = "",
+    val backdropPath: String = "",
+    val tagline: String = "",
+    val officialRating: String = "",
+    val tags: String = "",
+    val studios: String = "",
+    val directors: String = "",
+    val writers: String = "",
+    val countries: String = "",
+    val premiered: String = "",
 )
 
 data class Actor(val name: String, val role: String, val thumb: String)
+data class ActorInfo(
+    val biography: String,
+    val birthday: String,
+    val placeOfBirth: String,
+    val knownForDepartment: String,
+)
+data class ActorDetail(
+    val actor: Actor,
+    val info: ActorInfo,
+    val profileUrl: String,
+    val movies: List<PopItem>,
+    val shows: List<ShowSummary>,
+)
 data class SidecarStatus(val trailer: Boolean = false, val theme: Boolean = false)
 
 data class ShowSummary(
@@ -100,6 +148,14 @@ data class LibraryFilters(
     val genre: String = "",
     val minRating: Double = 0.0,
     val sort: String = "",
+    val seenStatus: String = "",
+    val decades: String = "",
+)
+
+data class AlphabetEntry(
+    val letter: String,
+    val offset: Int,
+    val count: Int,
 )
 
 data class ExternalRatings(
@@ -159,6 +215,8 @@ sealed interface Page {
     data object Shows : Page
     data object Search : Page
     data object Remote : Page
+    data object History : Page
+    data class Person(val actor: Actor) : Page
     data class Show(val show: ShowSummary) : Page
     data class Season(val show: ShowSummary, val season: SeasonSummary) : Page
     data class Detail(val item: PopItem, val from: Page) : Page

@@ -45,6 +45,25 @@ func TestPlaybackPlanAudioOnlyTranscodeForUnsupportedAudio(t *testing.T) {
 	}
 }
 
+func TestPlaybackPlanHLSSeekTranscodesVideoForSynchronizedStart(t *testing.T) {
+	profile := testAndroidProfile("mp4", "h264", "aac", nil)
+	streams := []media.MediaStream{
+		testVideo(0, "h264", 1920, 1080, "sdr", 7_500_000),
+		testAudio(1, "aac", 2, 192_000),
+	}
+	initial := testPlan(testItem("mkv", 8_000_000), profile, streams, PlaybackPlanRequest{})
+	if initial.Mode != planModeRemux {
+		t.Fatalf("initial mode = %s reasons=%v, want remux", initial.Mode, initial.Reasons)
+	}
+	seek := testPlan(testItem("mkv", 8_000_000), profile, streams, PlaybackPlanRequest{StartPositionMS: 13_000})
+	if seek.Mode != planModeFullTranscode {
+		t.Fatalf("seek mode = %s reasons=%v, want full-transcode", seek.Mode, seek.Reasons)
+	}
+	if seek.Outputs.Video.Codec != "h264" || seek.Outputs.Audio.Codec != "aac" {
+		t.Fatalf("seek outputs = %+v, want decoded h264/aac", seek.Outputs)
+	}
+}
+
 func TestPlaybackPlanBitrateCapForcesFullTranscode(t *testing.T) {
 	cap := 8000
 	plan := testPlan(testItem("mkv", 40_000_000), testAndroidProfile("mkv", "hevc", "eac3", []string{"hdr10"}), []media.MediaStream{
@@ -131,6 +150,26 @@ func TestHLSPlanArgsRemuxCopiesVideoAndAudio(t *testing.T) {
 	args := hlsPlanArgs(config.Config{}, "/media/movie.mkv", "/tmp/seg_%05d.m4s", "/tmp/index.m3u8", plan)
 	if !containsPair(args, "-c:v", "copy") || !containsPair(args, "-c:a", "copy") {
 		t.Fatalf("args = %v, want copy remux", args)
+	}
+}
+
+func TestHLSPlanArgsCopiedVideoAvoidsDesynchronizingOutputSeek(t *testing.T) {
+	audio := 1
+	plan := PlaybackPlan{
+		StartPositionMS: 13_000,
+		Selected:        PlaybackSelection{VideoIndex: 0, AudioIndex: &audio},
+		Outputs: PlaybackOutputs{
+			Video: PlaybackOutputStream{Codec: "copy"},
+			Audio: PlaybackOutputStream{Codec: "copy"},
+		},
+	}
+	args := hlsPlanArgs(config.Config{}, "/media/movie.mkv", "/tmp/seg_%05d.m4s", "/tmp/index.m3u8", plan)
+	input := indexOf(args, "-i")
+	if input < 2 || args[input-2] != "-ss" || args[input-1] != "13.000" {
+		t.Fatalf("args = %v, want input seek at 13.000", args)
+	}
+	if contains(args[input+1:], "-ss") {
+		t.Fatalf("args = %v, copied video must not use a desynchronizing output seek", args)
 	}
 }
 

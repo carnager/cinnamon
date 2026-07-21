@@ -701,7 +701,7 @@ func hlsPlanArgs(cfg config.Config, input, segmentPattern, playlist string, plan
 		audioRate = plan.Outputs.Audio.BitrateKbps
 	}
 	args := []string{"-hide_banner", "-loglevel", "warning"}
-	inputSeek, outputSeek := transcodeSeekArgs(start)
+	inputSeek, outputSeek := hlsPlanSeekArgs(start, plan.Outputs.Video.Codec)
 	args = append(args, inputSeek...)
 	if plan.Outputs.Video.Codec != "copy" {
 		args = append(args, hwInputArgs(cfg.HWAccel, plan.Item.VideoCodec)...)
@@ -760,6 +760,20 @@ func hlsPlanArgs(cfg config.Config, input, segmentPattern, playlist string, plan
 		playlist,
 	)
 	return args
+}
+
+// hlsPlanSeekArgs is a defensive fallback for old or persisted plans. Current
+// planning transcodes video for non-zero HLS starts, but if a copied-video plan
+// reaches the runner it must seek only at the input. Accurate output seeking
+// drops video until the next keyframe while audio starts immediately.
+func hlsPlanSeekArgs(start float64, videoCodec string) ([]string, []string) {
+	if start <= 0 {
+		return nil, nil
+	}
+	if videoCodec == "copy" {
+		return []string{"-ss", strconv.FormatFloat(start, 'f', 3, 64)}, nil
+	}
+	return transcodeSeekArgs(start)
 }
 
 func completeHLSOutputArgs(args []string, segmentPattern, playlist string) []string {

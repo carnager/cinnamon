@@ -252,6 +252,14 @@ func (a *App) buildPlaybackPlan(userID int64, item media.Item, streams []media.M
 		return a.finishDirectPlan(plan, item, video, audio, subtitle)
 	}
 	plan.Reasons = append(plan.Reasons, incompatibilityReasons(item, req.Profile, video, audio, subtitle, containerOK, videoOK, audioOK, subtitleOK, bitrateExceeded)...)
+	// An exact non-zero HLS start cannot copy video safely. FFmpeg's accurate
+	// output seek starts audio at the requested timestamp, but copied video must
+	// wait for the next keyframe, leaving the streams several seconds apart.
+	// Decode video for seek/resume sessions so both tracks begin at timestamp 0.
+	if req.StartPositionMS > 0 {
+		plan.Reasons = append(plan.Reasons, "non-zero HLS start requires video transcode to keep audio and video synchronized")
+		return a.finishHLSPlan(plan, item, req.Profile, planModeFullTranscode, "h264", "aac", subtitleOutputCodec(subtitle), audioRate)
+	}
 	if force == "remux" {
 		if req.Profile.Protocols.HLSFMP4 && canCopyVideoToHLS(video) && (audio == nil || canCopyAudioToHLS(*audio)) && !bitrateExceeded {
 			return a.finishHLSPlan(plan, item, req.Profile, planModeRemux, "copy", "copy", subtitleOutputCodec(subtitle), audioRate)

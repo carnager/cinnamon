@@ -29,6 +29,7 @@ type SearchOptions struct {
 	UserID         int64
 	NameStartsWith string
 	TitleOnly      bool
+	SearchFields   string
 	MinRating      float64
 	Limit          int
 	Offset         int
@@ -43,6 +44,7 @@ type ShowOptions struct {
 	SeenStatus     string
 	UserID         int64
 	NameStartsWith string
+	SearchFields   string
 	MinRating      float64
 	Limit          int
 	Offset         int
@@ -867,34 +869,42 @@ func (s *Store) searchItems(ctx context.Context, opts SearchOptions) ([]Item, er
 	// "Lets Dance" matches "Let's Dance". The empty-query guard still tests the
 	// raw query so a query that is only punctuation isn't treated as empty.
 	nq := database.SearchNormalize(q)
-	textWhere := `AND (
-	? = ''
-	OR searchnorm(title) LIKE '%' || ? || '%'
-	OR searchnorm(sort_title) LIKE '%' || ? || '%'
-	OR searchnorm(original_title) LIKE '%' || ? || '%'
-	OR searchnorm(show_title) LIKE '%' || ? || '%'
-	OR searchnorm(episode_title) LIKE '%' || ? || '%'
-	OR searchnorm(overview) LIKE '%' || ? || '%'
-	OR searchnorm(genres) LIKE '%' || ? || '%'
-	OR CAST(year AS TEXT) = ?
-	OR EXISTS (
+	fields := normalizedSearchFields(opts.SearchFields)
+	if opts.TitleOnly {
+		fields = map[string]bool{"title": true, "original": true}
+	}
+	textParts := []string{"? = ''"}
+	textArgs := []any{q}
+	if fields["title"] {
+		textParts = append(textParts,
+			"searchnorm(title) LIKE '%' || ? || '%'",
+			"searchnorm(sort_title) LIKE '%' || ? || '%'",
+			"searchnorm(show_title) LIKE '%' || ? || '%'",
+			"searchnorm(episode_title) LIKE '%' || ? || '%'",
+		)
+		textArgs = append(textArgs, nq, nq, nq, nq)
+	}
+	if fields["original"] {
+		textParts = append(textParts, "searchnorm(original_title) LIKE '%' || ? || '%'")
+		textArgs = append(textArgs, nq)
+	}
+	if fields["description"] {
+		textParts = append(textParts,
+			"searchnorm(overview) LIKE '%' || ? || '%'",
+			"searchnorm(tagline) LIKE '%' || ? || '%'",
+		)
+		textArgs = append(textArgs, nq, nq)
+	}
+	if fields["people"] {
+		textParts = append(textParts, `EXISTS (
 		SELECT 1 FROM media_actors ma
 		WHERE ma.scope = 'item'
 		AND ma.item_id = media_items.id
 		AND searchnorm(ma.name) LIKE '%' || ? || '%'
-	)
-)`
-	textArgs := []any{q, nq, nq, nq, nq, nq, nq, nq, q, nq}
-	if opts.TitleOnly {
-		textWhere = `AND (
-	? = ''
-	OR searchnorm(title) LIKE '%' || ? || '%'
-	OR searchnorm(sort_title) LIKE '%' || ? || '%'
-	OR searchnorm(original_title) LIKE '%' || ? || '%'
-	OR CAST(year AS TEXT) = ?
-)`
-		textArgs = []any{q, nq, nq, nq, q}
+	)`)
+		textArgs = append(textArgs, nq)
 	}
+	textWhere := "AND (\n\t" + strings.Join(textParts, "\n\tOR ") + "\n)"
 	query := itemSelect + `
 FROM media_items
 WHERE (? = '' OR library_id = ?)
@@ -1000,6 +1010,23 @@ func normalizedSeenStatus(status string) string {
 	default:
 		return ""
 	}
+}
+
+func normalizedSearchFields(value string) map[string]bool {
+	fields := map[string]bool{}
+	if strings.TrimSpace(value) == "" {
+		return map[string]bool{"title": true, "original": true, "people": true, "description": true}
+	}
+	for _, field := range strings.FieldsFunc(strings.ToLower(value), func(r rune) bool { return r == ',' || r == '|' }) {
+		switch strings.TrimSpace(field) {
+		case "title", "original", "people", "description":
+			fields[strings.TrimSpace(field)] = true
+		}
+	}
+	if len(fields) == 0 {
+		fields["title"] = true
+	}
+	return fields
 }
 
 func splitFilterList(value string) []string {
@@ -1290,17 +1317,22 @@ func (s *Store) ListShows(ctx context.Context, libraryID, q, genre, sort string,
 }
 
 func (s *Store) ListShowsForUser(ctx context.Context, libraryID, q, genre, decades, sort, seenStatus string, userID int64, minRating float64, limit, offset int) ([]ShowSummary, error) {
+	return s.ListShowsForUserWithFields(ctx, libraryID, q, genre, decades, sort, seenStatus, userID, minRating, "", limit, offset)
+}
+
+func (s *Store) ListShowsForUserWithFields(ctx context.Context, libraryID, q, genre, decades, sort, seenStatus string, userID int64, minRating float64, searchFields string, limit, offset int) ([]ShowSummary, error) {
 	return s.SearchShows(ctx, ShowOptions{
-		Query:      q,
-		LibraryID:  libraryID,
-		Genre:      genre,
-		Decades:    decades,
-		Sort:       sort,
-		SeenStatus: seenStatus,
-		UserID:     userID,
-		MinRating:  minRating,
-		Limit:      limit,
-		Offset:     offset,
+		Query:        q,
+		LibraryID:    libraryID,
+		Genre:        genre,
+		Decades:      decades,
+		Sort:         sort,
+		SeenStatus:   seenStatus,
+		UserID:       userID,
+		MinRating:    minRating,
+		SearchFields: searchFields,
+		Limit:        limit,
+		Offset:       offset,
 	})
 }
 
@@ -1323,6 +1355,40 @@ func (s *Store) SearchShows(ctx context.Context, opts ShowOptions) ([]ShowSummar
 	if limit > 1000 {
 		limit = 1000
 	}
+	fields := normalizedSearchFields(opts.SearchFields)
+	textParts := []string{"? = ''"}
+	textArgs := []any{q}
+	if fields["title"] {
+		textParts = append(textParts, "searchnorm(mi.show_title) LIKE '%' || ? || '%'")
+		textArgs = append(textArgs, nq)
+	}
+	if fields["original"] {
+		textParts = append(textParts,
+			"searchnorm(mi.original_title) LIKE '%' || ? || '%'",
+			"searchnorm(ms.original_title) LIKE '%' || ? || '%'",
+		)
+		textArgs = append(textArgs, nq, nq)
+	}
+	if fields["description"] {
+		textParts = append(textParts,
+			"searchnorm(ms.overview) LIKE '%' || ? || '%'",
+			"searchnorm(mi.overview) LIKE '%' || ? || '%'",
+		)
+		textArgs = append(textArgs, nq, nq)
+	}
+	if fields["people"] {
+		textParts = append(textParts, `EXISTS (
+		SELECT 1 FROM media_actors ma
+		WHERE searchnorm(ma.name) LIKE '%' || ? || '%'
+		AND (
+			(ma.scope = 'show' AND ma.library_id = mi.library_id AND ma.show_title = mi.show_title)
+			OR (ma.scope = 'season' AND ma.library_id = mi.library_id AND ma.show_title = mi.show_title)
+			OR (ma.scope = 'item' AND ma.item_id = mi.id)
+		)
+	)`)
+		textArgs = append(textArgs, nq)
+	}
+	textWhere := "AND (\n\t" + strings.Join(textParts, "\n\tOR ") + "\n)"
 	orderBy := "ORDER BY sort_title"
 	switch normalizedSort(opts.Sort) {
 	case "title_desc":
@@ -1405,26 +1471,12 @@ AND (
 	OR (? = '#' AND LOWER(COALESCE(NULLIF(ms.sort_title, ''), mi.show_title, '')) NOT GLOB '[a-z]*')
 	OR (? != '#' AND LOWER(COALESCE(NULLIF(ms.sort_title, ''), mi.show_title, '')) LIKE LOWER(?) || '%')
 )
-AND (
-	? = ''
-	OR searchnorm(mi.show_title) LIKE '%' || ? || '%'
-	OR searchnorm(mi.original_title) LIKE '%' || ? || '%'
-	OR searchnorm(ms.original_title) LIKE '%' || ? || '%'
-	OR EXISTS (
-		SELECT 1 FROM media_actors ma
-		WHERE searchnorm(ma.name) LIKE '%' || ? || '%'
-		AND (
-			(ma.scope = 'show' AND ma.library_id = mi.library_id AND ma.show_title = mi.show_title)
-			OR (ma.scope = 'season' AND ma.library_id = mi.library_id AND ma.show_title = mi.show_title)
-			OR (ma.scope = 'item' AND ma.item_id = mi.id)
-		)
-	)
-)
+`+textWhere+`
 GROUP BY mi.library_id, mi.show_title
 HAVING (? <= 0 OR COALESCE(ms.rating, MAX(mi.rating), 0) >= ?)
 `+decadeHaving+`
 `+orderBy+`
-LIMIT ? OFFSET ?`, append(append([]any{libraryID, libraryID}, genreArgs...), seenStatus, seenStatus, userID, userID, seenStatus, userID, userID, seenStatus, userID, userID, userID, nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith, q, nq, nq, nq, nq, opts.MinRating, opts.MinRating, limit, offset)...)
+LIMIT ? OFFSET ?`, append(append(append([]any{libraryID, libraryID}, genreArgs...), seenStatus, seenStatus, userID, userID, seenStatus, userID, userID, seenStatus, userID, userID, userID, nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith), append(textArgs, opts.MinRating, opts.MinRating, limit, offset)...)...)
 	if err != nil {
 		return nil, err
 	}

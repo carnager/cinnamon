@@ -32,7 +32,15 @@ val BandwidthOptions = listOf(
     BandwidthOption("15 mbit", 15000),
 )
 
-data class Session(val server: String, val token: String, val username: String = "", val isAdmin: Boolean = false, val userId: Long = 0, val avatar: String = "")
+data class Session(
+    val server: String,
+    val token: String,
+    val username: String = "",
+    val isAdmin: Boolean = false,
+    val userId: Long = 0,
+    val avatar: String = "",
+    val displayName: String = "",
+)
 data class User(val id: Long, val username: String, val displayName: String, val isAdmin: Boolean, val avatar: String = "")
 data class Library(val id: String, val name: String, val type: String)
 
@@ -106,6 +114,17 @@ data class SeasonSummary(
 data class PlaybackProgress(val itemId: Long, val positionMs: Long, val durationMs: Long, val completed: Boolean)
 data class ShowProgress(val libraryId: String, val showTitle: String, val episodeCount: Int, val completedCount: Int, val completed: Boolean)
 data class Watchlist(val items: List<PopItem>, val shows: List<ShowSummary>)
+data class WatchHistoryEntry(
+    val id: String,
+    val item: PopItem?,
+    val kind: String,
+    val title: String,
+    val subtitle: String,
+    val year: Int,
+    val watchedAt: String,
+    val source: String,
+)
+data class WatchHistory(val items: List<WatchHistoryEntry>, val source: String, val traktLinked: Boolean)
 data class UserRatingRow(val kind: String, val itemId: Long, val libraryId: String, val showTitle: String, val rating: Int)
 data class HomePayload(
     val user: User,
@@ -216,13 +235,14 @@ sealed interface Screen {
     data object Login : Screen
     data object Home : Screen
     data object Watchlist : Screen
+    data object History : Screen
     data object Updates : Screen
     data class LibraryPage(val library: Library) : Screen
     data class ItemShelf(val title: String, val items: List<PopItem>, val returnTo: Screen? = null) : Screen
     data object Search : Screen
     data class Show(val show: ShowSummary, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null) : Screen
     data class Season(val show: ShowSummary, val season: SeasonSummary, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null) : Screen
-    data class Detail(val item: PopItem, val fromShow: ShowSummary?, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null) : Screen
+    data class Detail(val item: PopItem, val fromShow: ShowSummary?, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromHistory: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null) : Screen
     data class Actor(val actor: dev.popcorn.tv.Actor) : Screen
     data class Player(val item: PopItem, val audioIndex: Int?, val subtitleIndex: Int?, val startPositionMs: Long = 0L) : Screen
     data class SidecarPlayer(val url: String, val title: String, val returnScreen: Screen) : Screen

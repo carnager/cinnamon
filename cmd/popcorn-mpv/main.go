@@ -378,7 +378,9 @@ func (a *app) play(ctx context.Context, itemID int64) error {
 
 	durationMS := firstPositive(prog.DurationMS, it.DurationMS)
 	positionMS := prog.PositionMS
-	_ = a.saveProgress(ctx, itemID, positionMS, durationMS, "start", false)
+	continuousMS := int64(0)
+	lastEvidencePositionMS := positionMS
+	_ = a.saveProgress(ctx, itemID, positionMS, durationMS, "start", false, continuousMS)
 
 	args := []string{
 		"--force-media-title=" + displayTitle(it),
@@ -436,11 +438,12 @@ func (a *app) play(ctx context.Context, itemID int64) error {
 			if completed && durationMS > 0 && endReason == "eof" {
 				positionMS = durationMS
 			}
-			_ = a.saveProgress(ctx, itemID, positionMS, durationMS, "stop", completed)
+			_ = a.saveProgress(ctx, itemID, positionMS, durationMS, "stop", completed, continuousMS)
 			return err
 		case update := <-mpvUpdates:
 			applyUpdate(update)
 		case <-ticker.C:
+			previousPositionMS := lastEvidencePositionMS
 			pos, ok := mpvNumber(socketPath, "playback-time")
 			if ok {
 				positionMS = int64(pos * 1000)
@@ -450,7 +453,14 @@ func (a *app) play(ctx context.Context, itemID int64) error {
 				durationMS = int64(dur * 1000)
 			}
 			if positionMS > 0 {
-				_ = a.saveProgress(ctx, itemID, positionMS, durationMS, "play", false)
+				delta := positionMS - previousPositionMS
+				if delta >= 0 && delta <= 22_000 {
+					continuousMS += delta
+				} else {
+					continuousMS = 0
+				}
+				lastEvidencePositionMS = positionMS
+				_ = a.saveProgress(ctx, itemID, positionMS, durationMS, "play", false, continuousMS)
 			}
 		}
 	}
@@ -571,12 +581,13 @@ func (a *app) put(ctx context.Context, path string, in, out any) error {
 	return decodeResponse(resp, out)
 }
 
-func (a *app) saveProgress(ctx context.Context, itemID, positionMS, durationMS int64, state string, completed bool) error {
+func (a *app) saveProgress(ctx context.Context, itemID, positionMS, durationMS int64, state string, completed bool, continuousMS int64) error {
 	body := map[string]any{
-		"positionMs": positionMS,
-		"durationMs": durationMS,
-		"completed":  completed,
-		"state":      state,
+		"positionMs":   positionMS,
+		"durationMs":   durationMS,
+		"completed":    completed,
+		"state":        state,
+		"continuousMs": continuousMS,
 	}
 	var out progress
 	return a.put(ctx, fmt.Sprintf("/api/items/%d/progress", itemID), body, &out)

@@ -163,6 +163,13 @@ func TestQRLoginCompletionIsOneShot(t *testing.T) {
 		t.Fatalf("qr start body = %s, parse err %v", rec.Body.String(), err)
 	}
 
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/qr/claim", strings.NewReader(`{"code":"`+started.Code+`"}`))
+	rec = httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("unapproved qr claim = %d, want %d: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+
 	req = httptest.NewRequest(http.MethodPost, "/api/auth/qr/complete", strings.NewReader(`{"code":"`+started.Code+`"}`))
 	req.Header.Set("Authorization", "Bearer "+firstToken)
 	rec = httptest.NewRecorder()
@@ -177,6 +184,38 @@ func TestQRLoginCompletionIsOneShot(t *testing.T) {
 	app.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("second qr complete = %d, want %d: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+
+	// A signed-out client can claim the approved session once.
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/qr/claim", strings.NewReader(`{"code":"`+started.Code+`"}`))
+	rec = httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("qr claim = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var claimed struct {
+		Token string    `json:"token"`
+		User  auth.User `json:"user"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &claimed); err != nil {
+		t.Fatalf("parse qr claim: %v", err)
+	}
+	if claimed.Token == "" || claimed.User.ID != first.ID {
+		t.Fatalf("qr claim = %+v, want user %d and token", claimed, first.ID)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+claimed.Token)
+	rec = httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("claimed qr session = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/auth/qr/claim", strings.NewReader(`{"code":"`+started.Code+`"}`))
+	rec = httptest.NewRecorder()
+	app.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("second qr claim = %d, want %d: %s", rec.Code, http.StatusNotFound, rec.Body.String())
 	}
 }
 

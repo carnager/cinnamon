@@ -1,5 +1,12 @@
 package dev.popcorn.tv
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
@@ -27,7 +34,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -68,6 +77,8 @@ import java.util.Locale
 fun DetailView(
     item: PopItem,
     session: Session?,
+    libraries: List<Library>,
+    showUpdate: Boolean,
     watched: Boolean,
     watchlisted: Boolean,
     onPlay: (Int?, Int?, Long) -> Unit,
@@ -76,10 +87,14 @@ fun DetailView(
     onWatchlistChange: (Boolean) -> Unit,
     userRating: Int = 0,
     onRate: (Int) -> Unit = {},
-    onBack: () -> Unit,
     onHome: () -> Unit,
+    onLibrary: (Library) -> Unit,
     onSearch: () -> Unit,
     onWatchlist: () -> Unit,
+    onHistory: () -> Unit,
+    onUpdates: () -> Unit,
+    onScan: () -> Unit,
+    onLogout: () -> Unit,
     onActor: (Actor) -> Unit,
     onMoreLikeThis: (List<PopItem>) -> Unit,
 ) {
@@ -101,6 +116,7 @@ fun DetailView(
     val descriptionFocus = remember { FocusRequester() }
     val playFocus = remember { FocusRequester() }
     val castFocus = remember { FocusRequester() }
+    val navFocus = remember { FocusRequester() }
 
     LaunchedEffect(item.id) {
         detailItem = item
@@ -228,12 +244,35 @@ fun DetailView(
             )
         )
 
+        SideNavigation(
+            session = session,
+            libraries = libraries,
+            selected = item.libraryId,
+            showUpdate = showUpdate,
+            onHome = onHome,
+            onLibrary = onLibrary,
+            onWatchlist = onWatchlist,
+            onHistory = onHistory,
+            onSearch = onSearch,
+            onUpdates = onUpdates,
+            onScan = onScan,
+            onLogout = onLogout,
+            firstFocusRequester = navFocus,
+            onExit = { requestDetailFocus(playFocus) },
+        )
+
+        CinnamonBrand(
+            modifier = Modifier.align(Alignment.TopStart).padding(start = 26.dp, top = 24.dp),
+            markSize = 42,
+            fontSize = 21,
+        )
+
         Column(
             Modifier
                 .fillMaxSize()
-                .padding(start = 52.dp, end = 48.dp),
+                .padding(start = 116.dp, end = 34.dp),
         ) {
-            Spacer(Modifier.height(54.dp))
+            Spacer(Modifier.height(82.dp))
             DetailHeroContent(
                 session = session,
                 detailItem = detailItem,
@@ -364,12 +403,12 @@ private fun DetailHeroContent(
 ) {
     var resumeMenuOpen by remember { mutableStateOf(false) }
     Row(
-        Modifier.widthIn(max = 920.dp),
-        horizontalArrangement = Arrangement.spacedBy(28.dp),
+        Modifier.widthIn(max = 820.dp),
+        horizontalArrangement = Arrangement.spacedBy(24.dp),
         verticalAlignment = Alignment.Top,
     ) {
         if (detailItem.posterPath.isNotBlank() && session != null) {
-            Column(Modifier.width(140.dp)) {
+            Column(Modifier.width(134.dp)) {
                 SizedAsyncImage(
                     model = imageUrl(session, detailItem.id, "poster", detailItem.posterMtimeUnix),
                     contentDescription = null,
@@ -387,7 +426,7 @@ private fun DetailHeroContent(
                     Spacer(Modifier.height(8.dp))
                     Text(
                         genres.joinToString(", "),
-                        color = Accent.copy(alpha = .78f),
+                        color = Teal.copy(alpha = .86f),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
                         lineHeight = 15.sp,
@@ -398,7 +437,7 @@ private fun DetailHeroContent(
             }
         }
 
-        Column(Modifier.widthIn(max = 680.dp)) {
+        Column(Modifier.widthIn(max = 640.dp)) {
             Text(
                 displayTitle,
                 color = Color.White,
@@ -490,6 +529,7 @@ private fun DetailHeroContent(
                 )
                 ActionToggle(
                     label = "Trailer",
+                    icon = Icons.Filled.PlayCircleOutline,
                     active = false,
                     onUp = { requestDetailFocus(descriptionFocus) },
                     onDown = { requestDetailFocus(castFocus) },
@@ -497,6 +537,7 @@ private fun DetailHeroContent(
                 )
                 ActionIcon(
                     icon = Icons.Filled.CheckCircle,
+                    label = "Seen",
                     contentDescription = if (watched) "Seen" else "Mark seen",
                     active = watched,
                     onUp = { requestDetailFocus(descriptionFocus) },
@@ -505,18 +546,20 @@ private fun DetailHeroContent(
                 )
                 ActionIcon(
                     icon = Icons.Filled.Bookmark,
+                    label = "Watchlist",
                     contentDescription = if (watchlisted) "On watchlist" else "Add to watchlist",
                     active = watchlisted,
+                    activeTint = Teal,
                     onUp = { requestDetailFocus(descriptionFocus) },
                     onDown = { requestDetailFocus(castFocus) },
                     onClick = onWatchlistChange,
                 )
                 ActionIcon(
                     icon = Icons.Filled.Star,
+                    label = if (userRating > 0) "Rated $userRating" else "Rate",
                     contentDescription = if (userRating > 0) "Rated $userRating of 10" else "Rate",
                     active = userRating > 0,
                     activeTint = Gold,
-                    badge = userRating.takeIf { it > 0 }?.toString(),
                     onUp = { requestDetailFocus(descriptionFocus) },
                     onDown = { requestDetailFocus(castFocus) },
                     onClick = onRateMenu,
@@ -524,6 +567,7 @@ private fun DetailHeroContent(
                 if (showSimilar) {
                     ActionToggle(
                         label = "Similar",
+                        icon = Icons.Filled.Tune,
                         active = false,
                         onUp = { requestDetailFocus(descriptionFocus) },
                         onDown = { requestDetailFocus(castFocus) },
@@ -587,22 +631,22 @@ private fun PlayButton(
 ) {
     var focused by remember { mutableStateOf(false) }
     val bg = when {
-        focused -> Color.White
-        primary -> Accent
-        else -> Color.White.copy(alpha = .12f)
-    }
-    val contentColor = if (focused || primary) Color.Black else TextColor
-    val borderColor = when {
         focused -> Accent
+        primary -> AccentDim
+        else -> SurfaceColor
+    }
+    val contentColor = TextColor
+    val borderColor = when {
+        focused -> Color(0xFFFFA66A)
         primary -> Color.Transparent
-        else -> Color.White.copy(alpha = .22f)
+        else -> Color.Transparent
     }
     Row(
         Modifier
             .height(42.dp)
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(11.dp))
             .background(bg)
-            .border(2.dp, borderColor, RoundedCornerShape(6.dp))
+            .border(2.dp, borderColor, RoundedCornerShape(11.dp))
             .onFocusChanged {
                 focused = it.isFocused
                 if (it.isFocused) onFocus()
@@ -632,29 +676,35 @@ private fun PlayButton(
 @Composable
 private fun ActionToggle(
     label: String,
+    icon: ImageVector,
     active: Boolean,
     onUp: (() -> Boolean)? = null,
     onDown: (() -> Boolean)? = null,
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
-    val bg = when {
-        focused && active -> Accent.copy(alpha = .92f)
-        focused -> Color.White.copy(alpha = .16f)
-        active -> Accent.copy(alpha = .30f)
-        else -> Color.White.copy(alpha = .10f)
-    }
+    val buttonWidth by animateDpAsState(
+        targetValue = if (focused) 108.dp else 58.dp,
+        animationSpec = tween(durationMillis = 140),
+        label = "secondaryActionWidth",
+    )
+    val bg = Color.Transparent
     val borderColor = when {
-        focused -> Color.White.copy(alpha = .78f)
-        active -> Accent.copy(alpha = .50f)
-        else -> Color.White.copy(alpha = .18f)
+        focused -> Accent.copy(alpha = .95f)
+        else -> Color.Transparent
     }
-    Box(
+    val contentColor = when {
+        focused -> TextColor
+        active -> Accent
+        else -> TextColor.copy(alpha = .88f)
+    }
+    Row(
         Modifier
-            .height(42.dp)
-            .clip(RoundedCornerShape(999.dp))
+            .height(44.dp)
+            .width(buttonWidth)
+            .clip(RoundedCornerShape(13.dp))
             .background(bg)
-            .border(1.dp, borderColor, RoundedCornerShape(999.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(13.dp))
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .onPreviewKeyEvent {
@@ -665,54 +715,61 @@ private fun ActionToggle(
                 }
             }
             .tvActivate(onClick)
-            .padding(horizontal = 16.dp),
-        contentAlignment = Alignment.Center,
+            .padding(horizontal = 13.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
-        Text(
-            label,
-            color = if (focused && active) Color.Black else TextColor,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-        )
+        Icon(icon, contentDescription = null, tint = contentColor, modifier = Modifier.size(20.dp))
+        AnimatedVisibility(
+            visible = focused,
+            enter = expandHorizontally(animationSpec = tween(120)) + fadeIn(animationSpec = tween(90)),
+            exit = shrinkHorizontally(animationSpec = tween(120)) + fadeOut(animationSpec = tween(75)),
+        ) {
+            Text(
+                label,
+                color = contentColor,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+            )
+        }
     }
 }
 
 @Composable
 private fun ActionIcon(
     icon: ImageVector,
+    label: String,
     contentDescription: String,
     active: Boolean,
     activeTint: Color = Accent,
-    badge: String? = null,
     onUp: (() -> Boolean)? = null,
     onDown: (() -> Boolean)? = null,
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
-    val bg = when {
-        focused && active -> activeTint.copy(alpha = .92f)
-        focused -> Color.White.copy(alpha = .16f)
-        active -> activeTint.copy(alpha = .26f)
-        else -> Color.White.copy(alpha = .10f)
-    }
+    val buttonWidth by animateDpAsState(
+        targetValue = if (focused) 108.dp else 58.dp,
+        animationSpec = tween(durationMillis = 140),
+        label = "secondaryActionWidth",
+    )
+    val bg = Color.Transparent
     val borderColor = when {
-        focused -> Color.White.copy(alpha = .78f)
-        active -> activeTint.copy(alpha = .50f)
-        else -> Color.White.copy(alpha = .18f)
+        focused -> Accent.copy(alpha = .95f)
+        else -> Color.Transparent
     }
     val tint = when {
-        focused && active -> Color.Black
-        active -> activeTint
         focused -> TextColor
+        active -> activeTint
         else -> Muted
     }
     Row(
         Modifier
-            .height(42.dp)
-            .clip(RoundedCornerShape(999.dp))
+            .height(44.dp)
+            .width(buttonWidth)
+            .clip(RoundedCornerShape(13.dp))
             .background(bg)
-            .border(1.dp, borderColor, RoundedCornerShape(999.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(13.dp))
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .onPreviewKeyEvent {
@@ -723,13 +780,17 @@ private fun ActionIcon(
                 }
             }
             .tvActivate(onClick)
-            .padding(horizontal = 14.dp),
+            .padding(horizontal = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
         Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(20.dp))
-        if (badge != null) {
-            Text(badge, color = tint, fontSize = 13.sp, fontWeight = FontWeight.Black)
+        AnimatedVisibility(
+            visible = focused,
+            enter = expandHorizontally(animationSpec = tween(120)) + fadeIn(animationSpec = tween(90)),
+            exit = shrinkHorizontally(animationSpec = tween(120)) + fadeOut(animationSpec = tween(75)),
+        ) {
+            Text(label, color = tint, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
         }
     }
 }
@@ -752,8 +813,8 @@ private fun FocusableDescriptionPanel(
         Modifier
             .widthIn(max = 620.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(if (focused) Color.Black.copy(alpha = .48f) else Color.Black.copy(alpha = .22f))
-            .border(2.dp, if (focused) FocusGlow else Color.Transparent, RoundedCornerShape(8.dp))
+            .background(Color.Transparent)
+            .border(1.dp, if (focused) Accent.copy(alpha = .80f) else Color.Transparent, RoundedCornerShape(8.dp))
             .onFocusChanged {
                 focused = it.isFocused
                 if (it.isFocused) onFocus()
@@ -768,7 +829,7 @@ private fun FocusableDescriptionPanel(
                 }
             }
             .tvActivate(onClick)
-            .padding(horizontal = 14.dp, vertical = 9.dp),
+            .padding(horizontal = 6.dp, vertical = 7.dp),
     ) {
         if (hasOverview) {
             Text(
@@ -872,7 +933,7 @@ private fun TechChip(text: String) {
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier
             .clip(RoundedCornerShape(4.dp))
-            .background(Color.White.copy(alpha = .08f))
+            .border(1.dp, Color.White.copy(alpha = .14f), RoundedCornerShape(4.dp))
             .padding(horizontal = 8.dp, vertical = 4.dp),
     )
 }
@@ -898,8 +959,8 @@ private fun SelectorBadge(
             .height(28.dp)
             .widthIn(max = 180.dp)
             .clip(RoundedCornerShape(4.dp))
-            .background(if (focused) Color.White.copy(alpha = .20f) else Color.White.copy(alpha = .08f))
-            .border(1.dp, if (focused) FocusGlow else Color.White.copy(alpha = .10f), RoundedCornerShape(4.dp))
+            .background(Color.Transparent)
+            .border(1.dp, if (focused) Accent else Color.Transparent, RoundedCornerShape(4.dp))
             .onFocusChanged {
                 focused = it.isFocused
                 if (it.isFocused) onFocus()

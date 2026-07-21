@@ -4,6 +4,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.KeyEvent as AndroidKeyEvent
 import android.view.LayoutInflater
 import android.view.View
@@ -105,6 +106,8 @@ fun PlayerScreen(
     var pendingSeekTargetMs by remember(item.id) { mutableStateOf<Long?>(null) }
     var pendingSeekJob by remember(item.id) { mutableStateOf<Job?>(null) }
     var exitingPlayer by remember(item.id) { mutableStateOf(false) }
+    var continuousPlayedMs by remember(item.id) { mutableStateOf(0L) }
+    var playbackSampleAtMs by remember(item.id) { mutableStateOf(SystemClock.elapsedRealtime()) }
     val pressedSeekKeys = remember(item.id) { mutableMapOf<Int, Long>() }
     val originalStreams = remember { mutableStateListOf<StreamInfo>() }
     val playbackProfile = remember(context) { buildPlaybackProfile(context) }
@@ -297,15 +300,27 @@ fun PlayerScreen(
         return durationMs - positionMs <= 90_000 || positionMs.toDouble() / durationMs.toDouble() >= 0.92
     }
 
+    fun sampleProgressEvidence() {
+        val now = SystemClock.elapsedRealtime()
+        if (exoPlayer.isPlaying) continuousPlayedMs += (now - playbackSampleAtMs).coerceIn(0L, 12_000L)
+        playbackSampleAtMs = now
+    }
+
+    fun resetProgressEvidence() {
+        continuousPlayedMs = 0L
+        playbackSampleAtMs = SystemClock.elapsedRealtime()
+    }
+
     fun reportProgress(state: String, forceCompleted: Boolean = false) {
         val activeSession = session ?: return
+        sampleProgressEvidence()
         val duration = logicalDurationMs()
         if (duration <= 0) return
         val position = logicalPositionMs()
         val completed = forceCompleted || progressCompleted(position, duration)
         if (position < 5_000 && !completed) return
         reportScope.launch {
-            runCatching { Api(activeSession).saveProgress(item.id, position, duration, completed, state) }
+            runCatching { Api(activeSession).saveProgress(item.id, position, duration, completed, state, continuousPlayedMs) }
         }
     }
 
@@ -465,6 +480,7 @@ fun PlayerScreen(
     }
 
     fun seekToLogical(targetMs: Long, showController: Boolean = true) {
+        resetProgressEvidence()
         pendingSeekJob?.cancel()
         pendingSeekJob = null
         pendingSeekTargetMs = null
@@ -534,6 +550,7 @@ fun PlayerScreen(
             "pause" -> exoPlayer.pause()
             "resume" -> exoPlayer.play()
             "seek" -> {
+                resetProgressEvidence()
                 val target = command.payload.optLong("positionMs").coerceAtLeast(0)
                 if (planUsesHls) {
                     requestPlaybackPlan(selectedBandwidth, target, forceModeForBandwidth(selectedBandwidth))
@@ -785,9 +802,14 @@ fun PlayerScreen(
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                sampleProgressEvidence()
                 if (exoPlayer.playbackState == Player.STATE_READY) {
                     reportProgress(if (isPlaying) "playing" else "paused")
                 }
+            }
+
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                if (reason == Player.DISCONTINUITY_REASON_SEEK) resetProgressEvidence()
             }
 
             override fun onPlayerError(error: PlaybackException) {

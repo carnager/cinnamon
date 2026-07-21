@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -30,6 +31,10 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -67,6 +72,7 @@ fun <T> PosterGrid(
     entries: List<T>,
     key: (T) -> Any,
     initialFocusKey: Any? = null,
+    autoFocusOnEntry: Boolean = false,
     alphabetTitle: ((T) -> String)? = null,
     alphabetEntries: List<AlphabetEntry> = emptyList(),
     onAlphabet: ((AlphabetEntry) -> Unit)? = null,
@@ -119,7 +125,7 @@ fun <T> PosterGrid(
         ) {
             gridItemsIndexed(entries, key = { _, item -> key(item) }) { index, item ->
                 val focusRequester = remember { FocusRequester() }
-                val focusNow = initialFocusPending && targetKey != null && key(item) == targetKey
+                val focusNow = autoFocusOnEntry && initialFocusPending && targetKey != null && key(item) == targetKey
                 val column = index % columns
                 val firstRow = index < columns
                 val rightEdge = column == columns - 1 || index == entries.lastIndex
@@ -140,6 +146,7 @@ fun <T> PosterGrid(
                 focusRequester = alphabetFocusRequester,
                 requestedFocusLetter = selectedAlphabetLetter,
                 restoreFocus = restoreFocus,
+                availableHeight = maxHeight,
                 modifier = Modifier.align(Alignment.CenterEnd).padding(end = 10.dp),
             )
         }
@@ -167,12 +174,14 @@ private fun AlphabetRail(
     focusRequester: FocusRequester? = null,
     requestedFocusLetter: String? = null,
     restoreFocus: (() -> Boolean)? = null,
+    availableHeight: androidx.compose.ui.unit.Dp,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
     val letters = listOf("#") + ('A'..'Z').map { it.toString() }
     val firstEnabledLetter = letters.firstOrNull { index[it] != null }
     val focusLetter = requestedFocusLetter?.takeIf { index[it] != null } ?: firstEnabledLetter
+    val letterHeight = ((availableHeight - 6.dp) / letters.size).coerceAtMost(16.dp)
     Column(
         modifier
             .width(36.dp)
@@ -188,7 +197,7 @@ private fun AlphabetRail(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(16.dp)
+                    .height(letterHeight)
                     .then(if (letter == focusLetter && focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
                     .clip(RoundedCornerShape(6.dp))
                     .background(if (focused && target != null) Accent else Color.Transparent)
@@ -254,8 +263,7 @@ fun ShowCard(
         Box {
             Poster(session, show.posterItemId, Modifier.fillMaxWidth(), show.posterMtimeUnix)
             if (show.rating > 0) PosterRating(show.rating)
-            if (watched) SeenBadge()
-            if (watchlisted) WatchlistBadge()
+            PosterStatusBadges(watched, watchlisted)
         }
         Spacer(Modifier.height(5.dp))
         Text(show.title, color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -282,8 +290,7 @@ fun ItemCard(
         Box {
             Poster(session, item.id, Modifier.fillMaxWidth(), item.posterMtimeUnix)
             if (item.rating > 0) PosterRating(item.rating)
-            if (watched) SeenBadge()
-            if (watchlisted) WatchlistBadge()
+            PosterStatusBadges(watched, watchlisted)
             val progress = LocalResumeProgress.current[item.id] ?: 0f
             if (progress > 0f) PosterProgressBar(progress)
         }
@@ -300,7 +307,7 @@ fun ItemCard(
         if (item.kind == "movie" && item.genres.isNotBlank()) {
             Text(
                 item.genres.split(",", "/", "|").map { it.trim() }.filter { it.isNotBlank() }.take(2).joinToString(", "),
-                color = Accent.copy(alpha = .78f),
+                color = Teal.copy(alpha = .86f),
                 fontSize = 9.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -332,30 +339,46 @@ fun BoxScope.PosterProgressBar(fraction: Float) {
 }
 
 @Composable
-fun BoxScope.SeenBadge() {
-    Box(
+fun BoxScope.PosterStatusBadges(watched: Boolean, watchlisted: Boolean) {
+    if (!watched && !watchlisted) return
+    Column(
         Modifier
             .align(Alignment.TopStart)
-            .padding(5.dp)
-            .clip(RoundedCornerShape(4.dp))
-            .background(Accent.copy(alpha = .95f))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .padding(5.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text("Seen", color = Color.Black, fontSize = 9.sp, fontWeight = FontWeight.Black)
+        if (watched) PosterStateBadge(Icons.Filled.Check, "Seen", Accent, filled = true)
+        if (watchlisted) PosterStateBadge(Icons.Filled.Bookmark, "Watchlist", Teal)
     }
 }
 
 @Composable
-fun BoxScope.WatchlistBadge() {
+private fun PosterStateBadge(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    tint: Color,
+    filled: Boolean = false,
+) {
     Box(
         Modifier
-            .align(Alignment.TopEnd)
-            .padding(5.dp)
-            .clip(RoundedCornerShape(4.dp))
-            .background(Color.White.copy(alpha = .90f))
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .size(20.dp)
+            .then(
+                if (filled) {
+                    Modifier
+                        .clip(RoundedCornerShape(99.dp))
+                        .background(tint)
+                } else {
+                    Modifier
+                },
+            ),
+        contentAlignment = Alignment.Center,
     ) {
-        Text("List", color = Color.Black, fontSize = 9.sp, fontWeight = FontWeight.Black)
+        Icon(
+            icon,
+            contentDescription = description,
+            tint = if (filled) Bg else tint,
+            modifier = Modifier.size(if (filled) 13.dp else 17.dp),
+        )
     }
 }
 
@@ -443,8 +466,7 @@ fun EpisodeRow(session: Session?, item: PopItem, watched: Boolean = false, watch
                 color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(4.dp).background(Color.Black.copy(alpha = .7f), RoundedCornerShape(3.dp)).padding(horizontal = 4.dp, vertical = 1.dp),
             )
-            if (watched) SeenBadge()
-            if (watchlisted) WatchlistBadge()
+            PosterStatusBadges(watched, watchlisted)
         }
         Column(Modifier.weight(1f)) {
             Text(item.episodeTitle.ifBlank { item.title }, color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
@@ -468,116 +490,94 @@ fun EpisodeRow(session: Session?, item: PopItem, watched: Boolean = false, watch
 fun WatchActionOverlay(
     title: String,
     watched: Boolean,
-    watchlisted: Boolean,
+    watchlisted: Boolean?,
     onMarkWatched: () -> Unit,
     onMarkUnwatched: () -> Unit,
-    onAddWatchlist: () -> Unit,
-    onRemoveWatchlist: () -> Unit,
+    onAddWatchlist: (() -> Unit)?,
+    onRemoveWatchlist: (() -> Unit)?,
     onDismiss: () -> Unit,
 ) {
     val firstFocus = remember { FocusRequester() }
     val secondFocus = remember { FocusRequester() }
-    val cancelFocus = remember { FocusRequester() }
     BackHandler(onBack = onDismiss)
     LaunchedEffect(Unit) {
-        delay(80)
+        delay(40)
         firstFocus.requestFocus()
     }
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = .54f))
+            .background(Color.Black.copy(alpha = .32f))
             .onKeyEvent {
-                if (it.type == KeyEventType.KeyUp && it.key == Key.Back) {
-                    onDismiss()
-                    true
-                } else {
-                    false
-                }
+                it.type == KeyEventType.KeyDown && (it.key == Key.DirectionLeft || it.key == Key.DirectionRight)
             },
-        contentAlignment = Alignment.BottomCenter,
+        contentAlignment = Alignment.CenterEnd,
     ) {
         Column(
             Modifier
-                .padding(bottom = 48.dp)
-                .width(410.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(Color.Black.copy(alpha = .78f))
-                .border(1.dp, Color.White.copy(alpha = .18f), RoundedCornerShape(18.dp))
-                .padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+                .fillMaxHeight()
+                .width(356.dp)
+                .background(Bg.copy(alpha = .98f))
+                .border(1.dp, Color.White.copy(alpha = .10f))
+                .padding(horizontal = 28.dp, vertical = 42.dp),
+            verticalArrangement = Arrangement.Center,
         ) {
-            Text(title, color = TextColor, fontSize = 18.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                WatchStateChip(if (watched) "Seen" else "Unseen", active = watched)
-                WatchStateChip(if (watchlisted) "In watchlist" else "Not listed", active = watchlisted)
-            }
-            Spacer(Modifier.height(6.dp))
+            Text(if (watchlisted == null) "SEASON OPTIONS" else "QUICK ACTIONS", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black)
+            Spacer(Modifier.height(7.dp))
+            Text(title, color = TextColor, fontSize = 22.sp, lineHeight = 27.sp, fontWeight = FontWeight.Black, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(24.dp))
             WatchContextAction(
                 label = if (watched) "Mark as unwatched" else "Mark as watched",
-                primary = !watched,
+                icon = Icons.Filled.Check,
+                active = watched,
                 modifier = Modifier.focusRequester(firstFocus),
-                onUp = { firstFocus.requestFocus(); true },
+                onUp = {
+                    (if (watchlisted == null) firstFocus else secondFocus).requestFocus()
+                    true
+                },
+                onDown = {
+                    (if (watchlisted == null) firstFocus else secondFocus).requestFocus()
+                    true
+                },
                 onClick = if (watched) onMarkUnwatched else onMarkWatched,
             )
-            WatchContextAction(
-                label = if (watchlisted) "Remove from watchlist" else "Add to watchlist",
-                primary = !watchlisted,
-                modifier = Modifier.focusRequester(secondFocus),
-                onClick = if (watchlisted) onRemoveWatchlist else onAddWatchlist,
-            )
-            WatchContextAction(
-                "Cancel",
-                primary = false,
-                modifier = Modifier.focusRequester(cancelFocus),
-                onDown = { cancelFocus.requestFocus(); true },
-                onClick = onDismiss,
-            )
+            if (watchlisted != null && onAddWatchlist != null && onRemoveWatchlist != null) {
+                Spacer(Modifier.height(8.dp))
+                WatchContextAction(
+                    label = if (watchlisted) "Remove from watchlist" else "Add to watchlist",
+                    icon = Icons.Filled.Bookmark,
+                    active = watchlisted,
+                    modifier = Modifier.focusRequester(secondFocus),
+                    onUp = { firstFocus.requestFocus(); true },
+                    onDown = { firstFocus.requestFocus(); true },
+                    onClick = if (watchlisted) onRemoveWatchlist else onAddWatchlist,
+                )
+            }
+            Spacer(Modifier.height(22.dp))
+            Text("Press Back to close", color = Muted.copy(alpha = .72f), fontSize = 10.sp)
         }
-    }
-}
-
-@Composable
-private fun WatchStateChip(label: String, active: Boolean) {
-    Box(
-        Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .background(if (active) Accent.copy(alpha = .24f) else Color.White.copy(alpha = .08f))
-            .border(1.dp, if (active) Accent.copy(alpha = .45f) else Color.White.copy(alpha = .14f), RoundedCornerShape(999.dp))
-            .padding(horizontal = 9.dp, vertical = 4.dp),
-    ) {
-        Text(label, color = if (active) Accent else Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
     }
 }
 
 @Composable
 private fun WatchContextAction(
     label: String,
-    primary: Boolean,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    active: Boolean,
     modifier: Modifier = Modifier,
     onUp: (() -> Boolean)? = null,
     onDown: (() -> Boolean)? = null,
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
-    val bg = when {
-        focused && primary -> Accent
-        focused -> Color.White.copy(alpha = .16f)
-        primary -> Accent.copy(alpha = .28f)
-        else -> Color.White.copy(alpha = .08f)
-    }
-    val border = when {
-        focused -> Color.White.copy(alpha = .78f)
-        primary -> Accent.copy(alpha = .48f)
-        else -> Color.White.copy(alpha = .14f)
-    }
+    val tint = if (focused) TextColor else if (active) Accent else Muted
     Row(
         modifier
             .fillMaxWidth()
-            .height(42.dp)
-            .clip(RoundedCornerShape(999.dp))
-            .background(bg)
-            .border(1.dp, border, RoundedCornerShape(999.dp))
+            .height(48.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (focused) Accent.copy(alpha = .08f) else Color.Transparent)
+            .border(1.dp, if (focused) Accent else Color.Transparent, RoundedCornerShape(12.dp))
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .onKeyEvent {
@@ -588,12 +588,12 @@ private fun WatchContextAction(
                 }
             }
             .tvActivate(onClick)
-            .padding(horizontal = 15.dp),
+            .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text(if (primary) "\u25CF" else "\u25CB", color = if (focused && primary) Color.Black else Accent, fontSize = 10.sp, fontWeight = FontWeight.Black)
-        Text(label, color = if (focused && primary) Color.Black else TextColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(19.dp))
+        Text(label, color = tint, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -608,7 +608,7 @@ fun CardShell(
     onRightEdge: (() -> Boolean)? = null,
     onUp: (() -> Boolean)? = null,
     onDown: (() -> Boolean)? = null,
-    focusScale: Float = 1.06f,
+    focusScale: Float = 1.025f,
     onClick: () -> Unit,
     onLongClick: ((FocusRequester) -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
@@ -683,9 +683,9 @@ fun CardShell(
                 scaleY = scale
             }
             .clip(CardShape)
-            .border(2.dp, if (focused) Color.White.copy(alpha = .88f) else Color.White.copy(alpha = .10f), CardShape)
-            .background(if (focused) Color.White.copy(alpha = .13f) else Color.White.copy(alpha = .055f))
-            .padding(4.dp),
+            .border(1.dp, if (focused) Accent.copy(alpha = .95f) else Color.White.copy(alpha = .12f), CardShape)
+            .background(if (focused) Accent.copy(alpha = .035f) else Color.Black.copy(alpha = .10f))
+            .padding(3.dp),
         content = content,
     )
 }

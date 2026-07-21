@@ -100,6 +100,8 @@ const pb = {
   nextItem: null,
   reportTimer: 0,
   lastReportedMs: -1,
+  continuousMs: 0,
+  evidenceAt: performance.now(),
   upNextShown: false,
   upNextDismissed: false,
   upNextTimer: 0,
@@ -226,6 +228,8 @@ async function play(item, opts = {}) {
   pb.upNextShown = false;
   pb.upNextDismissed = false;
   pb.lastReportedMs = -1;
+  pb.continuousMs = 0;
+  pb.evidenceAt = performance.now();
 
   // Streams power the audio/subtitle menus; tolerate failure (e.g. trailers).
   try {
@@ -439,13 +443,14 @@ function stopProgressTimer() {
 
 function reportProgress(state, force = false) {
   if (!pb.item || pb.item.kind === "trailer") return;
+  sampleProgressEvidence();
   const positionMs = Math.round(logicalSeconds() * 1000);
   const durationMs = pb.durationMs || pb.item.durationMs || Math.round((player.duration || 0) * 1000);
   const completed = isFinishedMs(positionMs, durationMs);
   if (!force && !completed && positionMs < 5000) return;
   if (!force && state === "playing" && Math.abs(positionMs - pb.lastReportedMs) < 8000) return;
   pb.lastReportedMs = positionMs;
-  const body = JSON.stringify({ positionMs, durationMs, completed, state: state || "playing" });
+  const body = JSON.stringify({ positionMs, durationMs, completed, state: state || "playing", continuousMs: Math.round(pb.continuousMs) });
   const itemId = pb.item.id;
   api(`/api/items/${itemId}/progress`, {
     method: "PUT",
@@ -453,6 +458,17 @@ function reportProgress(state, force = false) {
     body,
     keepalive: true,
   }).then(() => { resumeFractionDirty = true; }).catch(() => {});
+}
+
+function sampleProgressEvidence() {
+  const now = performance.now();
+  if (!player.paused && !player.seeking) pb.continuousMs += Math.max(0, Math.min(2000, now - pb.evidenceAt));
+  pb.evidenceAt = now;
+}
+
+function resetProgressEvidence() {
+  pb.continuousMs = 0;
+  pb.evidenceAt = performance.now();
 }
 
 /* ── Track + quality menus ── */
@@ -686,6 +702,7 @@ function updateBufferedBar() {
 
 function seekTo(seconds) {
   if (!pb.item) return;
+  resetProgressEvidence();
   const target = Math.max(0, Math.min(seconds, totalSeconds()));
   if (pb.mode === "direct") {
     player.currentTime = target;
@@ -741,7 +758,8 @@ theater.addEventListener("mousemove", resetIdleTimer);
 theater.addEventListener("mousedown", resetIdleTimer);
 
 player.addEventListener("click", togglePlay);
-player.addEventListener("timeupdate", () => { updateTimeline(); maybeShowUpNext(); });
+player.addEventListener("timeupdate", () => { sampleProgressEvidence(); updateTimeline(); maybeShowUpNext(); });
+player.addEventListener("seeking", resetProgressEvidence);
 player.addEventListener("progress", updateBufferedBar);
 player.addEventListener("loadedmetadata", () => updateTimeline());
 player.addEventListener("play", () => { updateTimeline(); resetIdleTimer(); reportProgress("playing", true); startProgressTimer(); clearPlayerStatus(); });

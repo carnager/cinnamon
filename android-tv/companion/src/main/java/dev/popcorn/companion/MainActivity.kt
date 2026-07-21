@@ -6,6 +6,7 @@ import android.content.pm.ActivityInfo
 import android.util.Log
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
@@ -60,7 +61,6 @@ import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Replay30
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
@@ -128,6 +128,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -146,8 +147,9 @@ import org.json.JSONObject
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        PlaybackPrefs.load(this)
         setContent {
-            MaterialTheme(colorScheme = PopcornColorScheme) {
+            MaterialTheme(colorScheme = PopcornColorScheme, typography = PopcornTypography, shapes = PopcornShapes) {
                 Surface(color = MaterialTheme.colorScheme.background) {
                     CompanionApp()
                 }
@@ -168,6 +170,10 @@ fun CompanionApp() {
                     prefs.getString("server", "http://localhost:8097") ?: "http://localhost:8097",
                     it,
                     prefs.getString("username", "") ?: "",
+                    prefs.getBoolean("isAdmin", false),
+                    prefs.getLong("userId", 0),
+                    prefs.getString("avatar", "") ?: "",
+                    prefs.getString("displayName", "") ?: "",
                 )
             }
         )
@@ -177,6 +183,18 @@ fun CompanionApp() {
     var pendingSetupCode by remember { mutableStateOf("") }
     var pendingSetupCallback by remember { mutableStateOf("") }
     var error by remember { mutableStateOf("") }
+
+    fun persistSession(active: Session) {
+        prefs.edit()
+            .putString("server", active.server)
+            .putString("token", active.token)
+            .putString("username", active.username)
+            .putBoolean("isAdmin", active.isAdmin)
+            .putLong("userId", active.userId)
+            .putString("avatar", active.avatar)
+            .putString("displayName", active.displayName)
+            .apply()
+    }
 
     fun completeQr(active: Session, code: String = pendingQrCode) {
         if (code.isBlank()) return
@@ -222,18 +240,45 @@ fun CompanionApp() {
                 }
             }
             "popcorn-login" -> {
-                pendingQrCode = parsed.code
-                pendingQrServer = parsed.server
                 val active = session
                 if (active != null && sameServer(active.server, parsed.server)) {
+                    pendingQrCode = parsed.code
+                    pendingQrServer = parsed.server
                     completeQr(active, parsed.code)
+                } else if (active != null) {
+                    error = "That sign-in code belongs to a different Cinnamon server"
                 } else {
-                    session = null
-                    prefs.edit().putString("server", parsed.server).remove("token").apply()
-                    error = "Sign in to approve the Shield login"
+                    val server = parsed.server.ifBlank { prefs.getString("server", "").orEmpty() }.trimEnd('/')
+                    if (server.isBlank()) {
+                        error = "That sign-in code does not include a server address"
+                    } else {
+                        scope.launch {
+                            error = "Signing in…"
+                            runCatching { Api(Session(server, "")).claimQr(parsed.code) }
+                                .onSuccess {
+                                    persistSession(it)
+                                    session = it
+                                    pendingQrCode = ""
+                                    pendingQrServer = ""
+                                    error = ""
+                                }
+                                .onFailure { error = it.message ?: "QR sign-in failed" }
+                        }
+                    }
                 }
             }
         }
+    }
+
+    // Hydrate sessions saved by older app versions so the user menu can show
+    // the current display name, role, and avatar without requiring a re-login.
+    LaunchedEffect(session?.token) {
+        val active = session ?: return@LaunchedEffect
+        runCatching { Api(active).refreshSession() }
+            .onSuccess {
+                persistSession(it)
+                session = it
+            }
     }
 
     if (session == null) {
@@ -254,11 +299,7 @@ fun CompanionApp() {
                     error = ""
                     runCatching { Api(Session(server.trimEnd('/'), "")).login(username, password) }
                         .onSuccess {
-                            prefs.edit()
-                                .putString("server", it.server)
-                                .putString("token", it.token)
-                                .putString("username", it.username)
-                                .apply()
+                            persistSession(it)
                             session = it
                             if (pendingSetupCallback.isNotBlank()) {
                                 completeShieldSetup(it)
@@ -276,7 +317,16 @@ fun CompanionApp() {
             error = error,
             onError = { error = it },
             onLogout = {
-                prefs.edit().remove("token").apply()
+                val active = session!!
+                scope.launch { runCatching { Api(active).logout() } }
+                prefs.edit()
+                    .remove("token")
+                    .remove("username")
+                    .remove("isAdmin")
+                    .remove("userId")
+                    .remove("avatar")
+                    .remove("displayName")
+                    .apply()
                 session = null
                 error = ""
             },
@@ -287,9 +337,11 @@ fun CompanionApp() {
     }
 }
 
+@androidx.annotation.OptIn(UnstableApi::class)
 @Composable
 fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLogout: () -> Unit, onScan: () -> Unit) {
     val context = LocalContext.current
+    val controlPrefs = remember { context.getSharedPreferences("cinnamon-playback-target", Context.MODE_PRIVATE) }
     val scope = rememberCoroutineScope()
     var page by remember { mutableStateOf<Page>(Page.Home) }
     var backStack by remember { mutableStateOf<List<Page>>(emptyList()) }
@@ -312,23 +364,50 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     var completedShows by remember { mutableStateOf<Set<String>>(emptySet()) }
     var watchlistItems by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var watchlistShows by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var watchlistMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
+    var watchlistTvShows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
     var query by remember { mutableStateOf("") }
     var searchMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var searchShows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
-    var moviePage by remember { mutableIntStateOf(0) }
-    var showPage by remember { mutableIntStateOf(0) }
+    var searchScope by remember { mutableStateOf("both") }
+    var searchFields by remember { mutableStateOf(setOf("title")) }
+    var searchLoading by remember { mutableStateOf(false) }
+    var searchError by remember { mutableStateOf("") }
+    var movieNextOffset by remember { mutableIntStateOf(0) }
+    var showNextOffset by remember { mutableIntStateOf(0) }
+    var movieStartOffset by remember { mutableIntStateOf(0) }
+    var showStartOffset by remember { mutableIntStateOf(0) }
+    var movieHasMore by remember { mutableStateOf(true) }
+    var showHasMore by remember { mutableStateOf(true) }
+    var movieHasPrevious by remember { mutableStateOf(false) }
+    var showHasPrevious by remember { mutableStateOf(false) }
+    var movieLoadingMore by remember { mutableStateOf(false) }
+    var showLoadingMore by remember { mutableStateOf(false) }
+    var movieLoadingPrevious by remember { mutableStateOf(false) }
+    var showLoadingPrevious by remember { mutableStateOf(false) }
+    var movieScrollToken by remember { mutableIntStateOf(0) }
+    var showScrollToken by remember { mutableIntStateOf(0) }
+    var movieScrollIndex by remember { mutableIntStateOf(0) }
+    var showScrollIndex by remember { mutableIntStateOf(0) }
+    var movieLoadGeneration by remember { mutableIntStateOf(0) }
+    var showLoadGeneration by remember { mutableIntStateOf(0) }
     var movieFilters by remember { mutableStateOf(LibraryFilters()) }
     var showFilters by remember { mutableStateOf(LibraryFilters()) }
-    var searchFilters by remember { mutableStateOf(LibraryFilters()) }
     var movieGenres by remember { mutableStateOf<List<String>>(emptyList()) }
     var showGenres by remember { mutableStateOf<List<String>>(emptyList()) }
+    var movieDecades by remember { mutableStateOf<List<Int>>(emptyList()) }
+    var showDecades by remember { mutableStateOf<List<Int>>(emptyList()) }
+    var movieAlphabet by remember { mutableStateOf<List<AlphabetEntry>>(emptyList()) }
+    var showAlphabet by remember { mutableStateOf<List<AlphabetEntry>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
     var jumpDialog by remember { mutableStateOf(false) }
     var selectedBandwidth by remember { mutableStateOf<Int?>(null) }
     var companionUpdate by remember { mutableStateOf<AppUpdateInfo?>(null) }
     var showUpdateDialog by remember { mutableStateOf(false) }
     var announcedCompanionUpdate by remember { mutableIntStateOf(0) }
-    var playbackTarget by remember { mutableStateOf(PlaybackTarget.Shield) }
+    var playbackTarget by remember {
+        mutableStateOf(if (controlPrefs.getString("kind", "tv") == "phone") PlaybackTarget.Phone else PlaybackTarget.Shield)
+    }
     var phoneState by remember { mutableStateOf(PhonePlaybackState()) }
     var phoneAudioIndex by remember { mutableStateOf<Int?>(null) }
     var phoneSubtitleIndex by remember { mutableStateOf<Int?>(null) }
@@ -336,6 +415,8 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     var phoneStreamBaseMs by remember { mutableStateOf(0L) }
     var phonePlan by remember { mutableStateOf<PlaybackPlan?>(null) }
     var phoneFallbackRetried by remember { mutableStateOf(false) }
+    var phoneContinuousPlayedMs by remember { mutableStateOf(0L) }
+    var phonePlaybackSampleAtMs by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
     val phonePlaybackProfile = remember(context) { buildPlaybackProfile(context) }
     val api = remember(session) { Api(session) }
     val localPlayer = remember(session) {
@@ -361,6 +442,17 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         onError(error.message ?: fallback)
     }
 
+    fun selectPhoneTarget() {
+        playbackTarget = PlaybackTarget.Phone
+        controlPrefs.edit().putString("kind", "phone").apply()
+    }
+
+    fun selectTvTarget(device: Device) {
+        selectedDevice = device
+        playbackTarget = PlaybackTarget.Shield
+        controlPrefs.edit().putString("kind", "tv").putString("deviceId", device.id).apply()
+    }
+
     fun publishCompanionUpdate(info: AppUpdateInfo?) {
         companionUpdate = info
         if (info?.available == true && info.versionCode > 0 && info.versionCode != announcedCompanionUpdate) {
@@ -379,6 +471,8 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                 completedShows = showProgress.filter { it.completed }.map { showKey(it.libraryId, it.showTitle) }.toSet()
                 watchlistItems = watchlist.items.map { it.id }.toSet()
                 watchlistShows = watchlist.shows.map { showKey(it) }.toSet()
+                watchlistMovies = watchlist.items
+                watchlistTvShows = watchlist.shows
             }.onFailure { reportError(it, "Markers failed") }
         }
     }
@@ -391,6 +485,17 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                 completedItems = if (watched) completedItems + item.id else completedItems - item.id
                 refreshMarkers()
             }.onFailure { reportError(it, "Could not update seen state") }
+        }
+    }
+
+    fun setItemWatchlisted(item: PopItem, watchlisted: Boolean) {
+        scope.launch {
+            runCatching {
+                if (watchlisted) api.addItemWatchlist(item.id) else api.removeItemWatchlist(item.id)
+            }.onSuccess {
+                watchlistItems = if (watchlisted) watchlistItems + item.id else watchlistItems - item.id
+                refreshMarkers()
+            }.onFailure { reportError(it, "Could not update watchlist") }
         }
     }
 
@@ -420,12 +525,13 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         if (selectIfNeeded && playbackTarget == PlaybackTarget.Shield) {
             val current = selectedDevice
             if (current == null || loaded.none { it.id == current.id }) {
-                selectedDevice = loaded.firstOrNull { it.kind == "tv" } ?: loaded.firstOrNull()
+                val remembered = controlPrefs.getString("deviceId", "")
+                selectedDevice = loaded.firstOrNull { it.id == remembered } ?: loaded.firstOrNull { it.kind == "tv" } ?: loaded.firstOrNull()
             }
         }
     }
 
-	fun navigate(next: Page, stack: Boolean = true) {
+    fun navigate(next: Page, stack: Boolean = true) {
         if (stack) backStack = backStack + page
         page = next
     }
@@ -490,6 +596,17 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         return raw.coerceIn(0, (localPlayer.duration.takeIf { it > 0 } ?: item.durationMs).coerceAtLeast(item.durationMs))
     }
 
+    fun resetPhoneProgressEvidence() {
+        phoneContinuousPlayedMs = 0L
+        phonePlaybackSampleAtMs = SystemClock.elapsedRealtime()
+    }
+
+    fun samplePhoneProgressEvidence() {
+        val now = SystemClock.elapsedRealtime()
+        if (localPlayer.isPlaying) phoneContinuousPlayedMs += (now - phonePlaybackSampleAtMs).coerceIn(0L, 2_000L)
+        phonePlaybackSampleAtMs = now
+    }
+
     fun savePhoneProgress(final: Boolean = false) {
         val item = phoneState.item ?: return
         val duration = (localPlayer.duration.takeIf { it > 0 } ?: item.durationMs).coerceAtLeast(0)
@@ -501,7 +618,8 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     item.id,
                     position.coerceIn(0, duration),
                     duration,
-                    completed = final || position >= (duration * 0.9).toLong(),
+                    completed = final,
+                    continuousMs = phoneContinuousPlayedMs,
                 )
             }
         }
@@ -518,8 +636,8 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         phoneStreamBaseMs = 0L
         phonePlan = null
         phoneFallbackRetried = false
+        resetPhoneProgressEvidence()
         phoneState = PhonePlaybackState()
-        if (playbackTarget == PlaybackTarget.Phone) playbackTarget = PlaybackTarget.Shield
     }
 
     fun absolutePlanUrl(plan: PlaybackPlan): String {
@@ -576,10 +694,11 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     }
 
     fun loadPhonePlayback(item: PopItem, audioIndex: Int?, subtitleIndex: Int?, bandwidthKbps: Int?, startMs: Long, forceMode: String = "auto") {
+        if (phoneState.item?.id != item.id) resetPhoneProgressEvidence()
         phoneAudioIndex = audioIndex
         phoneSubtitleIndex = subtitleIndex
         selectedBandwidth = bandwidthKbps
-        playbackTarget = PlaybackTarget.Phone
+        selectPhoneTarget()
         val duration = item.durationMs.coerceAtLeast(0)
         val target = startMs.coerceIn(0, duration.takeIf { it > 0 } ?: Long.MAX_VALUE)
         phoneState = PhonePlaybackState(item = item, state = "loading", positionMs = target, durationMs = duration, bandwidthKbps = bandwidthKbps)
@@ -654,6 +773,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
 
     fun seekTo(positionMs: Long) {
         if (playbackTarget == PlaybackTarget.Phone && phoneState.item != null) {
+            resetPhoneProgressEvidence()
             val item = phoneState.item ?: return
             val target = positionMs.coerceAtLeast(0)
             if (phoneHlsSession == null) {
@@ -672,61 +792,203 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         navigate(Page.Detail(item, page))
     }
 
-    fun loadMovies(pageIndex: Int) {
+    fun openActor(actor: Actor) {
+        navigate(Page.Person(actor))
+    }
+
+    fun loadMovies(offset: Int = 0, append: Boolean = false, prepend: Boolean = false, scrollIndex: Int = 0, pageLimit: Int = 60) {
         val lib = movieLib ?: return
+        if (append && (movieLoadingMore || movieLoadingPrevious || !movieHasMore)) return
+        if (prepend && (movieLoadingPrevious || movieLoadingMore || !movieHasPrevious)) return
         val filters = movieFilters
+        val pageSize = 60
+        val incremental = append || prepend
+        val existingItems = if (incremental) movies else emptyList()
+        val requestLimit = if (prepend) (movieStartOffset - offset).coerceIn(1, pageSize) else pageLimit
+        if (!incremental) {
+            movieLoadGeneration += 1
+            movieLoadingMore = false
+            movieLoadingPrevious = false
+            movieHasMore = true
+            movieHasPrevious = offset > 0
+        }
+        val generation = movieLoadGeneration
+        when {
+            append -> movieLoadingMore = true
+            prepend -> movieLoadingPrevious = true
+            else -> loading = true
+        }
         scope.launch {
-            loading = true
-            val cacheKey = "movies_${lib.id}_${filterKey(filters)}_$pageIndex"
+            val cacheKey = "movies_${lib.id}_${filterKey(filters)}_${offset}_$requestLimit"
             val cached = CompanionCache.readItems(context, session, cacheKey)
-            if (cached.isNotEmpty()) {
-                movies = cached
-                moviePage = pageIndex
+            var positionedFromCache = false
+            if (cached.isNotEmpty() && generation == movieLoadGeneration) {
+                movies = when {
+                    append -> (existingItems + cached).distinctBy { it.id }
+                    prepend -> (cached + existingItems).distinctBy { it.id }
+                    else -> cached
+                }
+                if (prepend) {
+                    movieStartOffset = offset
+                    movieHasPrevious = offset > 0
+                } else {
+                    movieNextOffset = offset + cached.size
+                    movieHasMore = cached.size == requestLimit
+                    if (!append) {
+                        movieStartOffset = offset
+                        movieHasPrevious = offset > 0
+                        movieScrollIndex = scrollIndex.coerceIn(0, cached.lastIndex.coerceAtLeast(0))
+                        movieScrollToken += 1
+                        positionedFromCache = true
+                    }
+                }
                 page = Page.Movies
                 backStack = emptyList()
             }
-            runCatching {
-                if (movieGenres.isEmpty()) movieGenres = api.genres(lib.id)
-                api.itemsPage(lib.id, 60, pageIndex * 60, filters)
+            val result = runCatching {
+                if (!incremental) {
+                    val genres = api.genres(lib.id)
+                    val decades = api.decades(lib.id, "movie")
+                    val alphabet = if (filters.sort.isBlank() && filters.seenStatus.isBlank() && filters.minRating <= 0) api.alphabet(lib.id, "movie", filters) else emptyList()
+                    if (generation == movieLoadGeneration) {
+                        movieGenres = genres
+                        movieDecades = decades
+                        movieAlphabet = alphabet
+                    }
+                }
+                api.itemsPage(lib.id, requestLimit, offset, filters)
             }
+            if (generation != movieLoadGeneration) return@launch
+            result
                 .onSuccess {
-                    movies = it
-                    moviePage = pageIndex
+                    movies = when {
+                        append -> (existingItems + it).distinctBy { item -> item.id }
+                        prepend -> (it + existingItems).distinctBy { item -> item.id }
+                        else -> it
+                    }
+                    if (prepend) {
+                        movieStartOffset = offset
+                        movieHasPrevious = offset > 0 && it.isNotEmpty()
+                    } else {
+                        movieNextOffset = offset + it.size
+                        movieHasMore = it.size == requestLimit
+                        if (!append) {
+                            movieStartOffset = offset
+                            movieHasPrevious = offset > 0
+                            if (!positionedFromCache) {
+                                movieScrollIndex = scrollIndex.coerceIn(0, it.lastIndex.coerceAtLeast(0))
+                                movieScrollToken += 1
+                            }
+                        }
+                    }
                     page = Page.Movies
                     backStack = emptyList()
                     CompanionCache.writeItems(context, session, cacheKey, it)
                 }
                 .onFailure { reportError(it, "Movies failed") }
-            loading = false
+            when {
+                append -> movieLoadingMore = false
+                prepend -> movieLoadingPrevious = false
+                else -> loading = false
+            }
         }
     }
 
-    fun loadShows(pageIndex: Int) {
+    fun loadShows(offset: Int = 0, append: Boolean = false, prepend: Boolean = false, scrollIndex: Int = 0, pageLimit: Int = 60) {
         val lib = tvLib ?: return
+        if (append && (showLoadingMore || showLoadingPrevious || !showHasMore)) return
+        if (prepend && (showLoadingPrevious || showLoadingMore || !showHasPrevious)) return
         val filters = showFilters
+        val pageSize = 60
+        val incremental = append || prepend
+        val existingShows = if (incremental) shows else emptyList()
+        val requestLimit = if (prepend) (showStartOffset - offset).coerceIn(1, pageSize) else pageLimit
+        if (!incremental) {
+            showLoadGeneration += 1
+            showLoadingMore = false
+            showLoadingPrevious = false
+            showHasMore = true
+            showHasPrevious = offset > 0
+        }
+        val generation = showLoadGeneration
+        when {
+            append -> showLoadingMore = true
+            prepend -> showLoadingPrevious = true
+            else -> loading = true
+        }
         scope.launch {
-            loading = true
-            val cacheKey = "shows_${lib.id}_${filterKey(filters)}_$pageIndex"
+            val cacheKey = "shows_${lib.id}_${filterKey(filters)}_${offset}_$requestLimit"
             val cached = CompanionCache.readShows(context, session, cacheKey)
-            if (cached.isNotEmpty()) {
-                shows = cached
-                showPage = pageIndex
+            var positionedFromCache = false
+            if (cached.isNotEmpty() && generation == showLoadGeneration) {
+                shows = when {
+                    append -> (existingShows + cached).distinctBy { showMarkerKey(it) }
+                    prepend -> (cached + existingShows).distinctBy { showMarkerKey(it) }
+                    else -> cached
+                }
+                if (prepend) {
+                    showStartOffset = offset
+                    showHasPrevious = offset > 0
+                } else {
+                    showNextOffset = offset + cached.size
+                    showHasMore = cached.size == requestLimit
+                    if (!append) {
+                        showStartOffset = offset
+                        showHasPrevious = offset > 0
+                        showScrollIndex = scrollIndex.coerceIn(0, cached.lastIndex.coerceAtLeast(0))
+                        showScrollToken += 1
+                        positionedFromCache = true
+                    }
+                }
                 page = Page.Shows
                 backStack = emptyList()
             }
-            runCatching {
-                if (showGenres.isEmpty()) showGenres = api.genres(lib.id)
-                api.showsPage(lib.id, 60, pageIndex * 60, filters)
+            val result = runCatching {
+                if (!incremental) {
+                    val genres = api.genres(lib.id)
+                    val decades = api.decades(lib.id, "tv")
+                    val alphabet = if (filters.sort.isBlank() && filters.seenStatus.isBlank() && filters.minRating <= 0) api.alphabet(lib.id, "tv", filters) else emptyList()
+                    if (generation == showLoadGeneration) {
+                        showGenres = genres
+                        showDecades = decades
+                        showAlphabet = alphabet
+                    }
+                }
+                api.showsPage(lib.id, requestLimit, offset, filters)
             }
+            if (generation != showLoadGeneration) return@launch
+            result
                 .onSuccess {
-                    shows = it
-                    showPage = pageIndex
+                    shows = when {
+                        append -> (existingShows + it).distinctBy { show -> showMarkerKey(show) }
+                        prepend -> (it + existingShows).distinctBy { show -> showMarkerKey(show) }
+                        else -> it
+                    }
+                    if (prepend) {
+                        showStartOffset = offset
+                        showHasPrevious = offset > 0 && it.isNotEmpty()
+                    } else {
+                        showNextOffset = offset + it.size
+                        showHasMore = it.size == requestLimit
+                        if (!append) {
+                            showStartOffset = offset
+                            showHasPrevious = offset > 0
+                            if (!positionedFromCache) {
+                                showScrollIndex = scrollIndex.coerceIn(0, it.lastIndex.coerceAtLeast(0))
+                                showScrollToken += 1
+                            }
+                        }
+                    }
                     page = Page.Shows
                     backStack = emptyList()
                     CompanionCache.writeShows(context, session, cacheKey, it)
                 }
                 .onFailure { reportError(it, "Shows failed") }
-            loading = false
+            when {
+                append -> showLoadingMore = false
+                prepend -> showLoadingPrevious = false
+                else -> loading = false
+            }
         }
     }
 
@@ -802,6 +1064,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
             val tl = libraries.firstOrNull { it.type == "tv" }
             if (ml != null) {
                 movieGenres = api.genres(ml.id)
+                movieDecades = api.decades(ml.id, "movie")
                 recentMovies = api.recentItems(ml.id, 24)
                 topMovies = api.itemsPage(ml.id, 24, 0, LibraryFilters(sort = "rating", minRating = 7.0))
                 CompanionCache.writeItems(context, session, "recent_movies_${ml.id}", recentMovies)
@@ -809,6 +1072,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
             }
             if (tl != null) {
                 showGenres = api.genres(tl.id)
+                showDecades = api.decades(tl.id, "tv")
                 recentShows = api.recentShows(tl.id, 24)
                 topShows = api.showsPage(tl.id, 24, 0, LibraryFilters(sort = "rating", minRating = 7.0))
                 CompanionCache.writeShows(context, session, "recent_shows_${tl.id}", recentShows)
@@ -893,6 +1157,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     LaunchedEffect(localPlayer, phoneState.item?.id, phoneStreamBaseMs) {
         var lastSavedAt = 0L
         while (true) {
+            samplePhoneProgressEvidence()
             val item = phoneState.item
             if (item != null) {
                 val duration = (localPlayer.duration.takeIf { it > 0 } ?: item.durationMs).coerceAtLeast(0)
@@ -915,20 +1180,37 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         }
     }
 
-    LaunchedEffect(query, searchFilters) {
+    LaunchedEffect(query, searchScope, searchFields) {
         val q = query.trim()
+        val requestedScope = searchScope
+        val requestedFields = searchFields
         if (q.length < 2) {
             searchMovies = emptyList()
             searchShows = emptyList()
+            searchError = ""
+            searchLoading = false
             return@LaunchedEffect
         }
+        searchLoading = true
         delay(250)
         if (q == query.trim()) {
+            val fields = requestedFields.sorted().joinToString(",")
             runCatching {
-                searchMovies = api.searchMovies(q, searchFilters)
-                searchShows = api.searchShows(q, searchFilters)
-            }.onFailure { reportError(it, "Search failed") }
+                val movies = if (requestedScope != "tv") api.searchMovies(q, fields) else emptyList()
+                val shows = if (requestedScope != "movies") api.searchShows(q, fields) else emptyList()
+                movies to shows
+            }.onSuccess { (movies, shows) ->
+                searchMovies = movies
+                searchShows = shows
+                searchError = ""
+            }.onFailure {
+                if (it is CancellationException) throw it
+                searchMovies = emptyList()
+                searchShows = emptyList()
+                searchError = it.message ?: "Search failed"
+            }
         }
+        searchLoading = false
     }
 
     BackHandler(enabled = page !is Page.Home || backStack.isNotEmpty()) {
@@ -945,14 +1227,8 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
             Scaffold(
             topBar = {
                 CompanionTopAppBar(
-                    devices = devices,
-                    selectedDevice = selectedDevice,
-                    playbackTarget = playbackTarget,
-                    onSelectPhone = { playbackTarget = PlaybackTarget.Phone },
-                    onSelectDevice = {
-                        selectedDevice = it
-                        playbackTarget = PlaybackTarget.Shield
-                    },
+                    session = session,
+                    onHistory = { navigate(Page.History) },
                     onScan = onScan,
                     showUpdate = companionUpdate?.available == true,
                     onUpdate = { showUpdateDialog = true },
@@ -980,7 +1256,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     MiniPlayer(
                         session = session,
                         state = miniState,
-                        target = playbackTarget,
+                        targetLabel = if (playbackTarget == PlaybackTarget.Phone) "This phone" else selectedDevice?.displayName() ?: "TV",
                         onPlayPause = {
                             if (playbackTarget == PlaybackTarget.Phone && phoneState.item != null) {
                                 localPlayer.playWhenReady = !localPlayer.isPlaying
@@ -1001,26 +1277,24 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     BottomNavigation(
                         page = page,
                         onHome = { page = Page.Home; backStack = emptyList() },
-                        onMovies = { loadMovies(moviePage) },
-                        onShows = { loadShows(showPage) },
-                        onSearch = { page = Page.Search; backStack = emptyList() },
-                        onRemote = {
-                            if (playbackTarget == PlaybackTarget.Phone && phoneState.item != null) {
-                                page = Page.LocalPlayer(phoneState.item!!, phoneAudioIndex, phoneSubtitleIndex, page)
-                            } else if (playbackTarget == PlaybackTarget.Shield) {
-                                page = Page.Remote
-                            } else {
-                                page = Page.Home
-                            }
-                            backStack = emptyList()
+                        onMovies = {
+                            if (movies.isEmpty()) loadMovies() else { page = Page.Movies; backStack = emptyList() }
                         },
+                        onShows = {
+                            if (shows.isEmpty()) loadShows() else { page = Page.Shows; backStack = emptyList() }
+                        },
+                        onSearch = { page = Page.Search; backStack = emptyList() },
                     )
                 }
             },
             containerColor = MaterialTheme.colorScheme.background,
         ) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
-                if (error.isNotBlank()) Text(error, color = if (error.contains("approved", true)) Accent else MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                StatusMessage(
+                    message = error,
+                    success = error.contains("approved", true),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                )
                 if (loading) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
                 }
@@ -1036,6 +1310,8 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 recentShows,
                                 topMovies,
                                 topShows,
+                                watchlistMovies,
+                                watchlistTvShows,
                                 completedItems,
                                 completedShows,
                                 watchlistItems,
@@ -1050,15 +1326,26 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 items = movies,
                                 completedItems = completedItems,
                                 watchlistItems = watchlistItems,
-                                pageIndex = moviePage,
                                 genres = movieGenres,
+                                decades = movieDecades,
+                                alphabet = movieAlphabet,
                                 filters = movieFilters,
+                                loadingMore = movieLoadingMore,
+                                loadingPrevious = movieLoadingPrevious,
+                                hasMore = movieHasMore,
+                                hasPrevious = movieHasPrevious,
+                                scrollToken = movieScrollToken,
+                                scrollIndex = movieScrollIndex,
                                 onFilters = {
                                     movieFilters = it
                                     loadMovies(0)
                                 },
-                                onPrev = { if (moviePage > 0) loadMovies(moviePage - 1) },
-                                onNext = { loadMovies(moviePage + 1) },
+                                onLoadMore = { loadMovies(movieNextOffset, append = true) },
+                                onLoadPrevious = { loadMovies((movieStartOffset - 60).coerceAtLeast(0), prepend = true) },
+                                onAlphabet = {
+                                    val start = (it.offset - 60).coerceAtLeast(0)
+                                    loadMovies(start, scrollIndex = it.offset - start, pageLimit = 120)
+                                },
                                 onOpen = ::openDetail,
                             )
                             Page.Shows -> ShowGrid(
@@ -1067,15 +1354,26 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 shows,
                                 completedShows,
                                 watchlistShows,
-                                showPage,
                                 genres = showGenres,
+                                decades = showDecades,
+                                alphabet = showAlphabet,
                                 filters = showFilters,
+                                loadingMore = showLoadingMore,
+                                loadingPrevious = showLoadingPrevious,
+                                hasMore = showHasMore,
+                                hasPrevious = showHasPrevious,
+                                scrollToken = showScrollToken,
+                                scrollIndex = showScrollIndex,
                                 onFilters = {
                                     showFilters = it
                                     loadShows(0)
                                 },
-                                onPrev = { if (showPage > 0) loadShows(showPage - 1) },
-                                onNext = { loadShows(showPage + 1) },
+                                onLoadMore = { loadShows(showNextOffset, append = true) },
+                                onLoadPrevious = { loadShows((showStartOffset - 60).coerceAtLeast(0), prepend = true) },
+                                onAlphabet = {
+                                    val start = (it.offset - 60).coerceAtLeast(0)
+                                    loadShows(start, scrollIndex = it.offset - start, pageLimit = 120)
+                                },
                                 onShow = ::openShow,
                             )
                             is Page.Show -> SeasonList(
@@ -1088,6 +1386,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 onSeason = { openSeason(current.show, it) },
                                 onSetShowWatched = { setShowWatched(current.show, it) },
                                 onSetSeasonWatched = { season, watched -> setSeasonWatched(current.show, season.seasonNumber, watched) },
+                                onActor = ::openActor,
                             )
                             is Page.Season -> EpisodeList(session, current.show, current.season, episodes, completedItems, watchlistItems, onBack = ::goBack, onOpen = ::openDetail, onSetWatched = ::setItemWatched)
                             is Page.Detail -> DetailPage(
@@ -1095,23 +1394,48 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 api,
                                 current.item,
                                 playbackTarget = playbackTarget,
-                                selectedDeviceName = selectedDevice?.name,
+                                devices = devices,
+                                selectedDevice = selectedDevice,
                                 watched = completedItems.contains(current.item.id),
+                                watchlisted = watchlistItems.contains(current.item.id),
                                 onSetWatched = { setItemWatched(current.item, it) },
+                                onSetWatchlisted = { setItemWatchlisted(current.item, it) },
+                                onSelectPhone = ::selectPhoneTarget,
+                                onSelectDevice = ::selectTvTarget,
                                 onBack = ::goBack,
                                 onPlay = { item, audio, subtitle -> play(item.id, audio, subtitle) },
                                 onPlayLocal = ::playLocally,
                                 onOpenSimilar = ::openDetail,
+                                onActor = ::openActor,
                             )
                             Page.Search -> SearchPage(
                                 session,
                                 query,
                                 { query = it },
-                                genres = (movieGenres + showGenres).distinctBy { it.lowercase() }.sortedBy { it.lowercase() },
-                                filters = searchFilters,
-                                onFilters = { searchFilters = it },
+                                scope = searchScope,
+                                onScope = { searchScope = it },
+                                fields = searchFields,
+                                onFields = { searchFields = it },
                                 movies = searchMovies,
                                 shows = searchShows,
+                                completedItems = completedItems,
+                                completedShows = completedShows,
+                                watchlistItems = watchlistItems,
+                                watchlistShows = watchlistShows,
+                                loading = searchLoading,
+                                error = searchError,
+                                onMovie = ::openDetail,
+                                onShow = ::openShow,
+                            )
+                            Page.History -> HistoryPage(session, onBack = ::goBack, onOpen = ::openDetail)
+                            is Page.Person -> PersonPage(
+                                session,
+                                current.actor,
+                                completedItems,
+                                completedShows,
+                                watchlistItems,
+                                watchlistShows,
+                                onBack = ::goBack,
                                 onMovie = ::openDetail,
                                 onShow = ::openShow,
                             )
@@ -1131,6 +1455,14 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
             RemotePage(
                 session = session,
                 state = state,
+                devices = devices,
+                selectedDevice = selectedDevice,
+                onSelectPhone = {
+                    selectPhoneTarget()
+                    if (phoneState.item != null) page = Page.LocalPlayer(phoneState.item!!, phoneAudioIndex, phoneSubtitleIndex, Page.Home)
+                    else page = Page.Home
+                },
+                onSelectDevice = ::selectTvTarget,
                 onBack = { page = Page.Home; backStack = emptyList() },
                 onPause = { send("pause") },
                 onResume = { send("resume") },
@@ -1158,6 +1490,13 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     selectedAudio = phoneAudioIndex,
                     selectedSubtitle = phoneSubtitleIndex,
                     selectedBandwidth = phoneState.bandwidthKbps,
+                    devices = devices,
+                    selectedDevice = selectedDevice,
+                    onSelectDevice = {
+                        selectTvTarget(it)
+                        page = Page.Remote
+                        backStack = emptyList()
+                    },
                     onAudio = { audio ->
                         loadPhonePlayback(current.item, audio, phoneSubtitleIndex, phoneState.bandwidthKbps, phoneAbsolutePosition(), "auto")
                     },
@@ -1210,6 +1549,8 @@ fun filterKey(filters: LibraryFilters): String = listOf(
     filters.genre.ifBlank { "all" },
     if (filters.minRating > 0) filters.minRating.toInt().toString() else "any",
     filters.sort.ifBlank { "title" },
+    filters.seenStatus.ifBlank { "all_seen" },
+    filters.decades.ifBlank { "all_decades" },
 ).joinToString("_").replace(Regex("[^A-Za-z0-9_.-]"), "_")
 private fun Int.floorMod(n: Int): Int = ((this % n) + n) % n
 fun Device.displayName(): String = cleanDeviceName(name) ?: id

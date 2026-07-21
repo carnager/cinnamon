@@ -70,10 +70,11 @@ func (a *App) progressSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		PositionMS int64  `json:"positionMs"`
-		DurationMS int64  `json:"durationMs"`
-		Completed  bool   `json:"completed"`
-		State      string `json:"state"`
+		PositionMS   int64  `json:"positionMs"`
+		DurationMS   int64  `json:"durationMs"`
+		Completed    bool   `json:"completed"`
+		State        string `json:"state"`
+		ContinuousMS *int64 `json:"continuousMs"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
@@ -84,21 +85,65 @@ func (a *App) progressSave(w http.ResponseWriter, r *http.Request) {
 	if durationMS == 0 {
 		durationMS = item.DurationMS
 	}
-	completed := in.Completed || isFinished(in.PositionMS, durationMS)
+	state := strings.TrimSpace(in.State)
+	manual := strings.EqualFold(state, "manual")
+	// New clients report uninterrupted play time since their last seek. A seek
+	// changes position, but it is not evidence that the intervening material was
+	// watched. Until playback remains settled for a meaningful interval, retain
+	// the last trustworthy resume point (or no point at all).
+	continuousMS := int64(0)
+	if in.ContinuousMS != nil {
+		continuousMS = max(int64(0), *in.ContinuousMS)
+	}
+	if !manual {
+		if continuousMS < resumeEvidenceThreshold(durationMS) {
+			progress, err := a.store.Progress(r.Context(), user.ID, item.ID)
+			if err == nil {
+				writeJSON(w, http.StatusOK, progress)
+				return
+			}
+			if !errors.Is(err, sql.ErrNoRows) {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"itemId": item.ID, "positionMs": 0, "durationMs": durationMS, "completed": false,
+			})
+			return
+		}
+	}
+	completed := manual || in.Completed
+	if completed && !manual && continuousMS < completionEvidenceThreshold(durationMS) {
+		completed = false
+	}
 	progress, err := a.store.SaveProgress(r.Context(), user.ID, item.ID, in.PositionMS, durationMS, completed)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if progress.Completed && strings.EqualFold(strings.TrimSpace(in.State), "manual") {
+	if progress.Completed && manual {
 		go a.traktSyncHistoryItems(user.ID, []media.Item{item}, false)
 		writeJSON(w, http.StatusOK, progress)
 		return
 	}
-	if strings.TrimSpace(in.State) != "" || progress.Completed {
-		go a.scrobblePlayback(user.ID, item, progress, in.State)
+	if state != "" || progress.Completed {
+		go a.scrobblePlayback(user.ID, item, progress, state)
 	}
 	writeJSON(w, http.StatusOK, progress)
+}
+
+func resumeEvidenceThreshold(durationMS int64) int64 {
+	if durationMS <= 0 {
+		return 2 * 60_000
+	}
+	return min(int64(2*60_000), max(int64(30_000), durationMS/20))
+}
+
+func completionEvidenceThreshold(durationMS int64) int64 {
+	if durationMS <= 0 {
+		return 5 * 60_000
+	}
+	return min(int64(5*60_000), max(int64(30_000), durationMS/3))
 }
 
 func (a *App) progressDelete(w http.ResponseWriter, r *http.Request) {

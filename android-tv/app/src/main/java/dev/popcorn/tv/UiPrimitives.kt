@@ -2,6 +2,7 @@ package dev.popcorn.tv
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,6 +28,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -36,6 +39,45 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+
+@Composable
+fun CinnamonBrand(
+    modifier: Modifier = Modifier,
+    showName: Boolean = true,
+    markSize: Int = 38,
+    fontSize: Int = 20,
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Canvas(Modifier.size(markSize.dp)) {
+            val stroke = (size.minDimension * .075f).coerceAtLeast(2f)
+            listOf(.43f, .31f, .19f).forEach { radiusFraction ->
+                val radius = size.minDimension * radiusFraction
+                drawArc(
+                    color = Accent,
+                    startAngle = 42f,
+                    sweepAngle = 276f,
+                    useCenter = false,
+                    topLeft = center - androidx.compose.ui.geometry.Offset(radius, radius),
+                    size = androidx.compose.ui.geometry.Size(radius * 2f, radius * 2f),
+                    style = Stroke(width = stroke, cap = StrokeCap.Round),
+                )
+            }
+        }
+        if (showName) {
+            Text(
+                "Cinnamon",
+                color = TextColor,
+                fontSize = fontSize.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+        }
+    }
+}
 
 @Composable
 fun FocusButton(label: String, primary: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
@@ -62,7 +104,7 @@ fun FocusButton(label: String, primary: Boolean, modifier: Modifier = Modifier, 
             .padding(horizontal = 16.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = if (primary) Color.Black else TextColor, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+        Text(label, color = if (primary) Color.White else TextColor, fontWeight = FontWeight.Bold, fontSize = 14.sp)
     }
 }
 
@@ -111,32 +153,27 @@ fun SizedAsyncImage(
 @Composable
 fun Pill(text: String, selected: Boolean, badge: String? = null, modifier: Modifier = Modifier, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
-    val background = when {
-        selected && focused -> Accent.copy(alpha = .94f)
-        selected -> Accent.copy(alpha = .30f)
-        focused -> Color.White.copy(alpha = .16f)
-        else -> Color.White.copy(alpha = .075f)
-    }
+    val background = Color.Transparent
     val border = when {
-        focused -> Color.White.copy(alpha = .78f)
-        selected -> Accent.copy(alpha = .52f)
-        else -> Color.White.copy(alpha = .14f)
+        focused -> Accent
+        selected -> Accent.copy(alpha = .48f)
+        else -> Color.Transparent
     }
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(999.dp))
+            .clip(RoundedCornerShape(11.dp))
             .background(background)
-            .border(1.dp, border, RoundedCornerShape(999.dp))
+            .border(1.dp, border, RoundedCornerShape(11.dp))
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .tvActivate(onClick)
-            .padding(horizontal = 14.dp, vertical = 6.dp),
+            .padding(horizontal = 16.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(text, color = if (selected && focused) Color.Black else TextColor, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+        Text(text, color = TextColor, fontWeight = FontWeight.Medium, fontSize = 13.sp)
         if (badge != null) {
-            Text(badge, color = if (selected && focused) Color.Black.copy(alpha = .6f) else Muted, fontSize = 10.sp)
+            Text(badge, color = Muted, fontSize = 10.sp)
         }
     }
 }
@@ -164,7 +201,7 @@ fun SourceRatingBadge(label: String, value: String) {
         horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, color = Accent, fontWeight = FontWeight.Black, fontSize = 10.sp)
+        Text(label, color = Teal, fontWeight = FontWeight.Black, fontSize = 10.sp)
         Text(value, color = TextColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
     }
 }
@@ -172,11 +209,18 @@ fun SourceRatingBadge(label: String, value: String) {
 @Composable
 fun PosterRating(rating: Double) {
     Box(Modifier.fillMaxSize().padding(4.dp), contentAlignment = Alignment.TopEnd) {
-        Text(
-            "\u2605 ${"%.1f".format(rating)}",
-            color = Accent, fontWeight = FontWeight.Bold, fontSize = 9.sp,
-            modifier = Modifier.background(Color.Black.copy(alpha = .75f), RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 2.dp),
-        )
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .background(Surface2)
+                .border(1.dp, Line.copy(alpha = .90f), RoundedCornerShape(4.dp))
+                .padding(horizontal = 5.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("IMDb", color = Teal, fontWeight = FontWeight.Black, fontSize = 8.sp)
+            Text("%.1f".format(rating), color = TextColor, fontWeight = FontWeight.Bold, fontSize = 9.sp)
+        }
     }
 }
 

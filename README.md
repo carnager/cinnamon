@@ -127,6 +127,7 @@ throttled.
 - `GET /api/genres?libraryId=movies`
 - `GET /api/items/{id}`
 - `GET /api/progress`
+- `GET /api/history`
 - `GET /api/progress/tv`
 - `GET /api/items/{id}/progress`
 - `PUT /api/items/{id}/progress`

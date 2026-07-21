@@ -243,7 +243,15 @@ class Api(private val session: Session) {
         val body = JSONObject().put("username", username).put("password", password).toString()
         val json = request("/api/auth/login", "POST", body)
         val user = json.optJSONObject("user")
-        Session(session.server, json.getString("token"), user?.optString("username").orEmpty(), user?.optBoolean("isAdmin") ?: false, user?.optLong("id") ?: 0L, user?.optString("avatar").orEmpty())
+        Session(
+            server = session.server,
+            token = json.getString("token"),
+            username = user?.optString("username").orEmpty(),
+            isAdmin = user?.optBoolean("isAdmin") ?: false,
+            userId = user?.optLong("id") ?: 0L,
+            avatar = user?.optString("avatar").orEmpty(),
+            displayName = user?.optString("displayName").orEmpty(),
+        )
     }
 
     suspend fun me(): User = withContext(Dispatchers.IO) {
@@ -255,11 +263,23 @@ class Api(private val session: Session) {
         QRLoginStart(json.getString("code"), json.optString("expiresAt"))
     }
 
+    suspend fun approveQrLogin(code: String) = withContext(Dispatchers.IO) {
+        request("/api/auth/qr/complete", "POST", JSONObject().put("code", code).toString())
+    }
+
     suspend fun pollQrLogin(code: String): Session? = withContext(Dispatchers.IO) {
         val json = request("/api/auth/qr/poll?code=${enc(code)}")
         if (json.optString("status") != "approved") return@withContext null
         val user = json.optJSONObject("user")
-        Session(session.server, json.getString("token"), user?.optString("username").orEmpty(), user?.optBoolean("isAdmin") ?: false, user?.optLong("id") ?: 0L, user?.optString("avatar").orEmpty())
+        Session(
+            server = session.server,
+            token = json.getString("token"),
+            username = user?.optString("username").orEmpty(),
+            isAdmin = user?.optBoolean("isAdmin") ?: false,
+            userId = user?.optLong("id") ?: 0L,
+            avatar = user?.optString("avatar").orEmpty(),
+            displayName = user?.optString("displayName").orEmpty(),
+        )
     }
 
     suspend fun libraries(): List<Library> = withContext(Dispatchers.IO) {
@@ -326,12 +346,12 @@ class Api(private val session: Session) {
         parseItems(requestArray("/api/items/$itemId/similar"))
     }
 
-    suspend fun searchMovies(query: String): List<PopItem> = withContext(Dispatchers.IO) {
-        parseItems(requestItemsEnvelope("/api/search?limit=120&kind=movie&q=${enc(query)}"))
+    suspend fun searchMovies(query: String, fields: String = "title"): List<PopItem> = withContext(Dispatchers.IO) {
+        parseItems(requestItemsEnvelope("/api/search?limit=500&kind=movie&q=${enc(query)}&fields=${enc(fields)}"))
     }
 
-    suspend fun searchShows(query: String): List<ShowSummary> = withContext(Dispatchers.IO) {
-        parseShows(requestArray("/api/tv/shows?limit=120&q=${enc(query)}"))
+    suspend fun searchShows(query: String, fields: String = "title"): List<ShowSummary> = withContext(Dispatchers.IO) {
+        parseShows(requestArray("/api/tv/shows?limit=500&q=${enc(query)}&fields=${enc(fields)}"))
     }
 
     suspend fun shows(libraryId: String): List<ShowSummary> = withContext(Dispatchers.IO) {
@@ -565,6 +585,28 @@ class Api(private val session: Session) {
         parseWatchlist(request("/api/watchlist?limit=300"))
     }
 
+    suspend fun watchHistory(limit: Int = 120): WatchHistory = withContext(Dispatchers.IO) {
+        val json = request("/api/history?limit=$limit")
+        val rows = json.optJSONArray("items") ?: JSONArray()
+        WatchHistory(
+            items = (0 until rows.length()).map { index ->
+                val row = rows.getJSONObject(index)
+                WatchHistoryEntry(
+                    id = row.optString("id"),
+                    item = row.optJSONObject("item")?.let(::jsonToItem),
+                    kind = row.optString("kind"),
+                    title = row.optString("title"),
+                    subtitle = row.optString("subtitle"),
+                    year = row.optInt("year"),
+                    watchedAt = row.optString("watchedAt"),
+                    source = row.optString("source"),
+                )
+            },
+            source = json.optString("source", "local"),
+            traktLinked = json.optBoolean("traktLinked"),
+        )
+    }
+
     suspend fun tvUpdate(currentVersionCode: Int): AppUpdateInfo = withContext(Dispatchers.IO) {
         val json = request("/api/app/tv/update?versionCode=$currentVersionCode")
         AppUpdateInfo(
@@ -609,14 +651,14 @@ class Api(private val session: Session) {
         outFile
     }
 
-    suspend fun saveProgress(itemId: Long, positionMs: Long, durationMs: Long, completed: Boolean, state: String) = withContext(Dispatchers.IO) {
-        val body = JSONObject()
+    suspend fun saveProgress(itemId: Long, positionMs: Long, durationMs: Long, completed: Boolean, state: String, continuousMs: Long? = null) = withContext(Dispatchers.IO) {
+        val payload = JSONObject()
             .put("positionMs", positionMs)
             .put("durationMs", durationMs)
             .put("completed", completed)
             .put("state", state)
-            .toString()
-        request("/api/items/$itemId/progress", "PUT", body)
+        if (continuousMs != null) payload.put("continuousMs", continuousMs.coerceAtLeast(0))
+        request("/api/items/$itemId/progress", "PUT", payload.toString())
     }
 
     suspend fun markItemWatched(item: PopItem) = withContext(Dispatchers.IO) {
@@ -634,6 +676,14 @@ class Api(private val session: Session) {
 
     suspend fun unmarkShowWatched(libraryId: String, showTitle: String) = withContext(Dispatchers.IO) {
         requestText("/api/progress/tv?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}", "DELETE", null)
+    }
+
+    suspend fun markSeasonWatched(libraryId: String, showTitle: String, season: Int) = withContext(Dispatchers.IO) {
+        request("/api/progress/tv/season?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}&season=$season", "PUT", "{}")
+    }
+
+    suspend fun unmarkSeasonWatched(libraryId: String, showTitle: String, season: Int) = withContext(Dispatchers.IO) {
+        requestText("/api/progress/tv/season?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}&season=$season", "DELETE", null)
     }
 
     suspend fun userRatings(): List<UserRatingRow> = withContext(Dispatchers.IO) {

@@ -60,6 +60,59 @@ func TestStoreSearchesOriginalTitles(t *testing.T) {
 	}
 }
 
+func TestSearchFieldsKeepDescriptionsOptIn(t *testing.T) {
+	store, ctx := newTestStore(t)
+	movie := upsertTestItem(t, ctx, store, Item{
+		LibraryID: "movies",
+		Kind:      "movie",
+		Title:     "Quiet Harbor",
+		SortTitle: "quiet harbor",
+		Path:      "/media/movies/quiet-harbor.mkv",
+		Overview:  "A botanist discovers a luminous orchard.",
+	})
+
+	items, err := store.SearchItems(ctx, SearchOptions{Query: "luminous", SearchFields: "title", Limit: 10})
+	if err != nil {
+		t.Fatalf("default title search: %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("default title search returned description match: %#v", items)
+	}
+	items, err = store.SearchItems(ctx, SearchOptions{Query: "luminous", SearchFields: "description", Limit: 10})
+	if err != nil {
+		t.Fatalf("description search: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != movie.ID {
+		t.Fatalf("description search returned %#v, want %s", items, movie.Title)
+	}
+
+	upsertTestItem(t, ctx, store, Item{
+		LibraryID:     "tv",
+		Kind:          "episode",
+		Title:         "Night Watch S01E01",
+		SortTitle:     "night watch 01 01",
+		Path:          "/media/tv/night-watch/s01e01.mkv",
+		ShowTitle:     "Night Watch",
+		SeasonNumber:  1,
+		EpisodeNumber: 1,
+		Overview:      "A cartographer follows a vanished signal.",
+	})
+	shows, err := store.SearchShows(ctx, ShowOptions{LibraryID: "tv", Query: "cartographer", SearchFields: "title", Limit: 10})
+	if err != nil {
+		t.Fatalf("TV title search: %v", err)
+	}
+	if len(shows) != 0 {
+		t.Fatalf("TV title search returned description match: %#v", shows)
+	}
+	shows, err = store.SearchShows(ctx, ShowOptions{LibraryID: "tv", Query: "cartographer", SearchFields: "description", Limit: 10})
+	if err != nil {
+		t.Fatalf("TV description search: %v", err)
+	}
+	if len(shows) != 1 || shows[0].Title != "Night Watch" {
+		t.Fatalf("TV description search returned %#v, want Night Watch", shows)
+	}
+}
+
 func TestUpsertEpisodeRenameKeepsStableEpisodeIdentity(t *testing.T) {
 	store, ctx := newTestStore(t)
 	oldItem := upsertTestItem(t, ctx, store, Item{

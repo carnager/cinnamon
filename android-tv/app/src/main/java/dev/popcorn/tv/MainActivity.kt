@@ -1151,6 +1151,8 @@ fun PopcornApp() {
         is Screen.Show -> ShowView(
             session = session,
             show = current.show,
+            libraries = libraries,
+            showUpdate = updateAvailable,
             initialSeasonFocus = showFocusSeason,
             initialEpisodeFocus = seasonFocusEpisode,
             startWithEpisodes = false,
@@ -1159,6 +1161,18 @@ fun PopcornApp() {
             showWatched = completedShows.contains(showKey(current.show)),
             showWatchlisted = watchlistShows.contains(showKey(current.show)),
             refreshToken = visibleContentRefresh,
+            onHome = { screen = Screen.Home },
+            onLibrary = { library -> session?.let { loadLibraryPage(library, it, 0, "") } },
+            onWatchlist = { screen = Screen.Watchlist },
+            onHistory = { screen = Screen.History },
+            onSearch = ::openSearch,
+            onUpdates = { updateDialogOpen = true },
+            onScan = ::scanLibraries,
+            onLogout = {
+                prefs.edit().clear().apply()
+                session = null
+                screen = Screen.Login
+            },
             onShowWatchedChange = {
                 session?.let { active -> setShowWatched(active, current.show, !completedShows.contains(showKey(current.show))) }
             },
@@ -1187,6 +1201,8 @@ fun PopcornApp() {
         is Screen.Season -> ShowView(
             session = session,
             show = current.show,
+            libraries = libraries,
+            showUpdate = updateAvailable,
             initialSeasonFocus = current.season.seasonNumber,
             initialEpisodeFocus = seasonFocusEpisode,
             startWithEpisodes = true,
@@ -1195,6 +1211,18 @@ fun PopcornApp() {
             showWatched = completedShows.contains(showKey(current.show)),
             showWatchlisted = watchlistShows.contains(showKey(current.show)),
             refreshToken = visibleContentRefresh,
+            onHome = { screen = Screen.Home },
+            onLibrary = { library -> session?.let { loadLibraryPage(library, it, 0, "") } },
+            onWatchlist = { screen = Screen.Watchlist },
+            onHistory = { screen = Screen.History },
+            onSearch = ::openSearch,
+            onUpdates = { updateDialogOpen = true },
+            onScan = ::scanLibraries,
+            onLogout = {
+                prefs.edit().clear().apply()
+                session = null
+                screen = Screen.Login
+            },
             onShowWatchedChange = {
                 session?.let { active -> setShowWatched(active, current.show, !completedShows.contains(showKey(current.show))) }
             },

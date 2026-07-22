@@ -72,6 +72,8 @@ import kotlinx.coroutines.launch
 fun ShowView(
     session: Session?,
     show: ShowSummary,
+    libraries: List<Library>,
+    showUpdate: Boolean,
     initialSeasonFocus: Int?,
     initialEpisodeFocus: Long?,
     startWithEpisodes: Boolean,
@@ -80,6 +82,14 @@ fun ShowView(
     showWatched: Boolean,
     showWatchlisted: Boolean,
     refreshToken: Long,
+    onHome: () -> Unit,
+    onLibrary: (Library) -> Unit,
+    onWatchlist: () -> Unit,
+    onHistory: () -> Unit,
+    onSearch: () -> Unit,
+    onUpdates: () -> Unit,
+    onScan: () -> Unit,
+    onLogout: () -> Unit,
     onShowWatchedChange: () -> Unit,
     onShowWatchlistChange: () -> Unit,
     onSeason: (SeasonSummary) -> Unit,
@@ -103,6 +113,7 @@ fun ShowView(
     val descriptionFocus = remember(show.libraryId, show.title) { FocusRequester() }
     val seasonFocus = remember(show.libraryId, show.title) { FocusRequester() }
     val firstEpisodeFocus = remember(show.libraryId, show.title) { FocusRequester() }
+    val navFocus = remember { FocusRequester() }
     var episodePreviewActive by remember(show.libraryId, show.title) { mutableStateOf(false) }
 
     LaunchedEffect(show.libraryId, show.title, session) {
@@ -171,87 +182,114 @@ fun ShowView(
         "$verb S%02dE%02d".format(episode.seasonNumber, episode.episodeNumber)
     }.orEmpty()
 
-    Column(Modifier.fillMaxSize().background(Bg)) {
-        ShowHeader(
-            session = session,
-            show = show,
-            focusedSeason = focusedSeason,
-            focusedEpisode = focusedEpisode.takeIf { episodePreviewActive },
-            descriptionFocus = descriptionFocus,
-            watched = showWatched,
-            watchlisted = showWatchlisted,
-            nextEpisodeLabel = nextEpisodeLabel,
-            onNextEpisode = nextEpisode?.let { episode ->
-                {
-                    focusedEpisode = episode
-                    onEpisodeFocus(episode)
-                    onPlayEpisode(episode)
+    Box(Modifier.fillMaxSize().background(Bg)) {
+        Column(Modifier.fillMaxSize()) {
+            ShowHeader(
+                session = session,
+                show = show,
+                focusedSeason = focusedSeason,
+                focusedEpisode = focusedEpisode.takeIf { episodePreviewActive },
+                descriptionFocus = descriptionFocus,
+                watched = showWatched,
+                watchlisted = showWatchlisted,
+                nextEpisodeLabel = nextEpisodeLabel,
+                onNextEpisode = nextEpisode?.let { episode ->
+                    {
+                        focusedEpisode = episode
+                        onEpisodeFocus(episode)
+                        onPlayEpisode(episode)
+                    }
+                },
+                onWatchedChange = onShowWatchedChange,
+                onWatchlistChange = onShowWatchlistChange,
+                onFullText = { fullTextOpen = true },
+                onActionFocus = { episodePreviewActive = false },
+            )
+
+            if (error.isNotBlank()) {
+                Text(error, color = ErrorRed, modifier = Modifier.padding(start = 116.dp, end = 32.dp, top = 4.dp, bottom = 4.dp), fontSize = 12.sp)
+            }
+
+            if (loading) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
                 }
-            },
-            onWatchedChange = onShowWatchedChange,
-            onWatchlistChange = onShowWatchlistChange,
-            onFullText = { fullTextOpen = true },
-            onActionFocus = { episodePreviewActive = false },
+            } else {
+                // Keep tabs and episode cards clear of the navigation rail overlay
+                // (84dp + the rows' own 32dp lines content up with the header text).
+                Column(Modifier.fillMaxWidth().weight(1f).padding(start = 84.dp)) {
+                    SeasonTabs(
+                        seasons = seasons,
+                        selectedSeason = selectedSeason,
+                        focusRequester = seasonFocus,
+                        autoFocus = !startWithEpisodes,
+                        onFocus = {
+                            focusedSeason = it
+                            episodePreviewActive = false
+                        },
+                        onSeason = {
+                            selectedSeason = it
+                            focusedSeason = it
+                            focusedEpisode = null
+                            onSeason(it)
+                        },
+                        onSeasonMenu = onSeasonMenu,
+                        onUp = { requestTvFocus(descriptionFocus) },
+                        onDown = { requestTvFocus(firstEpisodeFocus) },
+                    )
+                    if (episodesLoading && episodes.isEmpty()) {
+                        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
+                        }
+                    } else {
+                        EpisodeCarousel(
+                            session = session,
+                            episodes = episodes,
+                            completedEpisodes = completedItems,
+                            watchlistEpisodes = watchlistItems,
+                            initialEpisodeFocus = initialEpisodeFocus,
+                            firstFocusRequester = firstEpisodeFocus,
+                            autoFocus = startWithEpisodes,
+                            onFocus = {
+                                focusedEpisode = it
+                                episodePreviewActive = true
+                                onEpisodeFocus(it)
+                            },
+                            onEpisode = {
+                                focusedEpisode = it
+                                onEpisodeFocus(it)
+                                onEpisode(it)
+                            },
+                            onEpisodeMenu = onEpisodeMenu,
+                            onUp = { requestTvFocus(seasonFocus) },
+                        )
+                    }
+                }
+            }
+        }
+
+        SideNavigation(
+            session = session,
+            libraries = libraries,
+            selected = show.libraryId,
+            showUpdate = showUpdate,
+            onHome = onHome,
+            onLibrary = onLibrary,
+            onWatchlist = onWatchlist,
+            onHistory = onHistory,
+            onSearch = onSearch,
+            onUpdates = onUpdates,
+            onScan = onScan,
+            onLogout = onLogout,
+            firstFocusRequester = navFocus,
+            onExit = { requestTvFocus(descriptionFocus) },
         )
 
-        if (error.isNotBlank()) {
-            Text(error, color = ErrorRed, modifier = Modifier.padding(horizontal = 32.dp, vertical = 4.dp), fontSize = 12.sp)
-        }
-
-        if (loading) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(24.dp))
-            }
-        } else {
-            Column(Modifier.fillMaxWidth().weight(1f)) {
-                SeasonTabs(
-                    seasons = seasons,
-                    selectedSeason = selectedSeason,
-                    focusRequester = seasonFocus,
-                    autoFocus = !startWithEpisodes,
-                    onFocus = {
-                        focusedSeason = it
-                        episodePreviewActive = false
-                    },
-                    onSeason = {
-                        selectedSeason = it
-                        focusedSeason = it
-                        focusedEpisode = null
-                        onSeason(it)
-                    },
-                    onSeasonMenu = onSeasonMenu,
-                    onUp = { requestTvFocus(descriptionFocus) },
-                    onDown = { requestTvFocus(firstEpisodeFocus) },
-                )
-                if (episodesLoading && episodes.isEmpty()) {
-                    Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(22.dp))
-                    }
-                } else {
-                    EpisodeCarousel(
-                        session = session,
-                        episodes = episodes,
-                        completedEpisodes = completedItems,
-                        watchlistEpisodes = watchlistItems,
-                        initialEpisodeFocus = initialEpisodeFocus,
-                        firstFocusRequester = firstEpisodeFocus,
-                        autoFocus = startWithEpisodes,
-                        onFocus = {
-                            focusedEpisode = it
-                            episodePreviewActive = true
-                            onEpisodeFocus(it)
-                        },
-                        onEpisode = {
-                            focusedEpisode = it
-                            onEpisodeFocus(it)
-                            onEpisode(it)
-                        },
-                        onEpisodeMenu = onEpisodeMenu,
-                        onUp = { requestTvFocus(seasonFocus) },
-                    )
-                }
-            }
-        }
+        CinnamonBrand(
+            modifier = Modifier.align(Alignment.TopStart).padding(start = 26.dp, top = 24.dp),
+            markSize = 42,
+            fontSize = 21,
+        )
     }
 
     if (fullTextOpen) {
@@ -341,8 +379,8 @@ fun ShowHeader(
             Modifier
                 .align(Alignment.BottomStart)
                 .widthIn(max = TvDetailMaxWidth)
-                .fillMaxWidth(.64f)
-                .padding(start = 36.dp, end = 28.dp, bottom = 20.dp),
+                .fillMaxWidth(.70f)
+                .padding(start = 116.dp, end = 28.dp, bottom = 20.dp),
         ) {
             val genreLine = show.genres.split(",", "/", "|")
                 .map { it.trim() }

@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strconv"
 	"testing"
-	"time"
 
 	"popcorn/internal/config"
 	"popcorn/internal/media"
@@ -60,47 +59,7 @@ func newSubtitleTestApp(t *testing.T, dir string) (*App, string) {
 	return app, strconv.FormatInt(item.ID, 10)
 }
 
-func TestSubtitleServesSidecarWhenPresent(t *testing.T) {
-	dir := t.TempDir()
-	app, id := newSubtitleTestApp(t, dir)
-	sidecar := filepath.Join(dir, "movie.s2.de.vtt")
-	if err := os.WriteFile(sidecar, []byte("WEBVTT-SIDECAR"), 0o644); err != nil {
-		t.Fatalf("write sidecar: %v", err)
-	}
-
-	rec := httptest.NewRecorder()
-	app.subtitle(rec, subtitleRequest(id, ""))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("subtitle = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
-	}
-	if got := rec.Body.String(); got != "WEBVTT-SIDECAR" {
-		t.Fatalf("body = %q, want sidecar content", got)
-	}
-	if ct := rec.Header().Get("Content-Type"); ct != "text/vtt; charset=utf-8" {
-		t.Fatalf("Content-Type = %q", ct)
-	}
-}
-
-func TestSubtitleIgnoresStaleSidecar(t *testing.T) {
-	dir := t.TempDir()
-	app, id := newSubtitleTestApp(t, dir)
-	sidecar := filepath.Join(dir, "movie.s2.vtt")
-	if err := os.WriteFile(sidecar, []byte("WEBVTT-STALE"), 0o644); err != nil {
-		t.Fatalf("write sidecar: %v", err)
-	}
-	old := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(sidecar, old, old); err != nil {
-		t.Fatalf("age sidecar: %v", err)
-	}
-
-	rec := httptest.NewRecorder()
-	app.subtitle(rec, subtitleRequest(id, ""))
-	if got := rec.Body.String(); got != "WEBVTT-CONVERTED" {
-		t.Fatalf("body = %q, want on-the-fly conversion for stale sidecar", got)
-	}
-}
-
-func TestSubtitleStreamsConversionWithoutSidecar(t *testing.T) {
+func TestSubtitleStreamsConversion(t *testing.T) {
 	dir := t.TempDir()
 	app, id := newSubtitleTestApp(t, dir)
 
@@ -117,7 +76,9 @@ func TestSubtitleStreamsConversionWithoutSidecar(t *testing.T) {
 	}
 }
 
-func TestSubtitleSkipsSidecarForShiftedStart(t *testing.T) {
+// A leftover sidecar next to the video (from the removed pre-extraction
+// pipeline) must not be served — conversions always come from the source.
+func TestSubtitleIgnoresLeftoverSidecarFiles(t *testing.T) {
 	dir := t.TempDir()
 	app, id := newSubtitleTestApp(t, dir)
 	if err := os.WriteFile(filepath.Join(dir, "movie.s2.de.vtt"), []byte("WEBVTT-SIDECAR"), 0o644); err != nil {
@@ -125,9 +86,9 @@ func TestSubtitleSkipsSidecarForShiftedStart(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	app.subtitle(rec, subtitleRequest(id, "?start=30"))
+	app.subtitle(rec, subtitleRequest(id, ""))
 	if got := rec.Body.String(); got != "WEBVTT-CONVERTED" {
-		t.Fatalf("body = %q, want conversion for shifted start", got)
+		t.Fatalf("body = %q, want converted output", got)
 	}
 }
 

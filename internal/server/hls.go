@@ -187,17 +187,6 @@ func (a *App) subtitle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "media unavailable", http.StatusNotFound)
 		return
 	}
-	// Pre-extracted sidecars carry the full-file timeline, so they only
-	// replace unshifted conversions.
-	if start == 0 {
-		if sidecar := subtitleSidecarPath(path, index); sidecar != "" {
-			w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-			w.Header().Set("Cache-Control", "no-store")
-			w.Header().Set("X-Popcorn-Start", "0.000")
-			http.ServeFile(w, r, sidecar)
-			return
-		}
-	}
 	// Extracting an embedded subtitle demuxes the entire file, which can take
 	// well over the client's ~8s HTTP read timeout on big files. Stream the
 	// conversion instead of buffering it: -flush_packets pushes each cue

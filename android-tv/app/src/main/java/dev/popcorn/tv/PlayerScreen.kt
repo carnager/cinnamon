@@ -355,9 +355,14 @@ fun PlayerScreen(
         return codec in setOf("subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text")
     }
 
-    fun playbackMediaItem(activeSession: Session, url: String, subtitleIndex: Int?, subtitleStartMs: Long): MediaItem {
+    // Direct play never sideloads the server-converted VTT: the embedded text
+    // track is already in the stream and ExoPlayer decodes it (including
+    // SSA/ASS), while the sideload URL forces the server to demux the whole
+    // file over NFS just to convert the track. HLS still needs the sideload —
+    // the transcoded stream carries no text tracks.
+    fun playbackMediaItem(activeSession: Session, url: String, subtitleIndex: Int?, subtitleStartMs: Long, sideloadSubtitle: Boolean): MediaItem {
         val builder = MediaItem.Builder().setUri(Uri.parse(url))
-        if (subtitleIndex != null && isTextSubtitle(subtitleIndex)) {
+        if (sideloadSubtitle && subtitleIndex != null && isTextSubtitle(subtitleIndex)) {
             builder.setSubtitleConfigurations(
                 listOf(
                     MediaItem.SubtitleConfiguration.Builder(Uri.parse(subtitleUrl(activeSession, subtitleIndex, subtitleStartMs)))
@@ -383,7 +388,7 @@ fun PlayerScreen(
             applyHlsSubtitleSelection(plan.selectedSubtitleIndex)
         }
         val subtitleStartMs = if (plan.usesHls) plan.startPositionMs else 0L
-        exoPlayer.setMediaItem(playbackMediaItem(activeSession, absolutePlanUrl(activeSession, plan), plan.selectedSubtitleIndex, subtitleStartMs))
+        exoPlayer.setMediaItem(playbackMediaItem(activeSession, absolutePlanUrl(activeSession, plan), plan.selectedSubtitleIndex, subtitleStartMs, sideloadSubtitle = plan.usesHls))
         exoPlayer.prepare()
         if (!plan.usesHls && startMs > 0) {
             exoPlayer.seekTo(startMs)
@@ -461,7 +466,7 @@ fun PlayerScreen(
                 hlsSessionId = fallbackHlsSession
                 playbackBaseMs = if (fallbackHlsSession != null) startMs.coerceAtLeast(0) else 0L
                 exoPlayer.setMediaItem(
-                    playbackMediaItem(activeSession, fallbackUrl, selectedSubtitleIndex, if (fallbackHlsSession != null) startMs else 0L),
+                    playbackMediaItem(activeSession, fallbackUrl, selectedSubtitleIndex, if (fallbackHlsSession != null) startMs else 0L, sideloadSubtitle = fallbackHlsSession != null),
                 )
                 exoPlayer.prepare()
                 if (fallbackHlsSession == null && startMs > 0) {
@@ -541,7 +546,12 @@ fun PlayerScreen(
 
     fun switchSubtitle(index: Int?) {
         selectedSubtitleIndex = index
-        logClient("switch-subtitle", extra = JSONObject().put("index", index ?: -1))
+        if (!planUsesHls && originalStreams.isNotEmpty()) {
+            logClient("switch-subtitle-direct", extra = JSONObject().put("index", index ?: -1))
+            applyDirectTrackSelections()
+            return
+        }
+        logClient("switch-subtitle-plan", extra = JSONObject().put("index", index ?: -1))
         requestPlaybackPlan(selectedBandwidth, logicalPositionMs(), forceModeForBandwidth(selectedBandwidth))
     }
 

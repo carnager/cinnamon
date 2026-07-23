@@ -29,9 +29,6 @@ func main() {
 	watch := flag.String("watch", env("POPCORN_WATCH_DIRS", ""), "comma-separated local directories to watch")
 	remap := flag.String("map", env("POPCORN_WATCH_MAP", ""), "comma-separated local=popcorn path prefix maps (e.g. /mnt/tank/movies=/nas/movies)")
 	debounce := flag.Duration("debounce", envDuration("POPCORN_WATCH_DEBOUNCE", 2*time.Second), "coalesce events within this window before notifying")
-	ffmpeg := flag.String("ffmpeg", env("POPCORN_WATCH_FFMPEG", ""), "path to ffmpeg; enables subtitle sidecar extraction (default: ffmpeg next to this binary, if present)")
-	ffprobe := flag.String("ffprobe", env("POPCORN_WATCH_FFPROBE", ""), "path to ffprobe (default: next to ffmpeg)")
-	backfill := flag.Bool("backfill", envBool("POPCORN_WATCH_BACKFILL"), "extract sidecars for all existing videos on startup")
 	flag.Parse()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -53,26 +50,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	ffmpegPath := *ffmpeg
-	if ffmpegPath == "" {
-		ffmpegPath = siblingTool("ffmpeg")
-	}
-	var ext *extractor
-	if ffmpegPath != "" {
-		probe := *ffprobe
-		if probe == "" {
-			probe = filepath.Join(filepath.Dir(ffmpegPath), "ffprobe")
-		}
-		ext = newExtractor(ffmpegPath, probe, log)
-		log.Info("subtitle extraction enabled", "ffmpeg", ffmpegPath, "ffprobe", probe)
-		if *backfill {
-			go ext.backfill(roots)
-		}
-	} else if *backfill {
-		log.Error("-backfill requires ffmpeg (pass -ffmpeg or place it next to popcorn-watch)")
-		os.Exit(2)
-	}
-
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Error("create watcher", "error", err)
@@ -80,7 +57,7 @@ func main() {
 	}
 	defer w.Close()
 	watched := setupWatches(w, roots, log)
-	watchAndNotify(w, roots, watched, maps, *debounce, c.notify, ext, log)
+	watchAndNotify(w, roots, watched, maps, *debounce, c.notify, log)
 }
 
 // setupWatches registers recursive watches on every root and returns the set
@@ -101,7 +78,7 @@ func setupWatches(w *fsnotify.Watcher, roots []string, log *slog.Logger) map[str
 
 // watchAndNotify consumes watcher events and calls notify with the changed
 // directories. It returns when the watcher is closed.
-func watchAndNotify(w *fsnotify.Watcher, roots []string, watched map[string]bool, maps []pathMap, debounce time.Duration, notify func([]string) error, ext *extractor, log *slog.Logger) {
+func watchAndNotify(w *fsnotify.Watcher, roots []string, watched map[string]bool, maps []pathMap, debounce time.Duration, notify func([]string) error, log *slog.Logger) {
 
 	// Debounce per target path, not globally: a single global timer that
 	// resets on every event never fires while anything on the datasets is
@@ -130,11 +107,6 @@ func watchAndNotify(w *fsnotify.Watcher, roots []string, watched map[string]bool
 		mu.Unlock()
 		if len(paths) == 0 {
 			return
-		}
-		if ext != nil {
-			for _, p := range due {
-				ext.enqueue(p)
-			}
 		}
 		if err := notify(paths); err != nil {
 			// Keep the paths pending so a transient failure (server restart,
@@ -268,8 +240,7 @@ func ignored(path string) bool {
 	if strings.HasPrefix(base, ".") || base == "@eaDir" {
 		return true
 	}
-	// Subtitle files never need a library scan, and ignoring them keeps the
-	// extractor's own sidecar writes from echoing back as events.
+	// Subtitle files never need a library scan.
 	switch strings.ToLower(filepath.Ext(base)) {
 	case ".vtt", ".srt", ".ass", ".ssa", ".sub", ".idx":
 		return true
@@ -399,31 +370,6 @@ func env(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-// siblingTool returns an executable living next to the popcorn-watch binary,
-// or "". Dropping a static ffmpeg beside popcorn-watch is the intended
-// zero-config install on appliance hosts like TrueNAS.
-func siblingTool(name string) string {
-	self, err := os.Executable()
-	if err != nil {
-		return ""
-	}
-	candidate := filepath.Join(filepath.Dir(self), name)
-	info, err := os.Stat(candidate)
-	if err != nil || info.IsDir() || info.Mode()&0o111 == 0 {
-		return ""
-	}
-	return candidate
-}
-
-func envBool(key string) bool {
-	switch strings.ToLower(os.Getenv(key)) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
 }
 
 func envDuration(key string, fallback time.Duration) time.Duration {

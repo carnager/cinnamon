@@ -25,6 +25,19 @@ func TestScanTargetNeverReturnsWatchRoot(t *testing.T) {
 	}
 }
 
+func TestIgnoredSkipsSubtitleFiles(t *testing.T) {
+	for _, path := range []string{"/m/Movie.s2.de.vtt", "/m/Movie.srt", "/m/Movie.ASS", "/m/.hidden", "/m/@eaDir"} {
+		if !ignored(path) {
+			t.Errorf("ignored(%q) = false, want true", path)
+		}
+	}
+	for _, path := range []string{"/m/Movie.mkv", "/m/Movie.nfo", "/m/Season 1"} {
+		if ignored(path) {
+			t.Errorf("ignored(%q) = true, want false", path)
+		}
+	}
+}
+
 func TestRemapPath(t *testing.T) {
 	maps, err := parseMaps("/mnt/tank/movies=/nas/movies, /mnt/tank/tv=/nas/tv")
 	if err != nil {
@@ -87,7 +100,7 @@ func startTestWatcher(t *testing.T, root string) *notifyRecorder {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		watchAndNotify(w, []string{root}, watched, nil, 150*time.Millisecond, rec.notify, nil, log)
+		watchAndNotify(w, []string{root}, watched, nil, 150*time.Millisecond, rec.notify, log)
 	}()
 	t.Cleanup(func() {
 		w.Close()

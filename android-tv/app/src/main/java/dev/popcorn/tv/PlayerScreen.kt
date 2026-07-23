@@ -551,6 +551,15 @@ fun PlayerScreen(
         if (!planUsesHls && originalStreams.isNotEmpty()) {
             logClient("switch-subtitle-direct", extra = JSONObject().put("index", index ?: -1))
             applyDirectTrackSelections()
+            // Progressive playback discards buffered samples of deselected
+            // tracks, so a newly enabled text track stays silent until the
+            // already-buffered media (up to ~50s) has played out. Seek in
+            // place to flush: the empty text queue can't satisfy the seek, so
+            // ExoPlayer re-extracts from the current position with the track
+            // active and cues appear immediately.
+            if (index != null) {
+                exoPlayer.seekTo(exoPlayer.currentPosition)
+            }
             return
         }
         logClient("switch-subtitle-plan", extra = JSONObject().put("index", index ?: -1))

@@ -122,10 +122,25 @@ private fun applyOriginalTrack(player: ExoPlayer, stream: StreamInfo?, trackType
             candidates.add(group to i)
             val format = group.getTrackFormat(i)
             val formatLanguage = format.language?.let { Media3Util.normalizeLanguageCode(it) }
+            val formatForced = (format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0
             var score = 0
             if (streamLanguage != null && formatLanguage != null && formatLanguage.equals(streamLanguage, ignoreCase = true)) score += 8
-            if (stream.title.isNotBlank() && format.label?.contains(stream.title, ignoreCase = true) == true) score += 4
-            if (stream.codec.isNotBlank() && format.sampleMimeType?.contains(stream.codec, ignoreCase = true) == true) score += 2
+            if (stream.title.isNotBlank()) {
+                val label = format.label.orEmpty().trim()
+                // Exact title must strictly outrank a substring hit: with paired
+                // tracks like "Deutsch" / "Deutsch (forced)" the forced label
+                // CONTAINS the plain title, and an equal score would silently
+                // render the near-empty forced track for a "Deutsch" pick.
+                if (label.equals(stream.title.trim(), ignoreCase = true)) {
+                    score += 8
+                } else if (label.contains(stream.title, ignoreCase = true)) {
+                    score += 1
+                }
+            }
+            // Forced-flag agreement separates same-language pairs that carry no
+            // titles at all (only "eng" + "eng forced" dispositions).
+            if (stream.forced == formatForced) score += 2
+            if (stream.codec.isNotBlank() && format.sampleMimeType?.contains(stream.codec, ignoreCase = true) == true) score += 1
             if (score > bestScore) {
                 bestScore = score
                 bestGroup = group
@@ -133,10 +148,10 @@ private fun applyOriginalTrack(player: ExoPlayer, stream: StreamInfo?, trackType
             }
         }
     }
-    // A codec-only "match" (score 2) says nothing about which track the user picked
-    // (all audio tracks usually share a codec) — trust the container-order ordinal
-    // unless language or title actually matched.
-    if (bestScore < 4 && preferredOrdinal != null) {
+    // Weak signals (substring title, forced agreement, codec) can sum to at
+    // most 4 and say nothing about which track the user picked — trust the
+    // container-order ordinal unless language or the exact title matched.
+    if (bestScore < 8 && preferredOrdinal != null) {
         candidates.getOrNull(preferredOrdinal)?.let { (group, index) ->
             bestGroup = group
             bestIndex = index
@@ -149,7 +164,8 @@ private fun applyOriginalTrack(player: ExoPlayer, stream: StreamInfo?, trackType
         .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, bestIndex))
         .build()
     val format = group.getTrackFormat(bestIndex)
-    return "override(score=$bestScore idx=$bestIndex mime=${format.sampleMimeType} lang=${format.language} supported=${group.isTrackSupported(bestIndex)})"
+    val forced = (format.selectionFlags and C.SELECTION_FLAG_FORCED) != 0
+    return "override(score=$bestScore idx=$bestIndex mime=${format.sampleMimeType} lang=${format.language} label=${format.label} forced=$forced supported=${group.isTrackSupported(bestIndex)})"
 }
 
 fun showNativeBandwidthMenu(

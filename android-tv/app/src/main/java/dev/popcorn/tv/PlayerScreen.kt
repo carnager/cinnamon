@@ -51,6 +51,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -285,7 +286,8 @@ fun PlayerScreen(
 
     fun applyDirectTrackSelections() {
         if (planUsesHls || originalStreams.isEmpty()) return
-        applyOriginalTrackSelection(exoPlayer, originalStreams, selectedAudioIndex, selectedSubtitleIndex)
+        val result = applyOriginalTrackSelection(exoPlayer, originalStreams, selectedAudioIndex, selectedSubtitleIndex)
+        logClient("apply-direct-tracks", message = result.take(230))
     }
 
     fun applyHlsSubtitleSelection(subtitleIndex: Int?) {
@@ -820,6 +822,23 @@ fun PlayerScreen(
 
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
                 if (reason == Player.DISCONTINUITY_REASON_SEEK) resetProgressEvidence()
+            }
+
+            // Diagnostic for embedded-subtitle playback: report what ExoPlayer
+            // actually exposes and selects, so track problems are debuggable
+            // from the server log without a device attached.
+            override fun onTracksChanged(tracks: Tracks) {
+                val text = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+                val supported = text.count { it.length > 0 && it.isTrackSupported(0) }
+                val selected = text.filter { it.isSelected }.joinToString(",") { group ->
+                    val format = group.getTrackFormat(0)
+                    "${format.sampleMimeType}/${format.language}"
+                }
+                val disabled = exoPlayer.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
+                logClient(
+                    "tracks-changed",
+                    message = "textGroups=${text.size} supported=$supported textDisabled=$disabled selected=[$selected]".take(230),
+                )
             }
 
             override fun onPlayerError(error: PlaybackException) {

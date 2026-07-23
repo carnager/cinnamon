@@ -77,36 +77,39 @@ fun showNativeOriginalTrackMenu(
     )
 }
 
+// Returns a compact outcome summary ("audio=… text=…") for client-side logging.
 fun applyOriginalTrackSelection(
     player: ExoPlayer,
     originalStreams: List<StreamInfo>,
     audioIndex: Int?,
     subtitleIndex: Int?,
-) {
+): String {
     val audioStreams = originalStreams.filter { it.type == "audio" }
     val subtitleStreams = originalStreams.filter { it.type == "subtitle" }
     val audioStream = audioStreams.firstOrNull { it.index == audioIndex }
     val audioOrdinal = audioStreams.indexOfFirst { it.index == audioIndex }.takeIf { it >= 0 }
     val subtitleStream = subtitleStreams.firstOrNull { it.index == subtitleIndex }
     val subtitleOrdinal = subtitleStreams.indexOfFirst { it.index == subtitleIndex }.takeIf { it >= 0 }
-    applyOriginalTrack(player, audioStream, C.TRACK_TYPE_AUDIO, disable = false, preferredOrdinal = audioOrdinal)
-    if (subtitleIndex == null) {
+    val audioResult = applyOriginalTrack(player, audioStream, C.TRACK_TYPE_AUDIO, disable = false, preferredOrdinal = audioOrdinal)
+    val textResult = if (subtitleIndex == null) {
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
             .build()
+        "off"
     } else {
         applyOriginalTrack(player, subtitleStream, C.TRACK_TYPE_TEXT, disable = false, preferredOrdinal = subtitleOrdinal)
     }
+    return "audio=$audioResult text=$textResult"
 }
 
-private fun applyOriginalTrack(player: ExoPlayer, stream: StreamInfo?, trackType: Int, disable: Boolean, preferredOrdinal: Int? = null) {
+private fun applyOriginalTrack(player: ExoPlayer, stream: StreamInfo?, trackType: Int, disable: Boolean, preferredOrdinal: Int? = null): String {
     if (disable) {
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .setTrackTypeDisabled(trackType, true)
             .build()
-        return
+        return "disabled"
     }
-    if (stream == null) return
+    if (stream == null) return "no-stream"
     // ffprobe reports ISO 639-2 codes ("ger", "jpn") while ExoPlayer normalizes
     // Format.language to 639-1 ("de", "ja") — compare both sides normalized.
     val streamLanguage = stream.language.takeIf { it.isNotBlank() }?.let { Media3Util.normalizeLanguageCode(it) }
@@ -139,12 +142,14 @@ private fun applyOriginalTrack(player: ExoPlayer, stream: StreamInfo?, trackType
             bestIndex = index
         }
     }
-    val group = bestGroup ?: return
-    if (bestIndex < 0) return
+    val group = bestGroup ?: return "no-group(candidates=${candidates.size} ordinal=$preferredOrdinal)"
+    if (bestIndex < 0) return "no-index"
     player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
         .setTrackTypeDisabled(trackType, false)
         .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, bestIndex))
         .build()
+    val format = group.getTrackFormat(bestIndex)
+    return "override(score=$bestScore idx=$bestIndex mime=${format.sampleMimeType} lang=${format.language} supported=${group.isTrackSupported(bestIndex)})"
 }
 
 fun showNativeBandwidthMenu(

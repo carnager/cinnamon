@@ -51,6 +51,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
@@ -290,11 +291,32 @@ fun PlayerScreen(
         logClient("apply-direct-tracks", message = result.take(230))
     }
 
-    fun applyHlsSubtitleSelection(subtitleIndex: Int?) {
-        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+    // Sideloaded subtitles are told apart by this id rather than by language:
+    // a file can carry two tracks of the same language, one of them forced.
+    fun sideloadedSubtitleId(index: Int): String = "popcorn-sub-$index"
+
+    // Returns true once the wanted track exists and has been selected, so the
+    // caller can keep retrying while the player is still preparing.
+    fun applyHlsSubtitleSelection(subtitleIndex: Int?): Boolean {
+        val params = exoPlayer.trackSelectionParameters.buildUpon()
             .clearOverridesOfType(C.TRACK_TYPE_TEXT)
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, subtitleIndex == null)
-            .build()
+        if (subtitleIndex == null) {
+            exoPlayer.trackSelectionParameters = params.build()
+            return true
+        }
+        val wanted = sideloadedSubtitleId(subtitleIndex)
+        for (group in exoPlayer.currentTracks.groups) {
+            if (group.type != C.TRACK_TYPE_TEXT) continue
+            for (track in 0 until group.length) {
+                if (group.getTrackFormat(track).id != wanted) continue
+                params.setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, track))
+                exoPlayer.trackSelectionParameters = params.build()
+                return true
+            }
+        }
+        exoPlayer.trackSelectionParameters = params.build()
+        return false
     }
 
     fun progressCompleted(positionMs: Long, durationMs: Long): Boolean {
@@ -364,15 +386,24 @@ fun PlayerScreen(
     // the transcoded stream carries no text tracks.
     fun playbackMediaItem(activeSession: Session, url: String, subtitleIndex: Int?, subtitleStartMs: Long, sideloadSubtitle: Boolean): MediaItem {
         val builder = MediaItem.Builder().setUri(Uri.parse(url))
-        if (sideloadSubtitle && subtitleIndex != null && isTextSubtitle(subtitleIndex)) {
-            builder.setSubtitleConfigurations(
-                listOf(
-                    MediaItem.SubtitleConfiguration.Builder(Uri.parse(subtitleUrl(activeSession, subtitleIndex, subtitleStartMs)))
+        if (sideloadSubtitle) {
+            // Sideload every text track, not only the chosen one. ExoPlayer
+            // fetches a sideloaded subtitle when its track is selected, so the
+            // rest cost nothing until picked — and switching becomes a track
+            // selection rather than a new plan, which used to tear down the
+            // transcode session and rebuffer for several seconds.
+            val configs = originalStreams
+                .filter { it.type == "subtitle" && isTextSubtitle(it.index) }
+                .map { stream ->
+                    MediaItem.SubtitleConfiguration.Builder(Uri.parse(subtitleUrl(activeSession, stream.index, subtitleStartMs)))
                         .setMimeType(MimeTypes.TEXT_VTT)
-                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-                        .build(),
-                ),
-            )
+                        .setId(sideloadedSubtitleId(stream.index))
+                        .setLanguage(stream.language.ifBlank { null })
+                        .setLabel(stream.label())
+                        .setSelectionFlags(if (stream.index == subtitleIndex) C.SELECTION_FLAG_DEFAULT else 0)
+                        .build()
+                }
+            if (configs.isNotEmpty()) builder.setSubtitleConfigurations(configs)
         }
         return builder.build()
     }
@@ -568,8 +599,10 @@ fun PlayerScreen(
             }
             return
         }
-        logClient("switch-subtitle-plan", extra = JSONObject().put("index", index ?: -1))
-        requestPlaybackPlan(selectedBandwidth, logicalPositionMs(), forceModeForBandwidth(selectedBandwidth))
+        // Every text track is already sideloaded, so this is a track selection:
+        // no new plan, no transcode restart, nothing to rebuffer.
+        logClient("switch-subtitle-hls", extra = JSONObject().put("index", index ?: -1))
+        applyHlsSubtitleSelection(index)
     }
 
     fun applyRemoteCommand(command: PlayerRemoteCommand) {
@@ -1141,10 +1174,16 @@ fun PlayerScreen(
     }
 
     LaunchedEffect(originalStreams.size, selectedAudioIndex, selectedSubtitleIndex, planUsesHls, exoPlayer) {
-        if (planUsesHls || originalStreams.isEmpty()) return@LaunchedEffect
+        if (originalStreams.isEmpty()) return@LaunchedEffect
         repeat(20) {
-            applyDirectTrackSelections()
-            if (exoPlayer.currentTracks.groups.isNotEmpty()) return@LaunchedEffect
+            // A selection made while the player is still preparing has no track
+            // to bind to yet, so keep trying until the groups show up.
+            if (planUsesHls) {
+                if (applyHlsSubtitleSelection(selectedSubtitleIndex)) return@LaunchedEffect
+            } else {
+                applyDirectTrackSelections()
+                if (exoPlayer.currentTracks.groups.isNotEmpty()) return@LaunchedEffect
+            }
             delay(250)
         }
     }

@@ -155,7 +155,11 @@ func (a *App) subtitle(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rawIndex := strings.TrimSuffix(strings.TrimSpace(r.PathValue("subtitle")), ".vtt")
+	// ".ass" keeps the original styling and positioning for clients that render
+	// SSA themselves; ".vtt" is the lossy conversion every browser understands.
+	requested := strings.TrimSpace(r.PathValue("subtitle"))
+	asSSA := strings.HasSuffix(requested, ".ass")
+	rawIndex := strings.TrimSuffix(strings.TrimSuffix(requested, ".vtt"), ".ass")
 	index, err := strconv.Atoi(rawIndex)
 	if err != nil {
 		http.Error(w, "invalid subtitle index", http.StatusBadRequest)
@@ -193,7 +197,7 @@ func (a *App) subtitle(w http.ResponseWriter, r *http.Request) {
 	// through ffmpeg's output buffer immediately (a whole movie's VTT is
 	// smaller than that buffer), and flushing per chunk keeps bytes moving so
 	// the client never sees a silent connection.
-	args := subtitleTranscodeArgs(path, index, start)
+	args := subtitleTranscodeArgs(path, index, start, asSSA)
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, a.cfg.FFmpegPath, args...)
@@ -209,7 +213,11 @@ func (a *App) subtitle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "subtitle conversion failed", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+	if asSSA {
+		w.Header().Set("Content-Type", "text/x-ssa; charset=utf-8")
+	} else {
+		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Popcorn-Start", strconv.FormatFloat(start, 'f', 3, 64))
 	flusher, _ := w.(http.Flusher)
@@ -240,7 +248,11 @@ func (a *App) subtitle(w http.ResponseWriter, r *http.Request) {
 // zero. Input seeking is fast, but subtitle streams seek to the previous cue;
 // that makes the resulting WebVTT offset depend on whichever cue happened to
 // precede the requested position.
-func subtitleTranscodeArgs(path string, index int, start float64) []string {
+func subtitleTranscodeArgs(path string, index int, start float64, asSSA bool) []string {
+	format := "webvtt"
+	if asSSA {
+		format = "ass"
+	}
 	args := []string{"-hide_banner", "-loglevel", "error", "-i", path}
 	if start > 0 {
 		formatted := strconv.FormatFloat(start, 'f', 3, 64)
@@ -248,13 +260,13 @@ func subtitleTranscodeArgs(path string, index int, start float64) []string {
 	}
 	args = append(args,
 		"-map", fmt.Sprintf("0:%d", index),
-		"-c:s", "webvtt",
+		"-c:s", format,
 	)
 	if start > 0 {
 		args = append(args, "-output_ts_offset", "-"+strconv.FormatFloat(start, 'f', 3, 64))
 	}
 	return append(args,
-		"-f", "webvtt",
+		"-f", format,
 		"-flush_packets", "1",
 		"-",
 	)

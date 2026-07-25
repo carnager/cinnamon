@@ -35,6 +35,15 @@ body.theater-open .app-sidebar { display: none; }
   cursor: pointer;
 }
 
+/* libass renders ASS tracks into a canvas JASSUB inserts after the video and
+   positions relative to this wrapper, which JASSUB itself styles `relative`.
+   Override that so the wrapper covers exactly the video's box. */
+.theater-inner .JASSUB {
+  position: absolute !important;
+  inset: 0;
+  pointer-events: none;
+}
+
 .theater video::cue {
   background: rgba(0, 0, 0, .6);
   color: #fff;

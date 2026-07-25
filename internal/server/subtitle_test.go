@@ -15,9 +15,13 @@ import (
 )
 
 func subtitleRequest(id, query string) *http.Request {
-	req := httptest.NewRequest(http.MethodGet, "/api/items/"+id+"/subtitles/2.vtt"+query, nil)
+	return subtitleRequestFormat(id, "2.vtt", query)
+}
+
+func subtitleRequestFormat(id, subtitle, query string) *http.Request {
+	req := httptest.NewRequest(http.MethodGet, "/api/items/"+id+"/subtitles/"+subtitle+query, nil)
 	req.SetPathValue("id", id)
-	req.SetPathValue("subtitle", "2.vtt")
+	req.SetPathValue("subtitle", subtitle)
 	return req
 }
 
@@ -76,6 +80,20 @@ func TestSubtitleStreamsConversion(t *testing.T) {
 	}
 }
 
+func TestSubtitleSSAContentType(t *testing.T) {
+	dir := t.TempDir()
+	app, id := newSubtitleTestApp(t, dir)
+
+	rec := httptest.NewRecorder()
+	app.subtitle(rec, subtitleRequestFormat(id, "2.ass", ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("subtitle = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/x-ssa; charset=utf-8" {
+		t.Fatalf("Content-Type = %q, want text/x-ssa", got)
+	}
+}
+
 // A leftover sidecar next to the video (from the removed pre-extraction
 // pipeline) must not be served — conversions always come from the source.
 func TestSubtitleIgnoresLeftoverSidecarFiles(t *testing.T) {
@@ -93,7 +111,7 @@ func TestSubtitleIgnoresLeftoverSidecarFiles(t *testing.T) {
 }
 
 func TestSubtitleTranscodeArgsAccuratelyRebaseShiftedCues(t *testing.T) {
-	args := subtitleTranscodeArgs("/media/movie.mkv", 7, 120.5)
+	args := subtitleTranscodeArgs("/media/movie.mkv", 7, 120.5, false)
 	input := slices.Index(args, "-i")
 	seek := slices.Index(args, "-ss")
 	if input < 0 || seek < input {
@@ -107,5 +125,20 @@ func TestSubtitleTranscodeArgsAccuratelyRebaseShiftedCues(t *testing.T) {
 	}
 	if !containsPair(args, "-map", "0:7") {
 		t.Fatalf("args = %v, want subtitle stream 7", args)
+	}
+	if !containsPair(args, "-c:s", "webvtt") || !containsPair(args, "-f", "webvtt") {
+		t.Fatalf("args = %v, want a WebVTT conversion", args)
+	}
+}
+
+// The web player renders ASS itself, so ".ass" must pass the original styling
+// through rather than flatten it to WebVTT.
+func TestSubtitleTranscodeArgsKeepSSA(t *testing.T) {
+	args := subtitleTranscodeArgs("/media/movie.mkv", 3, 0, true)
+	if !containsPair(args, "-c:s", "ass") || !containsPair(args, "-f", "ass") {
+		t.Fatalf("args = %v, want an ASS conversion", args)
+	}
+	if slices.Contains(args, "webvtt") {
+		t.Fatalf("args = %v, want no WebVTT conversion", args)
 	}
 }

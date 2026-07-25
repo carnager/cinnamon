@@ -64,6 +64,9 @@ const QUALITY_OPTIONS = [
 ];
 const UP_NEXT_LEAD_SEC = 25;
 const TEXT_SUB_CODECS = new Set(["subrip", "srt", "ass", "ssa", "webvtt", "vtt", "mov_text", "text"]);
+// SSA/ASS carries positioning, styling and typesetting that WebVTT cannot
+// express, so those tracks go to libass (JASSUB) instead of a <track> element.
+const SSA_SUB_CODECS = new Set(["ass", "ssa"]);
 
 const ICONS = {
   play: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>`,
@@ -77,6 +80,8 @@ const ICONS = {
 };
 
 let hls = null;
+let assRenderer = null;
+let assAvailable = true;
 let savedVolume = Number(localStorage.getItem("popcornVolume") || "1");
 let preferredBandwidthKbps = (() => {
   const stored = localStorage.getItem("popcornBandwidthKbps");
@@ -196,7 +201,7 @@ function stopPlayer() {
   stopProgressTimer();
   player.pause();
   player.removeAttribute("src");
-  clearTextTracks();
+  clearSubtitles();
   player.load();
   destroyHLS();
   stopServerSession();
@@ -262,7 +267,7 @@ async function play(item, opts = {}) {
 async function startPlan(startMs) {
   destroyHLS();
   stopServerSession();
-  clearTextTracks();
+  clearSubtitles();
   const total = movieSeconds(pb.item);
   const startSec = Math.max(0, Math.min((startMs || 0) / 1000, total || Infinity));
 
@@ -588,16 +593,25 @@ function isTextSubtitle(index) {
   return isTextSubtitleStream(pb.subtitleStreams.find((stream) => stream.index === index));
 }
 
-function clearTextTracks() {
+function isSSASubtitleStream(stream) {
+  return SSA_SUB_CODECS.has(String(stream?.codec || "").toLowerCase());
+}
+
+function clearSubtitles() {
   for (const textTrack of player.textTracks) textTrack.mode = "disabled";
   player.querySelectorAll("track").forEach((t) => t.remove());
+  if (assRenderer) {
+    try { assRenderer.destroy(); } catch (_) { /* already torn down */ }
+    assRenderer = null;
+  }
 }
 
 function applyTextSubtitle() {
-  clearTextTracks();
+  clearSubtitles();
   if (pb.subtitleIndex === null || !pb.item) return;
   if (!isTextSubtitle(pb.subtitleIndex)) return;
   const stream = pb.subtitleStreams.find((candidate) => candidate.index === pb.subtitleIndex);
+  if (isSSASubtitleStream(stream) && applySSASubtitle(stream)) return;
   const track = document.createElement("track");
   track.kind = "subtitles";
   track.label = streamLabel(stream);
@@ -612,6 +626,43 @@ function applyTextSubtitle() {
   player.append(track);
   // Some browsers do not dispatch `load` for an already cached text track.
   setTimeout(showTrack, 150);
+}
+
+// applySSASubtitle renders an ASS/SSA track with libass. Returns false when
+// JASSUB cannot start (no Worker, no WebAssembly), leaving the caller to fall
+// back to the server's WebVTT conversion.
+function applySSASubtitle(stream) {
+  if (typeof JASSUB === "undefined" || !assAvailable) return false;
+  // The .ass endpoint keeps the file's own absolute timestamps. Direct play
+  // shares that timeline; an HLS plan restarts at zero from its start
+  // position, so the renderer has to add that offset back.
+  const timeOffset = pb.mode === "direct" ? 0 : Math.max(0, pb.startOffsetSec || 0);
+  try {
+    assRenderer = new JASSUB({
+      video: player,
+      subUrl: `/api/items/${pb.item.id}/subtitles/${stream.index}.ass`,
+      workerUrl: "/jassub/jassub-worker.js",
+      wasmUrl: "/jassub/jassub-worker.wasm",
+      availableFonts: { "liberation sans": "/jassub/default.woff2" },
+      fallbackFont: "liberation sans",
+      timeOffset,
+    });
+  } catch (_) {
+    assRenderer = null;
+    assAvailable = false;
+    return false;
+  }
+  // A worker or wasm failure surfaces asynchronously; drop back to WebVTT and
+  // stop trying libass for the rest of the session.
+  const renderer = assRenderer;
+  renderer.addEventListener("error", () => {
+    assAvailable = false;
+    if (assRenderer !== renderer) return;
+    const stillSelected = pb.subtitleIndex === stream.index;
+    clearSubtitles();
+    if (stillSelected) applyTextSubtitle();
+  }, { once: true });
+  return true;
 }
 
 /* ── Up Next ── */

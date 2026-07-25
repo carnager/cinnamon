@@ -240,9 +240,14 @@ func (a *App) buildPlaybackPlan(ctx context.Context, userID int64, item media.It
 	videoOK := videoSupported(req.Profile, video)
 	audioOK := audio == nil || audioSupported(req.Profile, *audio)
 	subtitleOK := subtitle == nil || subtitleSupported(req.Profile, *subtitle)
+	// An image subtitle (PGS, VobSub) is dropped from every mode's output — see
+	// subtitleOutputCodec — so it must not be the reason to leave direct play.
+	// The viewer sees no subtitle either way, and going to HLS only spends a
+	// transcode to arrive at the same picture.
+	subtitleBlocksDirect := subtitle != nil && !subtitleOK && isTextSubtitleCodec(subtitle.Codec)
 	container := itemContainerFromPath(item)
 	containerOK := containsCodec(req.Profile.Containers, container)
-	directOK := req.Profile.Protocols.DirectFile && req.Profile.Protocols.HTTPRange && containerOK && videoOK && audioOK && subtitleOK && !bitrateExceeded
+	directOK := req.Profile.Protocols.DirectFile && req.Profile.Protocols.HTTPRange && containerOK && videoOK && audioOK && !subtitleBlocksDirect && !bitrateExceeded
 	if force == "direct" {
 		if directOK {
 			return a.finishDirectPlan(plan, item, video, audio, subtitle)

@@ -31,7 +31,7 @@ fun buildPlaybackProfile(context: Context): JSONObject {
                     entry.put("hdrFormats", supportedHdr)
                     video[codec] = entry
                 }
-                "aac", "ac3", "eac3", "opus", "flac", "mp3", "vorbis" -> {
+                "aac", "ac3", "eac3", "dts", "truehd", "opus", "flac", "mp3", "vorbis" -> {
                     val caps = runCatching { info.getCapabilitiesForType(mime).audioCapabilities }.getOrNull()
                     audio[codec] = JSONObject()
                         .put("codec", codec)
@@ -40,15 +40,23 @@ fun buildPlaybackProfile(context: Context): JSONObject {
             }
         }
     }
-    // AC3/E-AC3 are usually played via passthrough on TV devices; MediaCodecList
-    // only lists decoders and misses audio-sink capabilities.
+    // Bitstream formats are usually played by passing them through to the
+    // receiver rather than decoding them; MediaCodecList only lists decoders and
+    // misses audio-sink capabilities. Ask the sink what the attached amplifier
+    // actually accepts — reporting DTS the device cannot output would be worse
+    // than transcoding, and not reporting DTS it can output costs a needless
+    // re-encode of the whole film.
     val sinkCaps = runCatching { AudioCapabilities.getCapabilities(context) }.getOrNull()
-    if (sinkCaps?.supportsEncoding(C.ENCODING_AC3) == true) {
-        audio.putIfAbsent("ac3", JSONObject().put("codec", "ac3").put("maxChannels", 6))
+    fun addIfSinkSupports(encoding: Int, codec: String, channels: Int) {
+        if (sinkCaps?.supportsEncoding(encoding) == true) {
+            audio.putIfAbsent(codec, JSONObject().put("codec", codec).put("maxChannels", channels))
+        }
     }
-    if (sinkCaps?.supportsEncoding(C.ENCODING_E_AC3) == true) {
-        audio.putIfAbsent("eac3", JSONObject().put("codec", "eac3").put("maxChannels", 8))
-    }
+    addIfSinkSupports(C.ENCODING_AC3, "ac3", 6)
+    addIfSinkSupports(C.ENCODING_E_AC3, "eac3", 8)
+    addIfSinkSupports(C.ENCODING_DTS, "dts", 6)
+    addIfSinkSupports(C.ENCODING_DTS_HD, "dts-hd", 8)
+    addIfSinkSupports(C.ENCODING_DOLBY_TRUEHD, "truehd", 8)
     listOf("aac", "mp3", "flac", "opus", "vorbis").forEach { codec ->
         audio.putIfAbsent(codec, JSONObject().put("codec", codec).put("maxChannels", 8))
     }
@@ -97,6 +105,9 @@ private fun mimeToCodec(mime: String): String = when (mime.lowercase()) {
     "audio/mp4a-latm" -> "aac"
     "audio/ac3" -> "ac3"
     "audio/eac3" -> "eac3"
+    "audio/vnd.dts" -> "dts"
+    "audio/vnd.dts.hd" -> "dts-hd"
+    "audio/true-hd" -> "truehd"
     "audio/opus" -> "opus"
     "audio/flac" -> "flac"
     "audio/mpeg" -> "mp3"

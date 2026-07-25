@@ -140,14 +140,55 @@ func TestPlaybackPlanHDRSupport(t *testing.T) {
 	}
 }
 
-func TestPlaybackPlanSubtitlePolicies(t *testing.T) {
-	profile := testAndroidProfile("mkv", "h264", "aac", nil)
+// An image subtitle is disabled in every mode, so selecting one must not cost
+// the viewer direct play — they would get the same picture, plus a transcode.
+func TestPlaybackPlanImageSubtitleKeepsDirectPlay(t *testing.T) {
 	pgs := 2
-	plan := testPlan(testItem("mkv", 4_000_000), profile, []media.MediaStream{
+	plan := testPlan(testItem("mkv", 4_000_000), testAndroidProfile("mkv", "h264", "aac", nil), []media.MediaStream{
 		testVideo(0, "h264", 1920, 1080, "sdr", 3_500_000),
 		testAudio(1, "aac", 2, 192_000),
 		{Index: 2, Type: "subtitle", Codec: "hdmv_pgs_subtitle"},
 	}, PlaybackPlanRequest{SubtitleIndex: &pgs})
+	if plan.Mode != planModeDirect {
+		t.Fatalf("mode = %s reasons=%v, want direct", plan.Mode, plan.Reasons)
+	}
+	// Direct play hands over the original file, so the track goes with it and the
+	// client renders it or not on its own. That beats transcoding to a stream the
+	// subtitle has been stripped out of.
+	if plan.Outputs.Subtitle.Codec != "hdmv_pgs_subtitle" {
+		t.Fatalf("subtitle output = %q, want the original track passed through", plan.Outputs.Subtitle.Codec)
+	}
+}
+
+// A text subtitle the client cannot render itself still needs the server to
+// convert it, which only the HLS path can do.
+func TestPlaybackPlanUnsupportedTextSubtitleLeavesDirectPlay(t *testing.T) {
+	profile := testAndroidProfile("mkv", "h264", "aac", nil)
+	profile.Subtitles = []string{"webvtt"}
+	srt := 2
+	plan := testPlan(testItem("mkv", 4_000_000), profile, []media.MediaStream{
+		testVideo(0, "h264", 1920, 1080, "sdr", 3_500_000),
+		testAudio(1, "aac", 2, 192_000),
+		{Index: 2, Type: "subtitle", Codec: "subrip"},
+	}, PlaybackPlanRequest{SubtitleIndex: &srt})
+	if plan.Mode == planModeDirect {
+		t.Fatalf("mode = %s, want an HLS mode that can convert the subtitle", plan.Mode)
+	}
+}
+
+func TestPlaybackPlanSubtitlePolicies(t *testing.T) {
+	profile := testAndroidProfile("mkv", "h264", "aac", nil)
+	// Once something else has already forced HLS — here the audio — an image
+	// subtitle cannot ride along, because nothing in that pipeline renders it.
+	pgs := 2
+	plan := testPlan(testItem("mkv", 4_000_000), profile, []media.MediaStream{
+		testVideo(0, "h264", 1920, 1080, "sdr", 3_500_000),
+		testAudio(1, "dts", 6, 768_000),
+		{Index: 2, Type: "subtitle", Codec: "hdmv_pgs_subtitle"},
+	}, PlaybackPlanRequest{SubtitleIndex: &pgs})
+	if plan.Mode == planModeDirect {
+		t.Fatalf("mode = %s, want an HLS mode for the unsupported audio", plan.Mode)
+	}
 	if plan.Outputs.Subtitle.Codec != "none" {
 		t.Fatalf("pgs subtitle output = %q, want disabled", plan.Outputs.Subtitle.Codec)
 	}

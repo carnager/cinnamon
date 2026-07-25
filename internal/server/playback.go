@@ -274,10 +274,6 @@ func (a *App) buildPlaybackPlan(ctx context.Context, userID int64, item media.It
 	}
 	if req.Profile.Protocols.HLSFMP4 && canCopyVideoToHLS(video) && videoOK && !bitrateExceeded {
 		if audio != nil && (!audioOK || !canCopyAudioToHLS(*audio)) {
-			if preferFullTranscodeForAudioTranscode(req.Profile) {
-				plan.Reasons = append(plan.Reasons, "android hls audio-only transcode avoided to keep a/v timestamps stable")
-				return a.finishHLSPlan(ctx, plan, item, req.Profile, planModeFullTranscode, "h264", "aac", subtitleOutputCodec(subtitle), audioRate)
-			}
 			return a.finishHLSPlan(ctx, plan, item, req.Profile, planModeAudioTranscode, "copy", "aac", subtitleOutputCodec(subtitle), audioRate)
 		}
 		if subtitle != nil && !subtitleOK && isTextSubtitleCodec(subtitle.Codec) {
@@ -628,15 +624,6 @@ func hlsOwnerFromProfile(profile PlaybackProfile) string {
 		return '_'
 	}, owner)
 	return strings.Trim(owner, "_")
-}
-
-func preferFullTranscodeForAudioTranscode(profile PlaybackProfile) bool {
-	switch strings.ToLower(strings.TrimSpace(profile.Client)) {
-	case "android-tv", "android-phone", "web":
-		return true
-	default:
-		return false
-	}
 }
 
 func itemContainerFromPath(item media.Item) string {

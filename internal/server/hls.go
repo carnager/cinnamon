@@ -244,28 +244,27 @@ func (a *App) subtitle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// subtitleTranscodeArgs uses an accurate output seek and then rebases cues to
-// zero. Input seeking is fast, but subtitle streams seek to the previous cue;
-// that makes the resulting WebVTT offset depend on whichever cue happened to
-// precede the requested position.
+// subtitleTranscodeArgs seeks at the input, which both rebases cues to zero and
+// skips straight to the requested position.
+//
+// An accurate output seek produces identical cues but reaches them by demuxing
+// the whole file from the start: on a 3.4 GB remux that is fifteen seconds of
+// sustained reading to emit a few hundred bytes of text, against the same file
+// a transcode session is streaming from. Seeking at the input costs nothing
+// measurable. Both drop a cue already on screen at the seek point.
 func subtitleTranscodeArgs(path string, index int, start float64, asSSA bool) []string {
 	format := "webvtt"
 	if asSSA {
 		format = "ass"
 	}
-	args := []string{"-hide_banner", "-loglevel", "error", "-i", path}
+	args := []string{"-hide_banner", "-loglevel", "error"}
 	if start > 0 {
-		formatted := strconv.FormatFloat(start, 'f', 3, 64)
-		args = append(args, "-ss", formatted)
-	}
-	args = append(args,
-		"-map", fmt.Sprintf("0:%d", index),
-		"-c:s", format,
-	)
-	if start > 0 {
-		args = append(args, "-output_ts_offset", "-"+strconv.FormatFloat(start, 'f', 3, 64))
+		args = append(args, "-ss", strconv.FormatFloat(start, 'f', 3, 64))
 	}
 	return append(args,
+		"-i", path,
+		"-map", fmt.Sprintf("0:%d", index),
+		"-c:s", format,
 		"-f", format,
 		"-flush_packets", "1",
 		"-",

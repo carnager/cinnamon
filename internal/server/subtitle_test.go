@@ -110,18 +110,23 @@ func TestSubtitleIgnoresLeftoverSidecarFiles(t *testing.T) {
 	}
 }
 
-func TestSubtitleTranscodeArgsAccuratelyRebaseShiftedCues(t *testing.T) {
+// An output seek reaches the same cues by demuxing the file from the start,
+// which on a large remux means many seconds of reading against the same file a
+// transcode session is streaming. Seek at the input instead.
+func TestSubtitleTranscodeArgsSeekAtTheInput(t *testing.T) {
 	args := subtitleTranscodeArgs("/media/movie.mkv", 7, 120.5, false)
 	input := slices.Index(args, "-i")
 	seek := slices.Index(args, "-ss")
-	if input < 0 || seek < input {
-		t.Fatalf("args = %v, want accurate -ss after -i", args)
+	if seek < 0 || input < 0 || seek > input {
+		t.Fatalf("args = %v, want -ss before -i", args)
 	}
 	if !containsPair(args, "-ss", "120.500") {
-		t.Fatalf("args = %v, want output seek at 120.500", args)
+		t.Fatalf("args = %v, want input seek at 120.500", args)
 	}
-	if !containsPair(args, "-output_ts_offset", "-120.500") {
-		t.Fatalf("args = %v, want cues rebased by -120.500", args)
+	// Input seeking already rebases the output; offsetting again would shift
+	// every cue a second time.
+	if slices.Contains(args, "-output_ts_offset") {
+		t.Fatalf("args = %v, want no additional output offset", args)
 	}
 	if !containsPair(args, "-map", "0:7") {
 		t.Fatalf("args = %v, want subtitle stream 7", args)

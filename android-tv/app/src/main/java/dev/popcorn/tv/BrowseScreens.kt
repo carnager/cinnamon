@@ -1387,10 +1387,7 @@ private fun UserMenuDrawer(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val audioOptions = listOf("" to "Track default") + prefLanguageChoices
-    val subtitleOptions = listOf(
-        PlaybackPrefs.SUBS_OFF to "Off",
-        PlaybackPrefs.TRACK_DEFAULT to "Track default",
-    ) + prefLanguageChoices
+    val subtitleOptions = subtitlePrefChoices
     val firstFocus = remember { FocusRequester() }
     var phoneQrPayload by remember { mutableStateOf("") }
     var phoneQrError by remember { mutableStateOf("") }

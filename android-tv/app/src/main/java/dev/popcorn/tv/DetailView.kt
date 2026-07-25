@@ -136,12 +136,7 @@ fun DetailView(
                     ?: audios.firstOrNull { it.default }
                     ?: audios.firstOrNull()
                 selectedAudio = defAudio?.index
-                val subtitles = list.filter { it.type == "subtitle" }
-                selectedSubtitle = when (PlaybackPrefs.subtitleLang) {
-                    PlaybackPrefs.SUBS_OFF -> null
-                    PlaybackPrefs.TRACK_DEFAULT -> subtitles.firstOrNull { it.default }?.index
-                    else -> subtitles.firstOrNull { langMatches(it.language, PlaybackPrefs.subtitleLang) }?.index
-                }
+                selectedSubtitle = preferredSubtitleIndex(list.filter { it.type == "subtitle" })
                 streamsLoaded = true
             }
             .onFailure { streamsLoaded = true }

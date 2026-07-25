@@ -1,6 +1,12 @@
 package server
 
 import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"popcorn/internal/config"
@@ -45,7 +51,11 @@ func TestPlaybackPlanAudioOnlyTranscodeForUnsupportedAudio(t *testing.T) {
 	}
 }
 
-func TestPlaybackPlanHLSSeekTranscodesVideoForSynchronizedStart(t *testing.T) {
+// Resuming used to force a full re-encode so audio and video could start
+// together. Copied video instead starts on the keyframe at or before the
+// requested position, and the plan reports that keyframe so clients agree with
+// what ffmpeg actually produces.
+func TestPlaybackPlanHLSSeekRemuxesFromPrecedingKeyframe(t *testing.T) {
 	profile := testAndroidProfile("mp4", "h264", "aac", nil)
 	streams := []media.MediaStream{
 		testVideo(0, "h264", 1920, 1080, "sdr", 7_500_000),
@@ -55,12 +65,52 @@ func TestPlaybackPlanHLSSeekTranscodesVideoForSynchronizedStart(t *testing.T) {
 	if initial.Mode != planModeRemux {
 		t.Fatalf("initial mode = %s reasons=%v, want remux", initial.Mode, initial.Reasons)
 	}
-	seek := testPlan(testItem("mkv", 8_000_000), profile, streams, PlaybackPlanRequest{StartPositionMS: 13_000})
+	seek := testPlanWithKeyframes(t, profile, PlaybackPlanRequest{StartPositionMS: 13_000}, 4, 8, 12)
+	if seek.Mode != planModeRemux {
+		t.Fatalf("seek mode = %s reasons=%v, want remux", seek.Mode, seek.Reasons)
+	}
+	if seek.Outputs.Video.Codec != "copy" || seek.Outputs.Audio.Codec != "copy" {
+		t.Fatalf("seek outputs = %+v, want copied streams", seek.Outputs)
+	}
+	if seek.StartPositionMS != 12_000 {
+		t.Fatalf("start = %dms, want the 12s keyframe", seek.StartPositionMS)
+	}
+}
+
+// Keyframes after the requested position must not be chosen: starting late
+// would silently skip content the viewer asked to see.
+func TestPlaybackPlanHLSSeekIgnoresLaterKeyframes(t *testing.T) {
+	seek := testPlanWithKeyframes(t, testAndroidProfile("mp4", "h264", "aac", nil),
+		PlaybackPlanRequest{StartPositionMS: 13_000}, 4, 12, 20, 28)
+	if seek.StartPositionMS != 12_000 {
+		t.Fatalf("start = %dms, want the 12s keyframe", seek.StartPositionMS)
+	}
+}
+
+// With no keyframe to snap to, the start would be off by an unknown amount, so
+// the old accurate-seek transcode has to take over.
+func TestPlaybackPlanHLSSeekFallsBackWhenNoKeyframeFound(t *testing.T) {
+	seek := testPlanWithKeyframes(t, testAndroidProfile("mp4", "h264", "aac", nil),
+		PlaybackPlanRequest{StartPositionMS: 13_000}, 20, 28)
 	if seek.Mode != planModeFullTranscode {
 		t.Fatalf("seek mode = %s reasons=%v, want full-transcode", seek.Mode, seek.Reasons)
 	}
 	if seek.Outputs.Video.Codec != "h264" || seek.Outputs.Audio.Codec != "aac" {
 		t.Fatalf("seek outputs = %+v, want decoded h264/aac", seek.Outputs)
+	}
+	if seek.StartPositionMS != 13_000 {
+		t.Fatalf("start = %dms, want the requested position preserved", seek.StartPositionMS)
+	}
+}
+
+// A start of zero needs no probe at all — the file already begins on a keyframe.
+func TestPlaybackPlanHLSStartAtZeroSkipsKeyframeProbe(t *testing.T) {
+	plan := testPlan(testItem("mkv", 8_000_000), testAndroidProfile("mp4", "h264", "aac", nil), []media.MediaStream{
+		testVideo(0, "h264", 1920, 1080, "sdr", 7_500_000),
+		testAudio(1, "aac", 2, 192_000),
+	}, PlaybackPlanRequest{})
+	if plan.Mode != planModeRemux || plan.StartPositionMS != 0 {
+		t.Fatalf("plan mode = %s start = %d, want remux at 0", plan.Mode, plan.StartPositionMS)
 	}
 }
 
@@ -246,7 +296,37 @@ func TestHLSPlanArgsSoftwareDecodesQSVUnsupportedSource(t *testing.T) {
 func testPlan(item media.Item, profile PlaybackProfile, streams []media.MediaStream, req PlaybackPlanRequest) PlaybackPlan {
 	req.ItemID = item.ID
 	req.Profile = profile
-	return (&App{}).buildPlaybackPlan(1, item, streams, req, false)
+	return (&App{}).buildPlaybackPlan(context.Background(), 1, item, streams, req, false)
+}
+
+// testPlanWithKeyframes plans against a real file whose video keyframes sit at
+// the given timestamps, so the keyframe probe has something to find.
+func testPlanWithKeyframes(t *testing.T, profile PlaybackProfile, req PlaybackPlanRequest, keyframes ...float64) PlaybackPlan {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "movie.mkv")
+	if err := os.WriteFile(path, []byte("fake video"), 0o644); err != nil {
+		t.Fatalf("write video: %v", err)
+	}
+	// Stand in for ffprobe: emit one keyframe packet per timestamp, plus a
+	// non-keyframe in between so the flag parsing is actually exercised.
+	var lines strings.Builder
+	for _, ts := range keyframes {
+		fmt.Fprintf(&lines, "%.6f,K__\\n%.6f,___\\n", ts, ts+0.04)
+	}
+	probe := filepath.Join(dir, "ffprobe")
+	if err := os.WriteFile(probe, []byte("#!/bin/sh\nprintf '"+lines.String()+"'\n"), 0o755); err != nil {
+		t.Fatalf("write fake ffprobe: %v", err)
+	}
+	item := media.Item{ID: 123, Path: path, Container: "mkv", DurationMS: 7_200_000, BitRate: 8_000_000}
+	req.ItemID = item.ID
+	req.Profile = profile
+	streams := []media.MediaStream{
+		testVideo(0, "h264", 1920, 1080, "sdr", 7_500_000),
+		testAudio(1, "aac", 2, 192_000),
+	}
+	app := &App{cfg: config.Config{FFprobePath: probe}, log: slog.New(slog.DiscardHandler)}
+	return app.buildPlaybackPlan(context.Background(), 1, item, streams, req, false)
 }
 
 func testItem(container string, bitRate int64) media.Item {

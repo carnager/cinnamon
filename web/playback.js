@@ -334,7 +334,14 @@ function attachPlan(plan, startSec) {
     player.play().catch(() => setPlayerStatus(`${pb.item.title} · press play to start`));
     return;
   }
-  // HLS (remux / transcode). Position is baked into the plan start.
+  // HLS (remux / transcode). Position is baked into the plan start, but a
+  // copied-video plan can only begin on a keyframe, so the server may have
+  // snapped the start earlier than asked. Seek off the difference locally —
+  // those seconds are in the first segment either way.
+  const trimSec = Math.max(0, startSec - (pb.startOffsetSec || 0));
+  if (trimSec > 0.5) {
+    player.addEventListener("loadedmetadata", () => { try { player.currentTime = trimSec; } catch (_) {} }, { once: true });
+  }
   if (window.Hls && Hls.isSupported()) {
     setPlayerStatus(`${pb.item.title} · preparing stream…`);
     hls = new Hls({ lowLatencyMode: false, enableWorker: true });

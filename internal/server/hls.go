@@ -776,10 +776,12 @@ func hlsPlanArgs(cfg config.Config, input, segmentPattern, playlist string, plan
 	return args
 }
 
-// hlsPlanSeekArgs is a defensive fallback for old or persisted plans. Current
-// planning transcodes video for non-zero HLS starts, but if a copied-video plan
-// reaches the runner it must seek only at the input. Accurate output seeking
-// drops video until the next keyframe while audio starts immediately.
+// hlsPlanSeekArgs picks the seek strategy per output codec. Copied video must
+// seek only at the input: ffmpeg lands on the keyframe at or before the target
+// and rebases the output to zero, keeping audio and video together. Accurate
+// output seeking would instead drop video until the next keyframe while audio
+// starts immediately. Planning already snapped the start to that keyframe, so
+// the position the client is told and the position it gets agree.
 func hlsPlanSeekArgs(start float64, videoCodec string) ([]string, []string) {
 	if start <= 0 {
 		return nil, nil

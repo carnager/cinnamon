@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +21,10 @@ const (
 	planModeSubtitleTranscode = "subtitle-transcode"
 	planModeFullTranscode     = "full-transcode"
 )
+
+// How far back a keyframe search looks. Any sane encode keeps keyframes far
+// closer together than this; a file that does not gets a full transcode.
+const keyframeSearchWindowSec = 30.0
 
 type PlaybackPlanRequest struct {
 	ItemID          int64           `json:"itemId"`
@@ -135,7 +142,7 @@ func (a *App) playbackPlan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	plan := a.buildPlaybackPlan(user.ID, item, streams, req, false)
+	plan := a.buildPlaybackPlan(r.Context(), user.ID, item, streams, req, false)
 	a.savePlaybackPlan(plan)
 	a.log.Info("playback plan", "item", item.ID, "user", user.ID, "client", req.Profile.Client, "mode", plan.Mode, "video", plan.Outputs.Video.Codec, "audio", plan.Outputs.Audio.Codec, "subtitle", plan.Outputs.Subtitle.Codec, "bandwidth", plan.BandwidthKbps, "reasons", strings.Join(plan.Reasons, "; "))
 	writeJSON(w, http.StatusOK, plan)
@@ -183,13 +190,13 @@ func (a *App) playbackFailure(w http.ResponseWriter, r *http.Request) {
 		ForceMode:       "transcode",
 		Profile:         plan.Profile,
 	}
-	fallback := a.buildPlaybackPlan(user.ID, plan.Item, plan.Streams, req, true)
+	fallback := a.buildPlaybackPlan(r.Context(), user.ID, plan.Item, plan.Streams, req, true)
 	a.savePlaybackPlan(fallback)
 	a.log.Warn("playback fallback", "item", in.ItemID, "user", user.ID, "client", in.Client, "original", in.Mode, "error", in.ErrorCode, "retry", fallback.Mode, "message", in.Message)
 	writeJSON(w, http.StatusOK, map[string]any{"retry": fallback.Playable, "plan": fallback})
 }
 
-func (a *App) buildPlaybackPlan(userID int64, item media.Item, streams []media.MediaStream, req PlaybackPlanRequest, fallback bool) PlaybackPlan {
+func (a *App) buildPlaybackPlan(ctx context.Context, userID int64, item media.Item, streams []media.MediaStream, req PlaybackPlanRequest, fallback bool) PlaybackPlan {
 	force := strings.ToLower(strings.TrimSpace(req.ForceMode))
 	if force == "" {
 		force = "auto"
@@ -246,23 +253,15 @@ func (a *App) buildPlaybackPlan(userID int64, item media.Item, streams []media.M
 		return plan
 	}
 	if force == "transcode" || fallback {
-		return a.finishHLSPlan(plan, item, req.Profile, planModeFullTranscode, "h264", "aac", subtitleOutputCodec(subtitle), audioRate)
+		return a.finishHLSPlan(ctx, plan, item, req.Profile, planModeFullTranscode, "h264", "aac", subtitleOutputCodec(subtitle), audioRate)
 	}
 	if directOK {
 		return a.finishDirectPlan(plan, item, video, audio, subtitle)
 	}
 	plan.Reasons = append(plan.Reasons, incompatibilityReasons(item, req.Profile, video, audio, subtitle, containerOK, videoOK, audioOK, subtitleOK, bitrateExceeded)...)
-	// An exact non-zero HLS start cannot copy video safely. FFmpeg's accurate
-	// output seek starts audio at the requested timestamp, but copied video must
-	// wait for the next keyframe, leaving the streams several seconds apart.
-	// Decode video for seek/resume sessions so both tracks begin at timestamp 0.
-	if req.StartPositionMS > 0 {
-		plan.Reasons = append(plan.Reasons, "non-zero HLS start requires video transcode to keep audio and video synchronized")
-		return a.finishHLSPlan(plan, item, req.Profile, planModeFullTranscode, "h264", "aac", subtitleOutputCodec(subtitle), audioRate)
-	}
 	if force == "remux" {
 		if req.Profile.Protocols.HLSFMP4 && canCopyVideoToHLS(video) && (audio == nil || canCopyAudioToHLS(*audio)) && !bitrateExceeded {
-			return a.finishHLSPlan(plan, item, req.Profile, planModeRemux, "copy", "copy", subtitleOutputCodec(subtitle), audioRate)
+			return a.finishHLSPlan(ctx, plan, item, req.Profile, planModeRemux, "copy", "copy", subtitleOutputCodec(subtitle), audioRate)
 		}
 		plan.Playable = false
 		plan.Mode = planModeRemux
@@ -272,18 +271,18 @@ func (a *App) buildPlaybackPlan(userID int64, item media.Item, streams []media.M
 		if audio != nil && (!audioOK || !canCopyAudioToHLS(*audio)) {
 			if preferFullTranscodeForAudioTranscode(req.Profile) {
 				plan.Reasons = append(plan.Reasons, "android hls audio-only transcode avoided to keep a/v timestamps stable")
-				return a.finishHLSPlan(plan, item, req.Profile, planModeFullTranscode, "h264", "aac", subtitleOutputCodec(subtitle), audioRate)
+				return a.finishHLSPlan(ctx, plan, item, req.Profile, planModeFullTranscode, "h264", "aac", subtitleOutputCodec(subtitle), audioRate)
 			}
-			return a.finishHLSPlan(plan, item, req.Profile, planModeAudioTranscode, "copy", "aac", subtitleOutputCodec(subtitle), audioRate)
+			return a.finishHLSPlan(ctx, plan, item, req.Profile, planModeAudioTranscode, "copy", "aac", subtitleOutputCodec(subtitle), audioRate)
 		}
 		if subtitle != nil && !subtitleOK && isTextSubtitleCodec(subtitle.Codec) {
-			return a.finishHLSPlan(plan, item, req.Profile, planModeSubtitleTranscode, "copy", "copy", "webvtt", audioRate)
+			return a.finishHLSPlan(ctx, plan, item, req.Profile, planModeSubtitleTranscode, "copy", "copy", "webvtt", audioRate)
 		}
 		if audio == nil || canCopyAudioToHLS(*audio) {
-			return a.finishHLSPlan(plan, item, req.Profile, planModeRemux, "copy", "copy", subtitleOutputCodec(subtitle), audioRate)
+			return a.finishHLSPlan(ctx, plan, item, req.Profile, planModeRemux, "copy", "copy", subtitleOutputCodec(subtitle), audioRate)
 		}
 	}
-	return a.finishHLSPlan(plan, item, req.Profile, planModeFullTranscode, "h264", "aac", subtitleOutputCodec(subtitle), audioRate)
+	return a.finishHLSPlan(ctx, plan, item, req.Profile, planModeFullTranscode, "h264", "aac", subtitleOutputCodec(subtitle), audioRate)
 }
 
 func (a *App) finishDirectPlan(plan PlaybackPlan, item media.Item, video media.MediaStream, audio, subtitle *media.MediaStream) PlaybackPlan {
@@ -301,7 +300,22 @@ func (a *App) finishDirectPlan(plan PlaybackPlan, item media.Item, video media.M
 	return plan
 }
 
-func (a *App) finishHLSPlan(plan PlaybackPlan, item media.Item, profile PlaybackProfile, mode, videoCodec, audioCodec, subtitleCodec string, audioRate int) PlaybackPlan {
+func (a *App) finishHLSPlan(ctx context.Context, plan PlaybackPlan, item media.Item, profile PlaybackProfile, mode, videoCodec, audioCodec, subtitleCodec string, audioRate int) PlaybackPlan {
+	// Copied video can only begin on a keyframe: ffmpeg's input seek lands on
+	// the one at or before the requested position, and the output is rebased to
+	// zero from there. Report that keyframe as the plan's start so clients stay
+	// aligned, rather than re-encoding a whole movie just to seek into it.
+	if videoCodec == "copy" && plan.StartPositionMS > 0 {
+		if snapped, ok := a.keyframeStartMS(ctx, item, plan.Selected.VideoIndex, plan.StartPositionMS); ok {
+			plan.Reasons = append(plan.Reasons, fmt.Sprintf("start snapped from %.3fs to the keyframe at %.3fs so video can be copied", float64(plan.StartPositionMS)/1000, float64(snapped)/1000))
+			plan.StartPositionMS = snapped
+		} else {
+			// Without a known keyframe the start would be off by an unknown
+			// amount, so pay for the decode and seek accurately instead.
+			plan.Reasons = append(plan.Reasons, "no keyframe found before the requested start; transcoding video for an accurate start")
+			mode, videoCodec, audioCodec = planModeFullTranscode, "h264", "aac"
+		}
+	}
 	plan.Mode = mode
 	plan.Container = "hls-fmp4"
 	plan.SessionID = cleanSessionID(fmt.Sprintf("%s_%d_%d_%s", hlsOwnerFromProfile(profile), item.ID, time.Now().UnixMilli(), randomHex(4)))
@@ -331,6 +345,55 @@ func (a *App) finishHLSPlan(plan PlaybackPlan, item media.Item, profile Playback
 		plan.Reasons = append(plan.Reasons, "safe h264/aac transcode selected")
 	}
 	return plan
+}
+
+// keyframeStartMS returns the timestamp of the last video keyframe at or before
+// targetMS. It reads packet headers only — no decoding — over a bounded window,
+// which costs tens of milliseconds even on a large file.
+func (a *App) keyframeStartMS(ctx context.Context, item media.Item, videoIndex int, targetMS int64) (int64, bool) {
+	if a.cfg.FFprobePath == "" {
+		return 0, false
+	}
+	path := media.ResolveExistingPath(item.Path)
+	if path == "" {
+		return 0, false
+	}
+	target := float64(targetMS) / 1000
+	from := target - keyframeSearchWindowSec
+	if from < 0 {
+		from = 0
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, a.cfg.FFprobePath,
+		"-v", "error",
+		"-select_streams", strconv.Itoa(videoIndex),
+		"-show_entries", "packet=pts_time,flags",
+		"-of", "csv=p=0",
+		"-read_intervals", fmt.Sprintf("%.3f%%%.3f", from, target),
+		path,
+	).Output()
+	if err != nil {
+		a.log.Warn("keyframe lookup failed", "item", item.ID, "target", target, "error", err)
+		return 0, false
+	}
+	best := -1.0
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Split(strings.TrimSpace(line), ",")
+		// "12.345,K__" — the flags field marks keyframes with a leading K.
+		if len(fields) < 2 || !strings.HasPrefix(fields[1], "K") {
+			continue
+		}
+		ts, err := strconv.ParseFloat(fields[0], 64)
+		if err != nil || ts > target || ts <= best {
+			continue
+		}
+		best = ts
+	}
+	if best < 0 {
+		return 0, false
+	}
+	return int64(best * 1000), true
 }
 
 func (a *App) savePlaybackPlan(plan PlaybackPlan) {

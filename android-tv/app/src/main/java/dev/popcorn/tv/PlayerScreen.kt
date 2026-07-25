@@ -394,6 +394,12 @@ fun PlayerScreen(
         exoPlayer.prepare()
         if (!plan.usesHls && startMs > 0) {
             exoPlayer.seekTo(startMs)
+        } else if (plan.usesHls) {
+            // A copied-video plan can only begin on a keyframe, so the server may
+            // have snapped the start earlier than asked. Seek off the difference
+            // locally — those seconds are in the first segment either way.
+            val trimMs = startMs - playbackBaseMs
+            if (trimMs > 500) exoPlayer.seekTo(trimMs)
         }
         exoPlayer.playWhenReady = wasPlaying
         if (showController) {

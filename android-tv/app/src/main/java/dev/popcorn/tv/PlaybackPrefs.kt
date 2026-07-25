@@ -81,6 +81,21 @@ val subtitlePrefChoices: List<Pair<String, String>> = listOf(
     PlaybackPrefs.FORCED_PREFIX + code to "$label (forced)"
 }
 
+private val negatedForced = Regex("""(non[-_ ]?|un)forced""", RegexOption.IGNORE_CASE)
+
+// looksForced answers "is this the signs-only track?" for track *selection*.
+// The disposition alone is not enough: plenty of releases say so only in the
+// title ("Forced Subs", "German (Forced)", "en_Forced"), because a muxer does
+// not set the flag unless it is told to. Plenty of others set the flag and
+// leave the title silent, so both signals count.
+//
+// Matching an ExoPlayer format is a different question and must keep using the
+// raw disposition — there it is compared against the container's own flag.
+fun StreamInfo.looksForced(): Boolean {
+    if (forced) return true
+    return title.contains("forced", ignoreCase = true) && !negatedForced.containsMatchIn(title)
+}
+
 // preferredSubtitleIndex resolves the stored preference against a file's
 // subtitle tracks. A forced pick never falls back to the full track; a plain
 // language pick prefers the full track but takes a forced one over nothing.
@@ -91,6 +106,6 @@ fun preferredSubtitleIndex(subtitles: List<StreamInfo>): Int? {
     val forcedOnly = preferred.startsWith(PlaybackPrefs.FORCED_PREFIX)
     val lang = preferred.removePrefix(PlaybackPrefs.FORCED_PREFIX)
     val matches = subtitles.filter { langMatches(it.language, lang) }
-    if (forcedOnly) return matches.firstOrNull { it.forced }?.index
-    return (matches.firstOrNull { !it.forced } ?: matches.firstOrNull())?.index
+    if (forcedOnly) return matches.firstOrNull { it.looksForced() }?.index
+    return (matches.firstOrNull { !it.looksForced() } ?: matches.firstOrNull())?.index
 }

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
@@ -91,6 +92,28 @@ func TestSubtitleSSAContentType(t *testing.T) {
 	}
 	if got := rec.Header().Get("Content-Type"); got != "text/x-ssa; charset=utf-8" {
 		t.Fatalf("Content-Type = %q, want text/x-ssa", got)
+	}
+}
+
+// Matroska keeps an ASS track's header in CodecPrivate and mkvmerge terminates
+// it with a NUL, which ffmpeg copies through — landing right before [Events].
+// libass stops parsing there, so the track renders as nothing at all.
+func TestSubtitleStripsNULBeforeEvents(t *testing.T) {
+	dir := t.TempDir()
+	app, id := newSubtitleTestApp(t, dir)
+	script := "#!/bin/sh\nprintf '[V4+ Styles]\\nStyle: Default,sans-serif\\n\\000\\n[Events]\\nDialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,hallo\\n'\n"
+	if err := os.WriteFile(app.cfg.FFmpegPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake ffmpeg: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	app.subtitle(rec, subtitleRequestFormat(id, "2.ass", ""))
+	body := rec.Body.Bytes()
+	if bytes.IndexByte(body, 0) >= 0 {
+		t.Fatalf("body still contains a NUL: %q", body)
+	}
+	if !bytes.Contains(body, []byte("[Events]")) || !bytes.Contains(body, []byte("Dialogue:")) {
+		t.Fatalf("body = %q, want the events block intact", body)
 	}
 }
 

@@ -228,7 +228,8 @@ func (a *App) subtitle(w http.ResponseWriter, r *http.Request) {
 	for {
 		n, readErr := stdout.Read(buf)
 		if n > 0 {
-			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+			chunk := stripNULs(buf[:n])
+			if _, writeErr := w.Write(chunk); writeErr != nil {
 				break
 			}
 			if flusher != nil {
@@ -242,6 +243,24 @@ func (a *App) subtitle(w http.ResponseWriter, r *http.Request) {
 	if err := cmd.Wait(); err != nil && r.Context().Err() == nil {
 		a.log.Warn("subtitle conversion failed", "item", item.ID, "subtitle", index, "start", start, "error", err, "stderr", strings.TrimSpace(stderr.String()))
 	}
+}
+
+// stripNULs removes NUL bytes in place. Matroska stores an ASS track's header
+// in CodecPrivate, and mkvmerge terminates it with a NUL that ffmpeg copies
+// straight through — landing between the styles block and [Events]. libass
+// stops parsing there, so every event in the file is silently dropped and the
+// track renders as nothing at all. A NUL is never meaningful in a text
+// subtitle, so drop it whatever the format.
+//
+// Filtering per byte is safe across chunk boundaries: it carries no state.
+func stripNULs(b []byte) []byte {
+	out := b[:0]
+	for _, c := range b {
+		if c != 0 {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // subtitleTranscodeArgs seeks at the input, which both rebases cues to zero and

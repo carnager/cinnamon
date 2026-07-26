@@ -1001,16 +1001,16 @@ button, input, select { font: inherit; }
   gap: 7px;
 }
 
-.poster-topbar-icon { display: inline-flex; }
+.poster-topbar-icon {
+  display: inline-flex;
+  color: #fff;
+}
 
 .poster-topbar-icon svg {
   width: 14px;
   height: 14px;
   display: block;
 }
-
-.poster-topbar-icon.watchlist { color: #f0c040; }
-.poster-topbar-icon.seen { color: var(--accent); }
 
 .poster-topbar-rating {
   display: inline-flex;

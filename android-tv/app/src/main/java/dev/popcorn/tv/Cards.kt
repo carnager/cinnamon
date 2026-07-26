@@ -356,8 +356,8 @@ fun BoxScope.PosterTopBar(watched: Boolean, watchlisted: Boolean, rating: Double
             horizontalArrangement = Arrangement.spacedBy(5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (watchlisted) Icon(Icons.Filled.Bookmark, "In watchlist", Modifier.size(14.dp), tint = Gold)
-            if (watched) Icon(Icons.Filled.Check, "Seen", Modifier.size(14.dp), tint = Accent)
+            if (watchlisted) Icon(Icons.Filled.Bookmark, "In watchlist", Modifier.size(14.dp), tint = Color.White)
+            if (watched) Icon(Icons.Filled.Check, "Seen", Modifier.size(14.dp), tint = Color.White)
         }
         if (rating > 0.0) {
             Row(

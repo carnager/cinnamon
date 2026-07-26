@@ -245,6 +245,9 @@ sealed interface Screen {
     data class Season(val show: ShowSummary, val season: SeasonSummary, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null) : Screen
     data class Detail(val item: PopItem, val fromShow: ShowSummary?, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromHistory: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null) : Screen
     data class Actor(val actor: dev.popcorn.tv.Actor) : Screen
-    data class Player(val item: PopItem, val audioIndex: Int?, val subtitleIndex: Int?, val startPositionMs: Long = 0L) : Screen
+    // token distinguishes two requests to play the same item. The player is
+    // keyed on it, so a remote "play" for whatever is already on screen
+    // restarts it instead of quietly reusing the running one.
+    data class Player(val item: PopItem, val audioIndex: Int?, val subtitleIndex: Int?, val startPositionMs: Long = 0L, val token: Long = 0L) : Screen
     data class SidecarPlayer(val url: String, val title: String, val returnScreen: Screen) : Screen
 }

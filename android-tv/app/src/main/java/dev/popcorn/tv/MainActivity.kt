@@ -373,7 +373,7 @@ fun PopcornApp() {
                                 lastDetail = Screen.Detail(item, null, fromHome = true)
                                 val audio = command.payload.optIntOrNull("audioIndex")
                                 val subtitle = command.payload.optIntOrNull("subtitleIndex")
-                                screen = Screen.Player(item, audio, subtitle, 0L)
+                                screen = Screen.Player(item, audio, subtitle, 0L, token = command.id)
                             }
                             .onFailure { error = it.message ?: "Remote play failed" }
                     }
@@ -1312,7 +1312,7 @@ fun PopcornApp() {
             onItemMenu = { item, requester -> openItemWatchMenu(item, requester) },
             onShowMenu = { show, requester -> openShowWatchMenu(show, requester) },
         )
-        is Screen.Player -> key(current.item.id) {
+        is Screen.Player -> key(current.item.id, current.token) {
             PlayerScreen(
                 item = current.item,
                 session = session,
@@ -1329,7 +1329,12 @@ fun PopcornApp() {
                 onBack = ::returnFromPlayer,
                 onRemoteStop = {
                     pendingPlayerCommand = null
-                    returnFromPlayer()
+                    // The phone sends "stop" and then "playItem" a moment later, so
+                    // this teardown can finish after the next item is already on
+                    // screen. Returning then would navigate away from a player that
+                    // just started and leave the details page showing instead — the
+                    // reason a remote play used to need pressing play twice.
+                    if (screen === current) returnFromPlayer()
                 },
                 onRemoteCommandConsumed = { id ->
                     if (pendingPlayerCommand?.id == id) pendingPlayerCommand = null

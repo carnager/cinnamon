@@ -96,7 +96,16 @@ func (a *App) progressSave(w http.ResponseWriter, r *http.Request) {
 		continuousMS = max(int64(0), *in.ContinuousMS)
 	}
 	if !manual {
-		if continuousMS < resumeEvidenceThreshold(durationMS) {
+		if required := resumeEvidenceThreshold(durationMS); continuousMS < required {
+			// A discarded report is otherwise indistinguishable from one that
+			// never arrived, which makes "why was this never marked watched?"
+			// unanswerable after the fact.
+			a.log.Info("progress report discarded: not enough settled playback",
+				"user", user.ID, "item", item.ID, "state", state,
+				"position", in.PositionMS, "duration", durationMS,
+				"percent", progressPercent(in.PositionMS, durationMS),
+				"claimedCompleted", in.Completed,
+				"continuous", continuousMS, "required", required)
 			progress, err := a.store.Progress(r.Context(), user.ID, item.ID)
 			if err == nil {
 				writeJSON(w, http.StatusOK, progress)
@@ -113,8 +122,15 @@ func (a *App) progressSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	completed := manual || in.Completed
-	if completed && !manual && continuousMS < completionEvidenceThreshold(durationMS) {
-		completed = false
+	if completed && !manual {
+		if required := completionEvidenceThreshold(durationMS); continuousMS < required {
+			a.log.Info("completion refused: not enough settled playback",
+				"user", user.ID, "item", item.ID, "state", state,
+				"position", in.PositionMS, "duration", durationMS,
+				"percent", progressPercent(in.PositionMS, durationMS),
+				"continuous", continuousMS, "required", required)
+			completed = false
+		}
 	}
 	progress, err := a.store.SaveProgress(r.Context(), user.ID, item.ID, in.PositionMS, durationMS, completed)
 	if err != nil {
@@ -136,6 +152,15 @@ func (a *App) progressSave(w http.ResponseWriter, r *http.Request) {
 		go a.scrobblePlayback(user.ID, item, progress, state)
 	}
 	writeJSON(w, http.StatusOK, progress)
+}
+
+// progressPercent reports how far in a position sits, so a rejected report can
+// be read at a glance without dividing two millisecond counts by hand.
+func progressPercent(positionMS, durationMS int64) int {
+	if durationMS <= 0 {
+		return 0
+	}
+	return int(positionMS * 100 / durationMS)
 }
 
 func resumeEvidenceThreshold(durationMS int64) int64 {

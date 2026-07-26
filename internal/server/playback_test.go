@@ -23,20 +23,19 @@ func TestPlaybackPlanDirectH264AACMP4(t *testing.T) {
 	}
 }
 
-// Android used to escalate to a full re-encode whenever the audio needed
-// converting, on the grounds that copied video and converted audio drifted
-// apart. Measured over 100s of output they do not: both modes start 23ms apart
-// and neither accumulates. Copy the video instead of spending an encode on it.
-func TestPlaybackPlanAndroidUnsupportedAudioCopiesVideo(t *testing.T) {
+// Copied video alongside re-encoded audio plays out of sync on the Shield, even
+// though the muxed timestamps measure clean in a browser. Until that is
+// understood on the device, Android pays for the video encode.
+func TestPlaybackPlanAndroidUnsupportedAudioUsesFullTranscodeForSync(t *testing.T) {
 	plan := testPlan(testItem("mkv", 8_000_000), testAndroidProfile("mkv", "h264", "aac", nil), []media.MediaStream{
 		testVideo(0, "h264", 1920, 1080, "sdr", 7_500_000),
-		testAudio(1, "dts", 6, 768_000),
+		testAudio(1, "eac3", 6, 768_000),
 	}, PlaybackPlanRequest{})
-	if plan.Mode != planModeAudioTranscode {
-		t.Fatalf("mode = %s reasons=%v, want audio-transcode", plan.Mode, plan.Reasons)
+	if plan.Mode != planModeFullTranscode {
+		t.Fatalf("mode = %s reasons=%v, want full-transcode", plan.Mode, plan.Reasons)
 	}
-	if plan.Outputs.Video.Codec != "copy" || plan.Outputs.Audio.Codec != "aac" {
-		t.Fatalf("outputs = %+v, want video copy audio aac", plan.Outputs)
+	if plan.Outputs.Video.Codec != "h264" || plan.Outputs.Audio.Codec != "aac" {
+		t.Fatalf("outputs = %+v, want video h264 audio aac", plan.Outputs)
 	}
 }
 

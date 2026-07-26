@@ -34,6 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -262,8 +263,7 @@ fun ShowCard(
     CardShell(autoFocus = autoFocus, focusRequester = focusRequester, onFocus = onFocus, onLeftEdge = onLeftEdge, onRightEdge = onRightEdge, onUp = onUp, onClick = onClick, onLongClick = onLongClick) {
         Box {
             Poster(session, show.posterItemId, Modifier.fillMaxWidth(), show.posterMtimeUnix)
-            if (show.rating > 0) PosterRating(show.rating)
-            PosterStatusBadges(watched, watchlisted)
+            PosterTopBar(watched, watchlisted, show.rating)
         }
         Spacer(Modifier.height(5.dp))
         Text(show.title, color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -289,8 +289,7 @@ fun ItemCard(
     CardShell(autoFocus = autoFocus, focusRequester = focusRequester, onFocus = onFocus, onLeftEdge = onLeftEdge, onRightEdge = onRightEdge, onUp = onUp, onClick = onClick, onLongClick = onLongClick) {
         Box {
             Poster(session, item.id, Modifier.fillMaxWidth(), item.posterMtimeUnix)
-            if (item.rating > 0) PosterRating(item.rating)
-            PosterStatusBadges(watched, watchlisted)
+            PosterTopBar(watched, watchlisted, item.rating)
             val progress = LocalResumeProgress.current[item.id] ?: 0f
             if (progress > 0f) PosterProgressBar(progress)
         }
@@ -335,6 +334,40 @@ fun BoxScope.PosterProgressBar(fraction: Float) {
                 .clip(RoundedCornerShape(99.dp))
                 .background(Accent),
         )
+    }
+}
+
+// PosterTopBar puts state and rating on one strip across the top of a poster.
+// Given a chip each they carried their own dark backing and read as separate
+// blobs fighting the artwork, worst on busy or pale covers.
+@Composable
+fun BoxScope.PosterTopBar(watched: Boolean, watchlisted: Boolean, rating: Double = 0.0) {
+    if (!watched && !watchlisted && rating <= 0.0) return
+    Row(
+        Modifier
+            .align(Alignment.TopStart)
+            .fillMaxWidth()
+            .background(Bg.copy(alpha = .74f))
+            .padding(horizontal = 6.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (watchlisted) Icon(Icons.Filled.Bookmark, "In watchlist", Modifier.size(14.dp), tint = Gold)
+            if (watched) Icon(Icons.Filled.Check, "Seen", Modifier.size(14.dp), tint = Accent)
+        }
+        if (rating > 0.0) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.Star, null, Modifier.size(12.dp), tint = Accent)
+                Text("%.1f".format(rating), color = Accent, fontWeight = FontWeight.Black, fontSize = 10.sp)
+            }
+        }
     }
 }
 

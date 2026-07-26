@@ -42,6 +42,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.LiveTv
@@ -1173,11 +1174,44 @@ fun firstGenre(genres: String): String? = genres.split(Regex("[,;/]")).map { it.
 fun PosterImage(session: Session, url: String, modifier: Modifier, watched: Boolean = false, watchlisted: Boolean = false, progress: Float = 0f, rating: Double = 0.0) {
     Box(modifier.aspectRatio(2f / 3f).clip(RoundedCornerShape(9.dp)).background(Surface2).border(1.dp, Line.copy(alpha = .65f), RoundedCornerShape(9.dp)), contentAlignment = Alignment.Center) {
         if (url.isNotBlank()) AuthAsyncImage(session, url, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) else Text("?", color = Muted)
-        if (rating > 0) PosterRating(rating)
-        PosterStatusBadges(watched, watchlisted)
+        PosterTopBar(watched, watchlisted, rating)
         if (progress in 0.01f..0.999f) {
             Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(5.dp).height(4.dp).clip(RoundedCornerShape(99.dp)).background(Color.Black.copy(alpha = .58f))) {
                 Box(Modifier.fillMaxWidth(progress).height(4.dp).clip(RoundedCornerShape(99.dp)).background(Accent))
+            }
+        }
+    }
+}
+
+// PosterTopBar puts state and rating on one strip across the top of a poster.
+// Given a chip each they carried their own dark backing and read as separate
+// blobs fighting the artwork, worst on busy or pale covers.
+@Composable
+fun androidx.compose.foundation.layout.BoxScope.PosterTopBar(watched: Boolean, watchlisted: Boolean, rating: Double = 0.0) {
+    if (!watched && !watchlisted && rating <= 0.0) return
+    Row(
+        Modifier
+            .align(Alignment.TopStart)
+            .fillMaxWidth()
+            .background(Color.Black.copy(alpha = .72f))
+            .padding(horizontal = 6.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (watchlisted) Icon(Icons.Filled.Bookmark, "In watchlist", Modifier.size(14.dp), tint = Gold)
+            if (watched) Icon(Icons.Filled.Check, "Seen", Modifier.size(14.dp), tint = Accent)
+        }
+        if (rating > 0.0) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Filled.Star, null, Modifier.size(12.dp), tint = Accent)
+                Text("%.1f".format(rating), color = Accent, fontWeight = FontWeight.Black, fontSize = 10.sp)
             }
         }
     }

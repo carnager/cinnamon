@@ -5,10 +5,43 @@ function posterBlock(item, fallbackTitle, badges = {}, width = 400) {
   } else {
     poster.textContent = (fallbackTitle || "?").slice(0, 1).toUpperCase();
   }
-  const badgeStack = posterBadges(badges);
-  if (badgeStack) poster.append(badgeStack);
-  if (item?.rating) poster.append(ratingBadge(item.rating, "poster-rating"));
+  const bar = posterTopBar({ ...badges, rating: item?.rating });
+  if (bar) poster.append(bar);
   return poster;
+}
+
+const TOPBAR_ICONS = {
+  watchlist: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17 3H7a2 2 0 0 0-2 2v16l7-3 7 3V5a2 2 0 0 0-2-2z"/></svg>`,
+  seen: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12.5l5.2 5.2L20 7"/></svg>`,
+  star: `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/></svg>`,
+};
+
+/* posterTopBar puts state and rating on one strip across the top of a poster.
+   Given a chip each, they carried their own dark backing and read as separate
+   blobs fighting the artwork — worst on busy or pale covers. */
+function posterTopBar({ seen = false, watchlisted = false, rating = 0 } = {}) {
+  if (!seen && !watchlisted && !rating) return null;
+  const bar = el("div", "poster-topbar");
+  const state = el("span", "poster-topbar-state");
+  if (watchlisted) state.append(topBarIcon("watchlist", "In watchlist"));
+  if (seen) state.append(topBarIcon("seen", "Seen"));
+  bar.append(state);
+  if (rating) {
+    const score = el("span", "poster-topbar-rating");
+    score.innerHTML = TOPBAR_ICONS.star;
+    score.append(Number(rating).toFixed(1));
+    score.title = `Rating ${Number(rating).toFixed(1)}`;
+    bar.append(score);
+  }
+  return bar;
+}
+
+function topBarIcon(kind, label) {
+  const icon = el("span", `poster-topbar-icon ${kind}`);
+  icon.innerHTML = TOPBAR_ICONS[kind];
+  icon.title = label;
+  icon.setAttribute("aria-label", label);
+  return icon;
 }
 
 function posterBadges({ seen = false, watchlisted = false } = {}) {

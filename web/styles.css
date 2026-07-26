@@ -977,6 +977,58 @@ button, input, select { font: inherit; }
   box-shadow: 0 2px 8px rgba(0,0,0,.35);
 }
 
+/* One strip across the top of a poster carrying state on the left and the
+   rating on the right, so the artwork meets a single backing instead of one
+   per chip. */
+.poster-topbar {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 24px;
+  padding: 4px 8px;
+  background: rgba(8, 12, 16, .74);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+}
+
+.poster-topbar-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.poster-topbar-icon { display: inline-flex; }
+
+.poster-topbar-icon svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
+.poster-topbar-icon.watchlist { color: #f0c040; }
+.poster-topbar-icon.seen { color: var(--accent); }
+
+.poster-topbar-rating {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.poster-topbar-rating svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+
 .poster-badges {
   position: absolute;
   top: 8px;

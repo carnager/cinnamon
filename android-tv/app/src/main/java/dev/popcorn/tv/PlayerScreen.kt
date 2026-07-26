@@ -109,6 +109,7 @@ fun PlayerScreen(
     var pendingSeekJob by remember(item.id) { mutableStateOf<Job?>(null) }
     var exitingPlayer by remember(item.id) { mutableStateOf(false) }
     var continuousPlayedMs by remember(item.id) { mutableStateOf(0L) }
+    var internalSeeks by remember(item.id) { mutableStateOf(0) }
     var playbackSampleAtMs by remember(item.id) { mutableStateOf(SystemClock.elapsedRealtime()) }
     val pressedSeekKeys = remember(item.id) { mutableMapOf<Int, Long>() }
     val originalStreams = remember { mutableStateListOf<StreamInfo>() }
@@ -330,6 +331,17 @@ fun PlayerScreen(
         playbackSampleAtMs = now
     }
 
+    // Seeks the viewer never asked for — trimming to a plan start the server
+    // snapped back to a keyframe, or flushing the buffer so a text track starts
+    // producing cues — must not read as jumping around. The server discards any
+    // progress report with less than two minutes of settled playback behind it,
+    // so a transport seek counted as a viewer seek throws away the next two
+    // minutes of progress, including the report that would mark a film watched.
+    fun seekWithoutLosingEvidence(positionMs: Long) {
+        internalSeeks++
+        exoPlayer.seekTo(positionMs)
+    }
+
     fun resetProgressEvidence() {
         continuousPlayedMs = 0L
         playbackSampleAtMs = SystemClock.elapsedRealtime()
@@ -430,7 +442,7 @@ fun PlayerScreen(
             // have snapped the start earlier than asked. Seek off the difference
             // locally — those seconds are in the first segment either way.
             val trimMs = startMs - playbackBaseMs
-            if (trimMs > 500) exoPlayer.seekTo(trimMs)
+            if (trimMs > 500) seekWithoutLosingEvidence(trimMs)
         }
         exoPlayer.playWhenReady = wasPlaying
         if (showController) {
@@ -595,7 +607,7 @@ fun PlayerScreen(
             // ExoPlayer re-extracts from the current position with the track
             // active and cues appear immediately.
             if (index != null) {
-                exoPlayer.seekTo(exoPlayer.currentPosition)
+                seekWithoutLosingEvidence(exoPlayer.currentPosition)
             }
             return
         }
@@ -869,7 +881,8 @@ fun PlayerScreen(
             }
 
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
-                if (reason == Player.DISCONTINUITY_REASON_SEEK) resetProgressEvidence()
+                if (reason != Player.DISCONTINUITY_REASON_SEEK) return
+                if (internalSeeks > 0) internalSeeks-- else resetProgressEvidence()
             }
 
             // Diagnostic for embedded-subtitle playback: report what ExoPlayer

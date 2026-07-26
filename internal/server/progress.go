@@ -121,6 +121,12 @@ func (a *App) progressSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// A watchlist is a list of things to watch, so finishing one takes it off.
+	if progress.Completed {
+		if err := a.store.DeleteItemWatchlist(r.Context(), user.ID, item.ID); err != nil {
+			a.log.Warn("watchlist cleanup failed", "user", user.ID, "item", item.ID, "error", err)
+		}
+	}
 	if progress.Completed && manual {
 		go a.traktSyncHistoryItems(user.ID, []media.Item{item}, false)
 		writeJSON(w, http.StatusOK, progress)

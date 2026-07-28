@@ -72,8 +72,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -1207,12 +1207,21 @@ fun androidx.compose.foundation.layout.BoxScope.PosterCornerMarks(
         }
     }
     if (watched) {
+        // Seen is the one mark that says something happened, so it gets a
+        // filled puck rather than a bare glyph: a solid accent disc is found at
+        // a glance scanning a grid, where a white check has to be looked for.
+        // Nothing shows through it, so its legibility does not depend on the
+        // cover at all.
         Box(
             Modifier
                 .align(if (seenAtEnd) Alignment.BottomEnd else Alignment.BottomStart)
-                .padding(start = 7.dp, end = 7.dp, bottom = 11.dp),
+                .padding(start = 8.dp, end = 8.dp, bottom = 9.dp)
+                .size(24.dp)
+                .clip(RoundedCornerShape(99.dp))
+                .background(Accent),
+            contentAlignment = Alignment.Center,
         ) {
-            HaloIcon(Icons.Filled.Check, "Seen", 16.dp)
+            Icon(Icons.Filled.Check, "Seen", Modifier.size(14.dp), tint = Bg)
         }
     }
     if (rating > 0.0) {

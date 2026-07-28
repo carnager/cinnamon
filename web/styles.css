@@ -1005,14 +1005,27 @@ button, input, select { font: inherit; }
   left: 8px;
 }
 
+/* Seen is the one mark that says something happened, so it gets a filled puck
+   rather than a bare glyph: a solid accent disc is found at a glance scanning a
+   grid, where a white check has to be looked for. Nothing shows through it, so
+   its legibility does not depend on the cover at all. */
 .poster-corner.seen {
-  bottom: 11px;
+  bottom: 9px;
   left: 8px;
+  width: 24px;
+  height: 24px;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .5);
 }
 
 .poster-corner.seen svg {
-  width: 16px;
-  height: 16px;
+  width: 13px;
+  height: 13px;
+  stroke-width: 4;
+  color: #10151b;
+  filter: none;
 }
 
 .poster-corner.rating {

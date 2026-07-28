@@ -354,9 +354,20 @@ fun BoxScope.PosterProgressBar(fraction: Float) {
 @Composable
 fun BoxScope.PosterCornerMarks(watched: Boolean, watchlisted: Boolean, rating: Double = 0.0) {
     if (watchlisted) {
-        Box(Modifier.align(Alignment.TopStart).padding(start = 7.dp, top = 6.dp)) {
-            HaloIcon(Icons.Filled.Bookmark, "In watchlist", 15.dp)
-        }
+        // A ribbon off the top edge, carrying no glyph: the silhouette is the
+        // bookmark, which is why it survives at any size and on any artwork
+        // where a thin white outline would not. Cool against the seen wedge's
+        // warm accent, so the card says colour temperature before it says
+        // shape. Kept clear of the poster's corner radius so its top edge is
+        // not nicked by the rounding.
+        Box(
+            Modifier
+                .align(Alignment.TopStart)
+                .padding(start = 10.dp)
+                .size(width = 18.dp, height = 28.dp)
+                .clip(WatchlistRibbon)
+                .background(Teal),
+        )
     }
     if (watched) {
         // Seen is the one mark that says something happened, so it fills its
@@ -401,6 +412,17 @@ fun BoxScope.PosterCornerMarks(watched: Boolean, watchlisted: Boolean, rating: D
             )
         }
     }
+}
+
+// A tab with a notch cut out of its bottom edge — a bookmark hanging from the
+// top of the poster.
+private val WatchlistRibbon = GenericShape { size, _ ->
+    moveTo(0f, 0f)
+    lineTo(size.width, 0f)
+    lineTo(size.width, size.height)
+    lineTo(size.width / 2f, size.height * 0.74f)
+    lineTo(0f, size.height)
+    close()
 }
 
 // A triangle filling the bottom right corner of its box.

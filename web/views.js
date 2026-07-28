@@ -22,7 +22,7 @@ const CORNER_ICONS = {
    edge, so the glyph stays readable on pale or busy covers. */
 function posterCornerMarks({ seen = false, watchlisted = false, rating = 0 } = {}) {
   const marks = [];
-  if (watchlisted) marks.push(cornerMark("watchlist", "watchlist", "In watchlist"));
+  if (watchlisted) marks.push(cornerMark("watchlist", "", "In watchlist"));
   if (seen) marks.push(cornerMark("seen", "seen", "Seen"));
   if (rating) {
     const score = el("span", "poster-corner rating");
@@ -34,9 +34,11 @@ function posterCornerMarks({ seen = false, watchlisted = false, rating = 0 } = {
   return marks;
 }
 
+// An empty icon means the mark is drawn by CSS alone — the watchlist ribbon is
+// a shape, not a glyph.
 function cornerMark(kind, icon, label) {
   const mark = el("span", `poster-corner ${kind}`);
-  mark.innerHTML = CORNER_ICONS[icon];
+  if (icon) mark.innerHTML = CORNER_ICONS[icon];
   mark.title = label;
   mark.setAttribute("aria-label", label);
   return mark;

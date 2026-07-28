@@ -1195,12 +1195,7 @@ fun PosterImage(session: Session, url: String, modifier: Modifier, watched: Bool
 // readable on white or busy artwork, where a scrim would have shown as a
 // smudge.
 @Composable
-fun androidx.compose.foundation.layout.BoxScope.PosterCornerMarks(
-    watched: Boolean,
-    watchlisted: Boolean,
-    rating: Double = 0.0,
-    seenAtEnd: Boolean = false,
-) {
+fun androidx.compose.foundation.layout.BoxScope.PosterCornerMarks(watched: Boolean, watchlisted: Boolean, rating: Double = 0.0) {
     if (watchlisted) {
         Box(Modifier.align(Alignment.TopStart).padding(start = 7.dp, top = 6.dp)) {
             HaloIcon(Icons.Filled.Bookmark, "In watchlist", 15.dp)
@@ -1214,8 +1209,8 @@ fun androidx.compose.foundation.layout.BoxScope.PosterCornerMarks(
         // cover at all.
         Box(
             Modifier
-                .align(if (seenAtEnd) Alignment.BottomEnd else Alignment.BottomStart)
-                .padding(start = 8.dp, end = 8.dp, bottom = 9.dp)
+                .align(Alignment.BottomEnd)
+                .padding(end = 8.dp, bottom = 9.dp)
                 .size(24.dp)
                 .clip(RoundedCornerShape(99.dp))
                 .background(Accent),

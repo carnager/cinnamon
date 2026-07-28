@@ -347,15 +347,11 @@ fun BoxScope.PosterProgressBar(fraction: Float) {
 // solid stripe of artwork lost on every card. A mark takes only its corner and
 // carries no backing at all — a dark halo around the glyph itself keeps it
 // readable on white or busy artwork, where a scrim would have shown as a
-// smudge. Stills that carry an episode number at the bottom left pass
-// seenAtEnd so the two do not land on each other.
+// smudge. It sits bottom right, the one corner
+// nothing else claims: stills carry their episode number bottom left and
+// season posters their title there.
 @Composable
-fun BoxScope.PosterCornerMarks(
-    watched: Boolean,
-    watchlisted: Boolean,
-    rating: Double = 0.0,
-    seenAtEnd: Boolean = false,
-) {
+fun BoxScope.PosterCornerMarks(watched: Boolean, watchlisted: Boolean, rating: Double = 0.0) {
     if (watchlisted) {
         Box(Modifier.align(Alignment.TopStart).padding(start = 7.dp, top = 6.dp)) {
             HaloIcon(Icons.Filled.Bookmark, "In watchlist", 15.dp)
@@ -369,8 +365,8 @@ fun BoxScope.PosterCornerMarks(
         // cover at all.
         Box(
             Modifier
-                .align(if (seenAtEnd) Alignment.BottomEnd else Alignment.BottomStart)
-                .padding(start = 8.dp, end = 8.dp, bottom = 9.dp)
+                .align(Alignment.BottomEnd)
+                .padding(end = 8.dp, bottom = 9.dp)
                 .size(24.dp)
                 .clip(RoundedCornerShape(99.dp))
                 .background(Accent),

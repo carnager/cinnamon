@@ -1011,7 +1011,7 @@ button, input, select { font: inherit; }
    its legibility does not depend on the cover at all. */
 .poster-corner.seen {
   bottom: 9px;
-  left: 8px;
+  right: 8px;
   width: 24px;
   height: 24px;
   justify-content: center;

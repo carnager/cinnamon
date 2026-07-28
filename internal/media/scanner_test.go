@@ -574,3 +574,104 @@ func mustStat(t *testing.T, path string) os.FileInfo {
 	}
 	return info
 }
+
+// The Trakt back-fill hangs off this hook, so a scan reporting a file it had
+// already imported would ask Trakt about the whole library every time a single
+// directory changed — and worse, could re-mark something the user had since
+// un-watched.
+func TestScanPathsReportsOnlyNewItems(t *testing.T) {
+	store, ctx := newTestStore(t)
+	root := t.TempDir()
+	libDir := filepath.Join(root, "Movies")
+	oldDir := filepath.Join(libDir, "Old Hoppers")
+	newDir := filepath.Join(libDir, "New Hoppers")
+	mustMkdirAll(t, oldDir)
+	mustMkdirAll(t, newDir)
+	oldVideo := filepath.Join(oldDir, "Old Hoppers.mkv")
+	newVideo := filepath.Join(newDir, "New Hoppers.mkv")
+	mustWrite(t, oldVideo, "fake video")
+	mustWrite(t, newVideo, "fake video")
+	info := mustStat(t, oldVideo)
+	if err := store.UpsertItem(ctx, Item{
+		LibraryID: "movies",
+		Path:      oldVideo,
+		Kind:      "movie",
+		Title:     "Old Hoppers",
+		SortTitle: "old hoppers",
+		SizeBytes: info.Size(),
+		MTimeUnix: info.ModTime().Unix(),
+	}); err != nil {
+		t.Fatalf("upsert existing item: %v", err)
+	}
+
+	var added []string
+	scanner := NewScanner(config.Config{FFprobePath: "ffprobe"}, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	scanner.OnItemsAdded = func(paths []string) { added = append(added, paths...) }
+	lib := config.Library{ID: "movies", Type: "movies", Path: libDir}
+	if err := scanner.ScanPaths(ctx, lib, []string{libDir}); err != nil {
+		t.Fatalf("scan library: %v", err)
+	}
+	if len(added) != 1 || added[0] != newVideo {
+		t.Fatalf("added = %#v, want only %q", added, newVideo)
+	}
+
+	// The existing item is rescanned here (its stream state is still unknown, so
+	// the scan rebuilds it), which must not make it look new.
+	added = nil
+	if err := scanner.ScanPaths(ctx, lib, []string{libDir}); err != nil {
+		t.Fatalf("rescan library: %v", err)
+	}
+	if len(added) != 0 {
+		t.Fatalf("added on rescan = %#v, want nothing new", added)
+	}
+}
+
+// A full scan blanks its snapshot when a metadata backfill is due, so it
+// rebuilds every item. Newness has to be decided from what the library held
+// before that, or a backfill pass reports the entire library as new.
+func TestFullScanReportsOnlyNewItemsDuringMetadataBackfill(t *testing.T) {
+	store, ctx := newTestStore(t)
+	root := t.TempDir()
+	libDir := filepath.Join(root, "Movies")
+	oldDir := filepath.Join(libDir, "Old Hoppers")
+	newDir := filepath.Join(libDir, "New Hoppers")
+	mustMkdirAll(t, oldDir)
+	mustMkdirAll(t, newDir)
+	oldVideo := filepath.Join(oldDir, "Old Hoppers.mkv")
+	newVideo := filepath.Join(newDir, "New Hoppers.mkv")
+	mustWrite(t, oldVideo, "fake video")
+	mustWrite(t, newVideo, "fake video")
+	info := mustStat(t, oldVideo)
+	if err := store.UpsertItem(ctx, Item{
+		LibraryID: "movies",
+		Path:      oldVideo,
+		Kind:      "movie",
+		Title:     "Old Hoppers",
+		SortTitle: "old hoppers",
+		SizeBytes: info.Size(),
+		MTimeUnix: info.ModTime().Unix(),
+	}); err != nil {
+		t.Fatalf("upsert existing item: %v", err)
+	}
+	backfillDue, err := store.MetadataBackfillNeeded(ctx, "movies", metadataBackfillNFOActors)
+	if err != nil {
+		t.Fatalf("backfill needed: %v", err)
+	}
+	if !backfillDue {
+		t.Fatal("expected a metadata backfill to be due, so the scan blanks its snapshot")
+	}
+
+	var added []string
+	cfg := config.Config{
+		FFprobePath: "ffprobe",
+		Libraries:   []config.Library{{ID: "movies", Type: "movies", Path: libDir}},
+	}
+	scanner := NewScanner(cfg, store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	scanner.OnItemsAdded = func(paths []string) { added = append(added, paths...) }
+	if err := scanner.Scan(ctx); err != nil {
+		t.Fatalf("full scan: %v", err)
+	}
+	if len(added) != 1 || added[0] != newVideo {
+		t.Fatalf("added = %#v, want only %q", added, newVideo)
+	}
+}

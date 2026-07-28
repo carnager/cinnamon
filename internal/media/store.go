@@ -1249,6 +1249,37 @@ func nonEmptyUniqueStrings(in []string) []string {
 	return out
 }
 
+// ItemsByPaths returns the items stored at the given file paths. Used to turn
+// the paths a scan reports as new into the items a Trakt back-fill can match.
+func (s *Store) ItemsByPaths(ctx context.Context, paths []string) ([]Item, error) {
+	paths = nonEmptyUniqueStrings(paths)
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(paths))
+	args := make([]any, len(paths))
+	for i, path := range paths {
+		placeholders[i] = "?"
+		args[i] = path
+	}
+	rows, err := s.db.QueryContext(ctx, itemSelect+`
+FROM media_items
+WHERE path IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Item{}
+	for rows.Next() {
+		item, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) AllItems(ctx context.Context) ([]Item, error) {
 	rows, err := s.db.QueryContext(ctx, itemSelect+` FROM media_items ORDER BY kind, sort_title, season_number, episode_number`)
 	if err != nil {
@@ -2362,6 +2393,26 @@ WHERE user_id = ?`, userID)
 	var account TraktAccount
 	err := row.Scan(&account.UserID, &account.AccessToken, &account.RefreshToken, &account.ExpiresAt, &account.CreatedAt, &account.UpdatedAt)
 	return account, err
+}
+
+// TraktLinkedUsers lists the users with a linked Trakt account, so background
+// work has somewhere to start from — everything else here is driven by a
+// request that already knows whose account it is.
+func (s *Store) TraktLinkedUsers(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT user_id FROM trakt_accounts ORDER BY user_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []int64{}
+	for rows.Next() {
+		var userID int64
+		if err := rows.Scan(&userID); err != nil {
+			return nil, err
+		}
+		out = append(out, userID)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) DeleteTraktAccount(ctx context.Context, userID int64) error {

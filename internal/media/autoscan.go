@@ -35,6 +35,12 @@ func NewAutoScanner(cfg config.Config, store *Store, log *slog.Logger) *AutoScan
 	}
 }
 
+// OnItemsAdded installs a hook the scans report new items to. Set it before
+// Run.
+func (a *AutoScanner) OnItemsAdded(fn ItemsAddedFunc) {
+	a.scanner.OnItemsAdded = fn
+}
+
 func (a *AutoScanner) Run(ctx context.Context) {
 	if len(a.cfg.Libraries) == 0 {
 		return

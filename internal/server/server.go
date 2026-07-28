@@ -54,6 +54,10 @@ type App struct {
 	scopedMu      sync.Mutex
 	scopedPending map[string]map[string]bool
 	scopedRunning map[string]bool
+
+	backfillMu      sync.Mutex
+	backfillPending map[string]bool
+	backfillRunning bool
 }
 
 type responseCache struct {
@@ -278,7 +282,9 @@ func (a *App) scan(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.ScanTimeout)
 		defer cancel()
-		if err := media.NewScanner(a.cfg, a.store, a.log).ScanWithLease(ctx, release); err != nil {
+		scanner := media.NewScanner(a.cfg, a.store, a.log)
+		scanner.OnItemsAdded = a.ItemsAdded
+		if err := scanner.ScanWithLease(ctx, release); err != nil {
 			a.log.Error("library update failed", "error", err)
 		}
 		a.invalidateResponseCache()

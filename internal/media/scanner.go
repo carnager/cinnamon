@@ -46,12 +46,21 @@ func TryStartScan() (func(), bool) {
 	}, true
 }
 
+// ItemsAddedFunc is called once at the end of a successful scan with the paths
+// of files that were not in the library before it ran. It runs on the scan's
+// goroutine, so an implementation must hand the work off rather than do it
+// inline.
+type ItemsAddedFunc func(paths []string)
+
 type Scanner struct {
 	cfg        config.Config
 	store      *Store
 	log        *slog.Logger
 	nfoCache   sync.Map
 	mtimeCache sync.Map
+	// OnItemsAdded, when set, reports genuinely new items so a caller can act
+	// on them — the server uses it to ask Trakt whether they have been seen.
+	OnItemsAdded ItemsAddedFunc
 }
 
 func NewScanner(cfg config.Config, store *Store, log *slog.Logger) *Scanner {
@@ -162,7 +171,11 @@ func (s *Scanner) scanPaths(ctx context.Context, lib config.Library, paths []str
 		batch = batch[:0]
 		return nil
 	}
+	var added []string
 	for _, job := range jobs {
+		if _, known := snapshot[job.path]; !known {
+			added = append(added, job.path)
+		}
 		batch = append(batch, s.buildItem(ctx, lib, job.path, job.info, snapshot[job.path]))
 		if len(batch) >= scanImportBatchSize {
 			if err := flush(); err != nil {
@@ -200,6 +213,7 @@ func (s *Scanner) scanPaths(ctx context.Context, lib config.Library, paths []str
 		"orphanShowRows", orphanShowRows,
 		"errors", finalStatus.Errors,
 	)
+	s.reportAdded(lib, added)
 	return nil
 }
 
@@ -396,6 +410,13 @@ func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
 	if err != nil {
 		return err
 	}
+	// Captured before the backfill can blank the snapshot below: newness is
+	// "was not in the library", which the emptied snapshot could no longer
+	// tell us, and a backfill pass would then report the whole library as new.
+	existingPaths := make(map[string]struct{}, len(snapshot))
+	for path := range snapshot {
+		existingPaths[path] = struct{}{}
+	}
 	backfillNeeded, err := s.store.MetadataBackfillNeeded(ctx, lib.ID, metadataBackfillNFOActors)
 	if err != nil {
 		return err
@@ -406,6 +427,7 @@ func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
 	}
 	s.log.Debug("scan snapshot loaded", "library", lib.ID, "items", len(snapshot))
 	seen := map[string]struct{}{}
+	var added []string
 	var seenMu sync.Mutex
 	jobs := make(chan scanJob, runtime.NumCPU()*2)
 	items := make(chan Item, scanImportBatchSize*2)
@@ -528,6 +550,9 @@ func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
 		abs, _ := filepath.Abs(path)
 		seenMu.Lock()
 		seen[abs] = struct{}{}
+		if _, known := existingPaths[abs]; !known {
+			added = append(added, abs)
+		}
 		seenMu.Unlock()
 		if !s.scanFileChanged(lib, abs, info, snapshot[abs]) {
 			return nil
@@ -582,7 +607,22 @@ func (s *Scanner) scanLibrary(ctx context.Context, lib config.Library) error {
 		"errors", finalStatus.Errors,
 		"message", finalStatus.Message,
 	)
+	if err == nil {
+		s.reportAdded(lib, added)
+	}
 	return err
+}
+
+// reportAdded hands the new items to the OnItemsAdded hook. It fires only on a
+// scan that finished cleanly: a scan that failed part way may have walked past
+// files it never imported, and reporting those would claim items the library
+// does not have.
+func (s *Scanner) reportAdded(lib config.Library, added []string) {
+	if s.OnItemsAdded == nil || len(added) == 0 {
+		return
+	}
+	s.log.Info("scan added new items", "library", lib.ID, "items", len(added))
+	s.OnItemsAdded(added)
 }
 
 func (s *Scanner) storeProgress(ctx context.Context, libraryID, started string, stats *scanStats, last *atomic.Int64) {

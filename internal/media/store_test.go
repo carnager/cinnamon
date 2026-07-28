@@ -1044,3 +1044,31 @@ func TestSearchShowsFiltersByDecades(t *testing.T) {
 		t.Fatalf("tv decades = %v, want [2000 2020]", decades)
 	}
 }
+
+func TestItemsByPathsReturnsOnlyRequestedItems(t *testing.T) {
+	store, ctx := newTestStore(t)
+	for _, item := range []Item{
+		{LibraryID: "movies", Path: "/movies/one.mkv", Kind: "movie", Title: "One", SortTitle: "one"},
+		{LibraryID: "movies", Path: "/movies/two.mkv", Kind: "movie", Title: "Two", SortTitle: "two"},
+		{LibraryID: "movies", Path: "/movies/three.mkv", Kind: "movie", Title: "Three", SortTitle: "three"},
+	} {
+		if err := store.UpsertItem(ctx, item); err != nil {
+			t.Fatalf("upsert %s: %v", item.Path, err)
+		}
+	}
+
+	items, err := store.ItemsByPaths(ctx, []string{"/movies/two.mkv", "/movies/gone.mkv", "/movies/two.mkv"})
+	if err != nil {
+		t.Fatalf("items by paths: %v", err)
+	}
+	if len(items) != 1 || items[0].Path != "/movies/two.mkv" {
+		t.Fatalf("items = %#v, want only /movies/two.mkv", items)
+	}
+	empty, err := store.ItemsByPaths(ctx, nil)
+	if err != nil {
+		t.Fatalf("items by no paths: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("items for no paths = %#v, want none", empty)
+	}
+}

@@ -144,6 +144,7 @@ func (a *App) libraryForPath(p string) (config.Library, string, bool) {
 // stayed busy for the whole wait so the caller can requeue the paths.
 func (a *App) runScopedScan(lib config.Library, paths []string) bool {
 	scanner := media.NewScanner(a.cfg, a.store, a.log)
+	scanner.OnItemsAdded = a.ItemsAdded
 	for attempt := 0; attempt < 30; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.ScanTimeout)
 		err := scanner.ScanPaths(ctx, lib, paths)

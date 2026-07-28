@@ -70,7 +70,9 @@ func main() {
 	scanCtx, stopScanner := context.WithCancel(context.Background())
 	defer stopScanner()
 	if cfg.ScanOnStart || cfg.AutoScan || cfg.ReconcileInterval > 0 {
-		go media.NewAutoScanner(cfg, store, log).Run(scanCtx)
+		autoScanner := media.NewAutoScanner(cfg, store, log)
+		autoScanner.OnItemsAdded(app.ItemsAdded)
+		go autoScanner.Run(scanCtx)
 	}
 
 	httpServer := &http.Server{

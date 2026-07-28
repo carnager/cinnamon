@@ -925,7 +925,7 @@ private fun EpisodeLandscapeCard(
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.width(278.dp).aspectRatio(16f / 9f)) {
                 EpisodeStill(session, item, Modifier.fillMaxSize())
-                PosterTopBar(watched, watchlisted, item.rating)
+                PosterCornerMarks(watched, watchlisted, item.rating, seenAtEnd = true)
                 val progress = LocalResumeProgress.current[item.id] ?: 0f
                 if (progress > 0f) PosterProgressBar(progress)
                 Box(
@@ -1091,7 +1091,7 @@ fun SeasonCard(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 8.dp, vertical = 8.dp),
             )
-            PosterTopBar(false, false, season.rating)
+            PosterCornerMarks(false, false, season.rating)
             if (selected) {
                 Box(
                     Modifier
@@ -1197,7 +1197,7 @@ fun EpisodeCard(
                     .background(Color.Black.copy(alpha = .7f), RoundedCornerShape(3.dp))
                     .padding(horizontal = 6.dp, vertical = 2.dp),
             )
-            PosterTopBar(watched, watchlisted, item.rating)
+            PosterCornerMarks(watched, watchlisted, item.rating, seenAtEnd = true)
         }
         Spacer(Modifier.height(4.dp))
         Text(item.episodeTitle.ifBlank { item.title }, color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)

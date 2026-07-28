@@ -69,17 +69,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -1174,7 +1179,7 @@ fun firstGenre(genres: String): String? = genres.split(Regex("[,;/]")).map { it.
 fun PosterImage(session: Session, url: String, modifier: Modifier, watched: Boolean = false, watchlisted: Boolean = false, progress: Float = 0f, rating: Double = 0.0) {
     Box(modifier.aspectRatio(2f / 3f).clip(RoundedCornerShape(9.dp)).background(Surface2).border(1.dp, Line.copy(alpha = .65f), RoundedCornerShape(9.dp)), contentAlignment = Alignment.Center) {
         if (url.isNotBlank()) AuthAsyncImage(session, url, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) else Text("?", color = Muted)
-        PosterTopBar(watched, watchlisted, rating)
+        PosterCornerMarks(watched, watchlisted, rating)
         if (progress in 0.01f..0.999f) {
             Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(5.dp).height(4.dp).clip(RoundedCornerShape(99.dp)).background(Color.Black.copy(alpha = .58f))) {
                 Box(Modifier.fillMaxWidth(progress).height(4.dp).clip(RoundedCornerShape(99.dp)).background(Accent))
@@ -1183,37 +1188,61 @@ fun PosterImage(session: Session, url: String, modifier: Modifier, watched: Bool
     }
 }
 
-// PosterTopBar puts state and rating on one strip across the top of a poster.
-// Given a chip each they carried their own dark backing and read as separate
-// blobs fighting the artwork, worst on busy or pale covers.
+// PosterCornerMarks puts state and rating in the poster's corners: watchlist
+// top left, seen bottom left, rating top right. A bar across the top was one
+// solid stripe of artwork lost on every card. A mark takes only its corner and
+// carries no backing at all — a dark halo around the glyph itself keeps it
+// readable on white or busy artwork, where a scrim would have shown as a
+// smudge.
 @Composable
-fun androidx.compose.foundation.layout.BoxScope.PosterTopBar(watched: Boolean, watchlisted: Boolean, rating: Double = 0.0) {
-    if (!watched && !watchlisted && rating <= 0.0) return
-    Row(
-        Modifier
-            .align(Alignment.TopStart)
-            .fillMaxWidth()
-            .background(Color.Black.copy(alpha = .72f))
-            .padding(horizontal = 6.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
+fun androidx.compose.foundation.layout.BoxScope.PosterCornerMarks(
+    watched: Boolean,
+    watchlisted: Boolean,
+    rating: Double = 0.0,
+    seenAtEnd: Boolean = false,
+) {
+    if (watchlisted) {
+        Box(Modifier.align(Alignment.TopStart).padding(start = 7.dp, top = 6.dp)) {
+            HaloIcon(Icons.Filled.Bookmark, "In watchlist", 15.dp)
+        }
+    }
+    if (watched) {
+        Box(
+            Modifier
+                .align(if (seenAtEnd) Alignment.BottomEnd else Alignment.BottomStart)
+                .padding(start = 7.dp, end = 7.dp, bottom = 11.dp),
+        ) {
+            HaloIcon(Icons.Filled.Check, "Seen", 16.dp)
+        }
+    }
+    if (rating > 0.0) {
         Row(
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            Modifier.align(Alignment.TopEnd).padding(end = 7.dp, top = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (watchlisted) Icon(Icons.Filled.Bookmark, "In watchlist", Modifier.size(14.dp), tint = Color.White)
-            if (watched) Icon(Icons.Filled.Check, "Seen", Modifier.size(14.dp), tint = Color.White)
+            // The star keeps the accent so a score still reads as a score at a
+            // glance; the number stays white, since orange on pale artwork does
+            // not.
+            HaloIcon(Icons.Filled.Star, null, 12.dp, tint = Accent)
+            Text(
+                "%.1f".format(rating),
+                color = Color.White,
+                fontWeight = FontWeight.Black,
+                fontSize = 10.sp,
+                style = TextStyle(shadow = Shadow(Color.Black.copy(alpha = .9f), Offset(0f, 0f), blurRadius = 4f)),
+            )
         }
-        if (rating > 0.0) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Filled.Star, null, Modifier.size(12.dp), tint = Accent)
-                Text("%.1f".format(rating), color = Accent, fontWeight = FontWeight.Black, fontSize = 10.sp)
-            }
-        }
+    }
+}
+
+// Compose has no drop-shadow filter for a vector glyph, so the halo is a
+// slightly larger black copy drawn behind the real one.
+@Composable
+private fun HaloIcon(icon: ImageVector, description: String?, size: Dp, tint: Color = Color.White) {
+    Box(contentAlignment = Alignment.Center) {
+        Icon(icon, null, Modifier.size(size + 3.dp), tint = Color.Black.copy(alpha = .62f))
+        Icon(icon, description, Modifier.size(size), tint = tint)
     }
 }
 

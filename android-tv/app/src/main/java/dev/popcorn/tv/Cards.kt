@@ -50,17 +50,23 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.Job
@@ -263,7 +269,7 @@ fun ShowCard(
     CardShell(autoFocus = autoFocus, focusRequester = focusRequester, onFocus = onFocus, onLeftEdge = onLeftEdge, onRightEdge = onRightEdge, onUp = onUp, onClick = onClick, onLongClick = onLongClick) {
         Box {
             Poster(session, show.posterItemId, Modifier.fillMaxWidth(), show.posterMtimeUnix)
-            PosterTopBar(watched, watchlisted, show.rating)
+            PosterCornerMarks(watched, watchlisted, show.rating)
         }
         Spacer(Modifier.height(5.dp))
         Text(show.title, color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -289,7 +295,7 @@ fun ItemCard(
     CardShell(autoFocus = autoFocus, focusRequester = focusRequester, onFocus = onFocus, onLeftEdge = onLeftEdge, onRightEdge = onRightEdge, onUp = onUp, onClick = onClick, onLongClick = onLongClick) {
         Box {
             Poster(session, item.id, Modifier.fillMaxWidth(), item.posterMtimeUnix)
-            PosterTopBar(watched, watchlisted, item.rating)
+            PosterCornerMarks(watched, watchlisted, item.rating)
             val progress = LocalResumeProgress.current[item.id] ?: 0f
             if (progress > 0f) PosterProgressBar(progress)
         }
@@ -337,37 +343,62 @@ fun BoxScope.PosterProgressBar(fraction: Float) {
     }
 }
 
-// PosterTopBar puts state and rating on one strip across the top of a poster.
-// Given a chip each they carried their own dark backing and read as separate
-// blobs fighting the artwork, worst on busy or pale covers.
+// PosterCornerMarks puts state and rating in the poster's corners: watchlist
+// top left, seen bottom left, rating top right. A bar across the top was one
+// solid stripe of artwork lost on every card. A mark takes only its corner and
+// carries no backing at all — a dark halo around the glyph itself keeps it
+// readable on white or busy artwork, where a scrim would have shown as a
+// smudge. Stills that carry an episode number at the bottom left pass
+// seenAtEnd so the two do not land on each other.
 @Composable
-fun BoxScope.PosterTopBar(watched: Boolean, watchlisted: Boolean, rating: Double = 0.0) {
-    if (!watched && !watchlisted && rating <= 0.0) return
-    Row(
-        Modifier
-            .align(Alignment.TopStart)
-            .fillMaxWidth()
-            .background(Bg.copy(alpha = .74f))
-            .padding(horizontal = 6.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
+fun BoxScope.PosterCornerMarks(
+    watched: Boolean,
+    watchlisted: Boolean,
+    rating: Double = 0.0,
+    seenAtEnd: Boolean = false,
+) {
+    if (watchlisted) {
+        Box(Modifier.align(Alignment.TopStart).padding(start = 7.dp, top = 6.dp)) {
+            HaloIcon(Icons.Filled.Bookmark, "In watchlist", 15.dp)
+        }
+    }
+    if (watched) {
+        Box(
+            Modifier
+                .align(if (seenAtEnd) Alignment.BottomEnd else Alignment.BottomStart)
+                .padding(start = 7.dp, end = 7.dp, bottom = 11.dp),
+        ) {
+            HaloIcon(Icons.Filled.Check, "Seen", 16.dp)
+        }
+    }
+    if (rating > 0.0) {
         Row(
-            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            Modifier.align(Alignment.TopEnd).padding(end = 7.dp, top = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (watchlisted) Icon(Icons.Filled.Bookmark, "In watchlist", Modifier.size(14.dp), tint = Color.White)
-            if (watched) Icon(Icons.Filled.Check, "Seen", Modifier.size(14.dp), tint = Color.White)
+            // The star keeps the accent so a score still reads as a score at a
+            // glance; the number stays white, since orange on pale artwork does
+            // not.
+            HaloIcon(Icons.Filled.Star, null, 12.dp, tint = Accent)
+            Text(
+                "%.1f".format(rating),
+                color = Color.White,
+                fontWeight = FontWeight.Black,
+                fontSize = 10.sp,
+                style = TextStyle(shadow = Shadow(Color.Black.copy(alpha = .9f), Offset(0f, 0f), blurRadius = 4f)),
+            )
         }
-        if (rating > 0.0) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Filled.Star, null, Modifier.size(12.dp), tint = Accent)
-                Text("%.1f".format(rating), color = Accent, fontWeight = FontWeight.Black, fontSize = 10.sp)
-            }
-        }
+    }
+}
+
+// Compose has no drop-shadow filter for a vector glyph, so the halo is a
+// slightly larger black copy drawn behind the real one.
+@Composable
+private fun HaloIcon(icon: ImageVector, description: String?, size: Dp, tint: Color = Color.White) {
+    Box(contentAlignment = Alignment.Center) {
+        Icon(icon, null, Modifier.size(size + 3.dp), tint = Color.Black.copy(alpha = .62f))
+        Icon(icon, description, Modifier.size(size), tint = tint)
     }
 }
 

@@ -977,56 +977,58 @@ button, input, select { font: inherit; }
   box-shadow: 0 2px 8px rgba(0,0,0,.35);
 }
 
-/* One strip across the top of a poster carrying state on the left and the
-   rating on the right, so the artwork meets a single backing instead of one
-   per chip. */
-.poster-topbar {
+/* Corner marks on a poster: watchlist top left, seen bottom left, rating top
+   right. A bar across the top was one solid stripe of artwork lost on every
+   card. A mark takes only its corner and carries no backing at all — a dark
+   halo around the glyph itself keeps it readable on white or busy artwork,
+   where a scrim would have shown as a smudge. */
+.poster-corner {
   position: absolute;
-  inset: 0 0 auto 0;
   z-index: 4;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 24px;
-  padding: 4px 8px;
-  background: rgba(8, 12, 16, .74);
-  backdrop-filter: blur(6px);
+  gap: 3px;
+  color: #fff;
+  line-height: 1;
   pointer-events: none;
 }
 
-.poster-topbar-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.poster-topbar-icon {
-  display: inline-flex;
-  color: #fff;
-}
-
-.poster-topbar-icon svg {
-  width: 14px;
-  height: 14px;
+.poster-corner svg {
   display: block;
+  width: 15px;
+  height: 15px;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 1)) drop-shadow(0 0 4px rgba(0, 0, 0, .9));
 }
 
-.poster-topbar-rating {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  margin-left: auto;
-  color: var(--accent);
+.poster-corner.watchlist {
+  top: 7px;
+  left: 8px;
+}
+
+.poster-corner.seen {
+  bottom: 11px;
+  left: 8px;
+}
+
+.poster-corner.seen svg {
+  width: 16px;
+  height: 16px;
+}
+
+.poster-corner.rating {
+  top: 7px;
+  right: 8px;
   font-size: 11px;
   font-weight: 800;
-  line-height: 1;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 1), 0 0 4px rgba(0, 0, 0, .9);
 }
 
-.poster-topbar-rating svg {
+/* The star keeps the accent so a score still reads as a score at a glance;
+   the number stays white, since orange on pale artwork does not. */
+.poster-corner.rating svg {
   width: 12px;
   height: 12px;
-  display: block;
+  color: var(--accent);
 }
 
 .poster-badges {

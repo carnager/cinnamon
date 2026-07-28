@@ -38,6 +38,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
@@ -1202,21 +1203,25 @@ fun androidx.compose.foundation.layout.BoxScope.PosterCornerMarks(watched: Boole
         }
     }
     if (watched) {
-        // Seen is the one mark that says something happened, so it gets a
-        // filled puck rather than a bare glyph: a solid accent disc is found at
-        // a glance scanning a grid, where a white check has to be looked for.
-        // Nothing shows through it, so its legibility does not depend on the
-        // cover at all.
+        // Seen is the one mark that says something happened, so it fills its
+        // corner rather than sitting in it as a glyph: a wedge of accent is
+        // found at a glance scanning a grid, where a check has to be looked
+        // for. The poster Box holding these marks is already clipped to its
+        // rounded shape, so the wedge's outer corner rounds with the artwork.
         Box(
             Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 8.dp, bottom = 9.dp)
-                .size(24.dp)
-                .clip(RoundedCornerShape(99.dp))
-                .background(Accent),
-            contentAlignment = Alignment.Center,
+                .size(46.dp)
+                .clip(SeenWedge)
+                .background(Accent.copy(alpha = .82f)),
+            contentAlignment = Alignment.BottomEnd,
         ) {
-            Icon(Icons.Filled.Check, "Seen", Modifier.size(14.dp), tint = Bg)
+            Icon(
+                Icons.Filled.Check,
+                "Seen",
+                Modifier.padding(end = 7.dp, bottom = 7.dp).size(15.dp),
+                tint = Color.White,
+            )
         }
     }
     if (rating > 0.0) {
@@ -1238,6 +1243,14 @@ fun androidx.compose.foundation.layout.BoxScope.PosterCornerMarks(watched: Boole
             )
         }
     }
+}
+
+// A triangle filling the bottom right corner of its box.
+private val SeenWedge = GenericShape { size, _ ->
+    moveTo(size.width, 0f)
+    lineTo(size.width, size.height)
+    lineTo(0f, size.height)
+    close()
 }
 
 // Compose has no drop-shadow filter for a vector glyph, so the halo is a

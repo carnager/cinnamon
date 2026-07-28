@@ -1005,26 +1005,29 @@ button, input, select { font: inherit; }
   left: 8px;
 }
 
-/* Seen is the one mark that says something happened, so it gets a filled puck
-   rather than a bare glyph: a solid accent disc is found at a glance scanning a
-   grid, where a white check has to be looked for. Nothing shows through it, so
-   its legibility does not depend on the cover at all. */
+/* Seen is the one mark that says something happened, so it fills its corner
+   rather than sitting in it as a glyph: a wedge of accent is found at a glance
+   scanning a grid, where a check has to be looked for. It takes the bottom
+   right, the one corner nothing else wants — stills carry their episode number
+   bottom left and season posters their title there. The poster's own overflow
+   rounds the outer corner for it. */
 .poster-corner.seen {
-  bottom: 9px;
-  right: 8px;
-  width: 24px;
-  height: 24px;
-  justify-content: center;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, .5);
+  right: 0;
+  bottom: 0;
+  width: 46px;
+  height: 46px;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 0 7px 7px 0;
+  background: rgba(244, 123, 53, .82);
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
 }
 
 .poster-corner.seen svg {
-  width: 13px;
-  height: 13px;
-  stroke-width: 4;
-  color: #10151b;
+  width: 15px;
+  height: 15px;
+  stroke-width: 3.6;
+  color: #fff;
   filter: none;
 }
 

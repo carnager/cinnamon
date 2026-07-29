@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.History
@@ -62,6 +63,7 @@ fun CompanionTopAppBar(
     onSelectPhone: () -> Unit,
     onSelectDevice: (Device) -> Unit,
     onHistory: () -> Unit,
+    onWatchlist: () -> Unit,
     onScan: () -> Unit,
     showUpdate: Boolean,
     onUpdate: () -> Unit,
@@ -124,6 +126,7 @@ fun CompanionTopAppBar(
             onPage = { userMenuPage = it },
             onDismiss = { userMenuOpen = false; userMenuPage = UserMenuPage.Root },
             onHistory = { userMenuOpen = false; userMenuPage = UserMenuPage.Root; onHistory() },
+            onWatchlist = { userMenuOpen = false; userMenuPage = UserMenuPage.Root; onWatchlist() },
             onScan = { userMenuOpen = false; onScan() },
             onRefreshDevices = { userMenuOpen = false; onRefreshDevices() },
             onUpdate = { userMenuOpen = false; onUpdate() },
@@ -143,6 +146,7 @@ private fun UserMenuSheet(
     onPage: (UserMenuPage) -> Unit,
     onDismiss: () -> Unit,
     onHistory: () -> Unit,
+    onWatchlist: () -> Unit,
     onScan: () -> Unit,
     onRefreshDevices: () -> Unit,
     onUpdate: () -> Unit,
@@ -188,6 +192,7 @@ private fun UserMenuSheet(
             Spacer(Modifier.height(18.dp))
             when (page) {
                 UserMenuPage.Root -> {
+                    UserMenuAction("Watchlist", Icons.Default.Bookmark, onClick = onWatchlist)
                     UserMenuAction("Watch history", Icons.Default.History, onClick = onHistory)
                     UserMenuAction(
                         "Preferred audio",

@@ -1269,6 +1269,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     onSelectPhone = ::selectPhoneTarget,
                     onSelectDevice = ::selectTvTarget,
                     onHistory = { navigate(Page.History) },
+                    onWatchlist = { navigate(Page.Watchlist) },
                     onScan = onScan,
                     showUpdate = companionUpdate?.available == true,
                     onUpdate = { showUpdateDialog = true },
@@ -1473,6 +1474,18 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 onShow = ::openShow,
                             )
                             Page.History -> HistoryPage(session, onBack = ::goBack, onOpen = ::openDetail)
+                            Page.Watchlist -> WatchlistPage(
+                                session,
+                                watchlistMovies,
+                                watchlistTvShows,
+                                completedItems,
+                                completedShows,
+                                watchlistItems,
+                                watchlistShows,
+                                onBack = ::goBack,
+                                onMovie = ::openDetail,
+                                onShow = ::openShow,
+                            )
                             is Page.Person -> PersonPage(
                                 session,
                                 current.actor,

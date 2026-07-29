@@ -181,6 +181,13 @@ fun HomePage(
         if (continueEpisodes.isNotEmpty()) item { ContinueShelf("Continue TV", "${continueEpisodes.size} episodes", session, continueEpisodes, resume, onEpisode) }
         if (recentMovies.isNotEmpty()) item { MovieShelf("Recently Added Movies", "${recentMovies.size} new", session, recentMovies, completedItems, watchlistItems, onMovie) }
         if (recentShows.isNotEmpty()) item { ShowShelf("Recently Added TV", "${recentShows.size} shows", session, recentShows, completedShows, watchlistShows, onShow) }
+        // Watchlist and top rated were being fetched and handed to this screen
+        // only to seed the hero, so saved titles had nowhere to be seen. Same
+        // shelves, same order as the web home.
+        if (watchlistMovies.isNotEmpty()) item { MovieShelf("Your Watchlist", "${watchlistMovies.size} saved", session, watchlistMovies, completedItems, watchlistItems, onMovie) }
+        if (watchlistTvShows.isNotEmpty()) item { ShowShelf("Your Watchlist · TV", "${watchlistTvShows.size} saved", session, watchlistTvShows, completedShows, watchlistShows, onShow) }
+        if (topMovies.isNotEmpty()) item { MovieShelf("Top Rated Movies", "", session, topMovies, completedItems, watchlistItems, onMovie) }
+        if (topShows.isNotEmpty()) item { ShowShelf("Top Rated TV", "", session, topShows, completedShows, watchlistShows, onShow) }
     }
 }
 
@@ -1120,6 +1127,68 @@ fun HeaderBack(title: String, onBack: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(onClick = onBack) { Text("Back") }
         Text(title, color = TextColor, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+// The full saved list. The home shelves only show a row each, and a watchlist
+// is the kind of thing you scan end to end when deciding what to watch.
+@Composable
+fun WatchlistPage(
+    session: Session,
+    movies: List<PopItem>,
+    shows: List<ShowSummary>,
+    completedItems: Set<Long>,
+    completedShows: Set<String>,
+    watchlistItems: Set<Long>,
+    watchlistShows: Set<String>,
+    onBack: () -> Unit,
+    onMovie: (PopItem) -> Unit,
+    onShow: (ShowSummary) -> Unit,
+) {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(PosterColumnWidth),
+        modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+        contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp), modifier = Modifier.padding(bottom = 6.dp)) {
+                HeaderBack("Watchlist", onBack)
+                Text("${movies.size + shows.size} saved", color = Muted, fontSize = 12.sp)
+            }
+        }
+        if (movies.isEmpty() && shows.isEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Text(
+                    "Nothing saved yet. Use the bookmark on any movie or show to add it here.",
+                    color = Muted,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                    modifier = Modifier.padding(vertical = 22.dp),
+                )
+            }
+        }
+        if (movies.isNotEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) { WatchlistSection("Movies", movies.size) }
+            items(movies, key = { "movie:${it.id}" }) { movie ->
+                MovieCard(session, movie, watched = completedItems.contains(movie.id), watchlisted = watchlistItems.contains(movie.id)) { onMovie(movie) }
+            }
+        }
+        if (shows.isNotEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) { WatchlistSection("TV Shows", shows.size) }
+            items(shows, key = { "show:${showMarkerKey(it)}" }) { show ->
+                ShowCard(session, show, watched = completedShows.contains(showMarkerKey(show)), watchlisted = watchlistShows.contains(showMarkerKey(show))) { onShow(show) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WatchlistSection(title: String, count: Int) {
+    Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
+        Text(title, color = TextColor, fontSize = 21.sp, fontWeight = FontWeight.Bold, letterSpacing = (-.2).sp)
+        Text("$count", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 

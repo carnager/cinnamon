@@ -251,6 +251,7 @@ sealed interface Page {
     data object Search : Page
     data object Remote : Page
     data object History : Page
+    data object Watchlist : Page
     data class Person(val actor: Actor) : Page
     data class Show(val show: ShowSummary) : Page
     data class Season(val show: ShowSummary, val season: SeasonSummary) : Page

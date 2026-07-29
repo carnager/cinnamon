@@ -746,6 +746,7 @@ private fun seasonToJson(season: SeasonSummary): JSONObject = JSONObject()
 // requests snap up to the nearest bucket). Source posters are routinely
 // 1000x1500 and backdrops 1920x1080, so asking for a scaled copy cuts a poster
 // wall from tens of megabytes to a few hundred kilobytes.
+const val ArtworkThumb = 200
 const val ArtworkCard = 400
 const val ArtworkFull = 800
 

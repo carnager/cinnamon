@@ -15,7 +15,7 @@ import (
 
 // thumbWidths lists the only sizes the server will generate. Requests snap up
 // to the nearest bucket so arbitrary ?w= values cannot blow up the cache.
-var thumbWidths = []int{400, 800}
+var thumbWidths = []int{200, 400, 800}
 
 // thumbMaxAge bounds cache growth: artwork churn leaves orphaned entries
 // behind (the cache key includes the source mtime), so anything this old is

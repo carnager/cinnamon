@@ -73,14 +73,10 @@ fun DetailPage(
     api: Api,
     item: PopItem,
     playbackTarget: PlaybackTarget,
-    devices: List<Device>,
-    selectedDevice: Device?,
     watched: Boolean,
     watchlisted: Boolean,
     onSetWatched: (Boolean) -> Unit,
     onSetWatchlisted: (Boolean) -> Unit,
-    onSelectPhone: () -> Unit,
-    onSelectDevice: (Device) -> Unit,
     onBack: () -> Unit,
     onPlay: (PopItem, Int?, Int?, Long) -> Unit,
     onPlayLocal: (PopItem, Int?, Int?, Long) -> Unit,
@@ -98,7 +94,6 @@ fun DetailPage(
     var error by remember(item.id) { mutableStateOf("") }
     var userRating by remember(item.id) { mutableStateOf(0) }
     var ratingOpen by remember(item.id) { mutableStateOf(false) }
-    var targetOpen by remember(item.id) { mutableStateOf(false) }
     var audioOpen by remember(item.id) { mutableStateOf(false) }
     var subtitleOpen by remember(item.id) { mutableStateOf(false) }
     val ratingScope = rememberCoroutineScope()
@@ -121,7 +116,6 @@ fun DetailPage(
     }
 
     val resumeMs = progress?.takeIf { progressResumable(it.positionMs, it.durationMs) }?.positionMs ?: 0L
-    val targetLabel = if (playbackTarget == PlaybackTarget.Phone) "this phone" else selectedDevice?.displayName() ?: "the TV"
 
     fun start(positionMs: Long) {
         if (playbackTarget == PlaybackTarget.Phone) {
@@ -157,26 +151,20 @@ fun DetailPage(
                         }
                     }
                 }
-                // Says where playback lands, from when, and when it will finish
-                // — the remaining time, so resuming reports the truth. Also the
-                // way to change destination, so Play itself no longer has to
-                // interrupt with a picker every time.
+                // Timing only. Where playback lands, and changing it, is the
+                // top bar's cast chip — which is pinned and visible from here,
+                // so repeating it under the button was just clutter.
                 val remainingMs = (detailItem.durationMs - resumeMs).coerceAtLeast(0)
-                Text(
-                    buildString {
-                        append("Plays on ")
-                        append(targetLabel)
-                        if (resumeMs > 0) append(" · from ${formatTime(resumeMs)}")
-                        fmtEndsAround(remainingMs).takeIf { it.isNotBlank() }?.let { append(" · ${it.replaceFirstChar { c -> c.lowercase() }}") }
-                        append("  ·  Change")
-                    },
-                    color = Muted,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.clickable { targetOpen = true },
-                )
+                val endsAround = fmtEndsAround(remainingMs)
+                val timing = buildString {
+                    if (resumeMs > 0) append("Resumes at ${formatTime(resumeMs)}")
+                    if (endsAround.isNotBlank()) {
+                        if (isEmpty()) append(endsAround) else append(" · ${endsAround.replaceFirstChar { it.lowercase() }}")
+                    }
+                }
+                if (timing.isNotBlank()) {
+                    Text(timing, color = Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
                 // Track choices belong with Play, not below the overview: they
                 // are decisions made in the same breath as starting playback.
                 if (audioTracks.isNotEmpty() || subtitleTracks.isNotEmpty()) {
@@ -254,25 +242,6 @@ fun DetailPage(
             selectedSubtitle = it
             subtitleOpen = false
         }
-    }
-    if (targetOpen) {
-        // Picking a destination now only sets it — playback starts from the
-        // Play button, so changing your mind about the target does not commit
-        // you to watching something right now.
-        PlaybackTargetSheet(
-            devices = devices,
-            selectedDevice = selectedDevice,
-            playbackTarget = playbackTarget,
-            onDismiss = { targetOpen = false },
-            onSelectPhone = {
-                targetOpen = false
-                onSelectPhone()
-            },
-            onSelectDevice = {
-                targetOpen = false
-                onSelectDevice(it)
-            },
-        )
     }
 }
 

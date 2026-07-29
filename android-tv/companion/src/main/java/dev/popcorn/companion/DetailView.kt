@@ -282,20 +282,26 @@ fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, strea
             } else {
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Surface2, Bg))))
             }
+            // The image fades in from the left, so the cover sits on settled
+            // background rather than on competing artwork and the backdrop
+            // reads from the right where nothing overlaps it.
+            Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Bg.copy(alpha = .93f), .42f to Bg.copy(alpha = .5f), .78f to Color.Transparent)))
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Black.copy(alpha = .06f), .5f to Bg.copy(alpha = .38f), .82f to Bg.copy(alpha = .9f), 1f to Bg)))
+            PosterImage(
+                session,
+                imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard),
+                Modifier.align(Alignment.BottomStart).padding(start = 16.dp, bottom = 8.dp).width(118.dp),
+                progress = resumeProgress,
+            )
+            // Drawn last so it always stays on top of the cover and tappable:
+            // on a narrow phone the taller poster reaches up behind it.
             Box(
-                Modifier.align(Alignment.TopStart).padding(14.dp).size(42.dp).clip(CircleShape).background(Color.Black.copy(alpha = .58f))
+                Modifier.align(Alignment.TopStart).padding(12.dp).size(42.dp).clip(CircleShape).background(Color.Black.copy(alpha = .58f))
                     .border(1.dp, Color.White.copy(alpha = .13f), CircleShape).clickable(onClick = onBack),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White, modifier = Modifier.size(21.dp))
             }
-            PosterImage(
-                session,
-                imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard),
-                Modifier.align(Alignment.BottomStart).padding(start = 16.dp, bottom = 14.dp).width(102.dp),
-                progress = resumeProgress,
-            )
         }
         Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
             Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {

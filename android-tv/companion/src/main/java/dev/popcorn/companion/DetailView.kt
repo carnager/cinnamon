@@ -55,11 +55,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
@@ -298,15 +300,29 @@ private fun DetailAction(
     }
 }
 
+// How far the poster rides up over the backdrop's bottom edge.
+private val PosterOverlap = 42.dp
+
+// Pulls content up over whatever sits above it and gives back the height it
+// vacated, so the poster can straddle the backdrop edge without leaving a gap
+// underneath. A plain offset would shift the drawing but keep the space.
+private fun Modifier.overlapAbove(overlap: Dp) = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints)
+    val delta = overlap.roundToPx().coerceIn(0, placeable.height)
+    layout(placeable.width, placeable.height - delta) {
+        placeable.place(0, -delta)
+    }
+}
+
 @Composable
 fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, streams: List<StreamInfo>, resumeProgress: Float, onBack: () -> Unit) {
     val backdropUrl = if (item.backdropMtimeUnix > 0) imageUrl(session, item.id, item.backdropMtimeUnix, "backdrop", ArtworkFull) else ""
     val genres = item.genres.split(Regex("[,;/]")).map { it.trim() }.filter { it.isNotBlank() }.take(3)
     Column {
         // The backdrop keeps its native 16:9 rather than being cropped to a
-        // fixed height, and carries the title alone — the poster that used to
-        // sit here showed the same artwork the user just tapped to arrive, and
-        // cost the title a third of the width.
+        // fixed height. The poster sits in the title block below and straddles
+        // this edge, so the cover is present without the hero growing to hold
+        // it — and the title still gets most of the width.
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
             if (backdropUrl.isNotBlank()) {
                 AuthAsyncImage(session, backdropUrl, null, Modifier.fillMaxSize(), ContentScale.Crop)
@@ -321,42 +337,46 @@ fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, strea
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White, modifier = Modifier.size(21.dp))
             }
-            // How far in you are, full width along the bottom edge — legible in
-            // a way a 4dp sliver on a small poster never was.
-            if (resumeProgress > 0.001f) {
-                Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Line)) {
-                    Box(Modifier.fillMaxWidth(resumeProgress).height(3.dp).background(Accent))
-                }
-            }
         }
-        Column(Modifier.padding(horizontal = 16.dp).padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            Text(displayTitle(item), color = TextColor, fontSize = 30.sp, lineHeight = 34.sp, fontWeight = FontWeight.Black, letterSpacing = (-.4).sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            if (item.originalTitle.isNotBlank() && item.originalTitle != displayTitle(item)) {
-                Text(item.originalTitle, color = Muted, fontSize = 13.sp, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            val meta = detailMetadata(item)
-            Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                if (item.officialRating.isNotBlank()) ContentRatingChip(item.officialRating)
-            }
-            if (genres.isNotEmpty()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    genres.forEach { DetailChip(it.uppercase(Locale.US), Color.Transparent, Teal.copy(alpha = .86f)) }
+        Column(Modifier.overlapAbove(PosterOverlap), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(13.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard), Modifier.width(98.dp), progress = resumeProgress)
+                Column(Modifier.weight(1f).padding(bottom = 2.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(displayTitle(item), color = TextColor, fontSize = 24.sp, lineHeight = 28.sp, fontWeight = FontWeight.Black, letterSpacing = (-.35).sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    if (item.originalTitle.isNotBlank() && item.originalTitle != displayTitle(item)) {
+                        Text(item.originalTitle, color = Muted, fontSize = 13.sp, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    val meta = detailMetadata(item)
+                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (item.officialRating.isNotBlank()) ContentRatingChip(item.officialRating)
+                    }
                 }
             }
-            // Ratings and technical details share one scrolling row: three
-            // stacked scrollers read as clutter and it was easy to miss that
-            // any of them scrolled at all.
-            val badges = ratingBadges(item, ratings)
-            val tech = techChips(item, streams)
-            if (badges.isNotEmpty() || tech.isNotEmpty()) {
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    badges.forEach { (label, value) -> SourceRatingBadge(label, value) }
-                    tech.forEach { DetailChip(it, Color.Transparent, TextColor.copy(alpha = .85f)) }
+            Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                if (genres.isNotEmpty()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        genres.forEach { DetailChip(it.uppercase(Locale.US), Color.Transparent, Teal.copy(alpha = .86f)) }
+                    }
+                }
+                // Ratings and technical details share one scrolling row: three
+                // stacked scrollers read as clutter and it was easy to miss
+                // that any of them scrolled at all.
+                val badges = ratingBadges(item, ratings)
+                val tech = techChips(item, streams)
+                if (badges.isNotEmpty() || tech.isNotEmpty()) {
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        badges.forEach { (label, value) -> SourceRatingBadge(label, value) }
+                        tech.forEach { DetailChip(it, Color.Transparent, TextColor.copy(alpha = .85f)) }
+                    }
                 }
             }
         }

@@ -522,7 +522,9 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     suspend fun refreshDevices(selectIfNeeded: Boolean = true) {
         val loaded = uniquePlaybackDevices(api.devices())
         devices = loaded
-        if (selectIfNeeded && playbackTarget == PlaybackTarget.Shield) {
+        // Keep a TV resolved even while the phone is the active target, so the
+        // remote has something to show the moment the user switches back.
+        if (selectIfNeeded) {
             val current = selectedDevice
             if (current == null || loaded.none { it.id == current.id }) {
                 val remembered = controlPrefs.getString("deviceId", "")
@@ -1093,6 +1095,17 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     // never resumes — which is why the connection stayed dead until a manual
     // restart. Re-keying the loops on this counter gives them a fresh start.
     var resumeTick by remember { mutableStateOf(0) }
+    // False once the device poll starts failing. Drives the offline banner and
+    // triggers a content reload the moment the server answers again.
+    var connected by remember { mutableStateOf(true) }
+
+    fun reconnect() {
+        resumeTick++
+    }
+
+    // Kick the loops as soon as the radio is back rather than waiting out the
+    // current backoff delay.
+    OnNetworkAvailable { if (!connected) reconnect() }
 
     LaunchedEffect(session) { loadContent(initial = true) }
 
@@ -1118,15 +1131,16 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     }
 
     // While the app stays open, keep the home shelves current so content added
-    // server-side appears without any user action.
-    LaunchedEffect(session) {
+    // server-side appears without any user action. Keyed on resumeTick as well
+    // so a loop frozen by the app cache is replaced on the next foreground.
+    LaunchedEffect(session, resumeTick) {
         while (true) {
             delay(60_000)
             loadContent(initial = false)
         }
     }
 
-    LaunchedEffect(session) {
+    LaunchedEffect(session, resumeTick) {
         while (true) {
             delay(5 * 60 * 1000)
             publishCompanionUpdate(runCatching { api.companionUpdate(BuildConfig.VERSION_CODE) }.getOrNull())
@@ -1143,18 +1157,36 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     .onSuccess { if (error.isNotBlank()) onError("") }
                     .onFailure { Log.w("PopcornCompanion", "deviceState poll failed: ${it.message}") }
             }
-            delay(1000)
+            delay(if (connected) 1000 else 3000)
         }
     }
 
+    // The device poll doubles as the connection heartbeat. Failures back off
+    // (1s → 30s) instead of hammering a dead server, and the first success after
+    // an outage reloads content so the UI isn't left stale.
     LaunchedEffect(session, playbackTarget, resumeTick) {
+        var failures = 0
         while (true) {
-            runCatching { refreshDevices() }.onFailure { reportError(it, "Device refresh failed") }
-            delay(5000)
+            val ok = runCatching { refreshDevices() }
+                .onFailure { if (it !is CancellationException) Log.w("PopcornCompanion", "device refresh failed: ${it.message}") }
+                .isSuccess
+            if (ok) {
+                failures = 0
+                if (!connected) {
+                    connected = true
+                    if (error.isNotBlank()) onError("")
+                    loadContent(initial = false)
+                }
+                delay(5000)
+            } else {
+                failures++
+                connected = false
+                delay((1000L shl (failures - 1).coerceAtMost(5)).coerceAtMost(30_000L))
+            }
         }
     }
 
-    LaunchedEffect(localPlayer, phoneState.item?.id, phoneStreamBaseMs) {
+    LaunchedEffect(localPlayer, phoneState.item?.id, phoneStreamBaseMs, resumeTick) {
         var lastSavedAt = 0L
         while (true) {
             samplePhoneProgressEvidence()
@@ -1228,6 +1260,12 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
             topBar = {
                 CompanionTopAppBar(
                     session = session,
+                    playbackTarget = playbackTarget,
+                    devices = devices,
+                    selectedDevice = selectedDevice,
+                    deviceStatus = state.state.ifBlank { "idle" },
+                    onSelectPhone = ::selectPhoneTarget,
+                    onSelectDevice = ::selectTvTarget,
                     onHistory = { navigate(Page.History) },
                     onScan = onScan,
                     showUpdate = companionUpdate?.available == true,
@@ -1265,11 +1303,14 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                             }
                         },
                         onSeek = { delta -> seekTo(miniState.positionMs + delta) },
+                        // Always lands somewhere: the local player when the phone
+                        // has something loaded, otherwise the remote — which
+                        // stays reachable even when nothing is playing.
                         onClick = {
-                            if (playbackTarget == PlaybackTarget.Phone && phoneState.item != null) {
-                                val item = phoneState.item!!
-                                navigate(Page.LocalPlayer(item, phoneAudioIndex, phoneSubtitleIndex, page), stack = false)
-                            } else if (playbackTarget == PlaybackTarget.Shield) {
+                            val local = phoneState.item
+                            if (playbackTarget == PlaybackTarget.Phone && local != null) {
+                                navigate(Page.LocalPlayer(local, phoneAudioIndex, phoneSubtitleIndex, page), stack = false)
+                            } else {
                                 navigate(Page.Remote, stack = false)
                             }
                         },
@@ -1290,6 +1331,12 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
             containerColor = MaterialTheme.colorScheme.background,
         ) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
+                if (!connected) {
+                    OfflineBanner(
+                        onRetry = ::reconnect,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                }
                 StatusMessage(
                     message = error,
                     success = error.contains("approved", true),
@@ -1457,6 +1504,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                 state = state,
                 devices = devices,
                 selectedDevice = selectedDevice,
+                playbackTarget = playbackTarget,
                 onSelectPhone = {
                     selectPhoneTarget()
                     if (phoneState.item != null) page = Page.LocalPlayer(phoneState.item!!, phoneAudioIndex, phoneSubtitleIndex, Page.Home)

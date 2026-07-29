@@ -156,6 +156,7 @@ fun RemotePage(
     state: PlayerState,
     devices: List<Device>,
     selectedDevice: Device?,
+    playbackTarget: PlaybackTarget,
     onSelectPhone: () -> Unit,
     onSelectDevice: (Device) -> Unit,
     onBack: () -> Unit,
@@ -284,7 +285,7 @@ fun RemotePage(
         PlaybackTargetSheet(
             devices = devices,
             selectedDevice = selectedDevice,
-            playbackTarget = PlaybackTarget.Shield,
+            playbackTarget = playbackTarget,
             phoneStatus = "Control phone playback",
             deviceStatus = state.state.ifBlank { "idle" },
             onDismiss = { showTargetDialog = false },

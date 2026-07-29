@@ -12,14 +12,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SystemUpdate
@@ -52,6 +55,12 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun CompanionTopAppBar(
     session: Session,
+    playbackTarget: PlaybackTarget,
+    devices: List<Device>,
+    selectedDevice: Device?,
+    deviceStatus: String,
+    onSelectPhone: () -> Unit,
+    onSelectDevice: (Device) -> Unit,
     onHistory: () -> Unit,
     onScan: () -> Unit,
     showUpdate: Boolean,
@@ -61,11 +70,24 @@ fun CompanionTopAppBar(
 ) {
     var userMenuOpen by remember { mutableStateOf(false) }
     var userMenuPage by remember { mutableStateOf(UserMenuPage.Root) }
+    var targetSheetOpen by remember { mutableStateOf(false) }
 
     Column {
         TopAppBar(
             title = { CinnamonBrand(markSize = 28, fontSize = 18) },
             actions = {
+                // The playback destination is a global setting, so it lives here
+                // rather than only inside Now Playing — which is unreachable when
+                // nothing is playing.
+                PlaybackTargetButton(
+                    label = if (playbackTarget == PlaybackTarget.Phone) "This phone" else selectedDevice?.displayName() ?: "Choose TV",
+                    icon = if (playbackTarget == PlaybackTarget.Phone) Icons.Default.PhoneAndroid else Icons.Default.Cast,
+                    modifier = Modifier.padding(end = 8.dp).widthIn(max = 150.dp),
+                    onClick = {
+                        onRefreshDevices()
+                        targetSheetOpen = true
+                    },
+                )
                 UserAvatar(
                     session = session,
                     size = 38,
@@ -79,6 +101,19 @@ fun CompanionTopAppBar(
             colors = TopAppBarDefaults.topAppBarColors(containerColor = Bg, titleContentColor = TextColor, actionIconContentColor = Muted),
         )
         Box(Modifier.fillMaxWidth().height(1.dp).background(Line.copy(alpha = .45f)))
+    }
+
+    if (targetSheetOpen) {
+        PlaybackTargetSheet(
+            devices = devices,
+            selectedDevice = selectedDevice,
+            playbackTarget = playbackTarget,
+            phoneStatus = "Play on this device",
+            deviceStatus = deviceStatus,
+            onDismiss = { targetSheetOpen = false },
+            onSelectPhone = { targetSheetOpen = false; onSelectPhone() },
+            onSelectDevice = { targetSheetOpen = false; onSelectDevice(it) },
+        )
     }
 
     if (userMenuOpen) {

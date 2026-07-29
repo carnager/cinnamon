@@ -55,13 +55,11 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
@@ -269,29 +267,15 @@ private fun DetailAction(
     }
 }
 
-// How far the poster rides up over the backdrop's bottom edge.
-private val PosterOverlap = 42.dp
-
-// Pulls content up over whatever sits above it and gives back the height it
-// vacated, so the poster can straddle the backdrop edge without leaving a gap
-// underneath. A plain offset would shift the drawing but keep the space.
-private fun Modifier.overlapAbove(overlap: Dp) = layout { measurable, constraints ->
-    val placeable = measurable.measure(constraints)
-    val delta = overlap.roundToPx().coerceIn(0, placeable.height)
-    layout(placeable.width, placeable.height - delta) {
-        placeable.place(0, -delta)
-    }
-}
-
 @Composable
 fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, streams: List<StreamInfo>, resumeProgress: Float, onBack: () -> Unit) {
     val backdropUrl = if (item.backdropMtimeUnix > 0) imageUrl(session, item.id, item.backdropMtimeUnix, "backdrop", ArtworkFull) else ""
     val genres = item.genres.split(Regex("[,;/]")).map { it.trim() }.filter { it.isNotBlank() }.take(3)
     Column {
         // The backdrop keeps its native 16:9 rather than being cropped to a
-        // fixed height. The poster sits in the title block below and straddles
-        // this edge, so the cover is present without the hero growing to hold
-        // it — and the title still gets most of the width.
+        // fixed height, and the cover overlays it at the bottom left. Keeping
+        // the poster inside the hero costs no extra height and leaves the title
+        // below it the full width.
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
             if (backdropUrl.isNotBlank()) {
                 AuthAsyncImage(session, backdropUrl, null, Modifier.fillMaxSize(), ContentScale.Crop)
@@ -306,24 +290,23 @@ fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, strea
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White, modifier = Modifier.size(21.dp))
             }
+            PosterImage(
+                session,
+                imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard),
+                Modifier.align(Alignment.BottomStart).padding(start = 16.dp, bottom = 14.dp).width(102.dp),
+                progress = resumeProgress,
+            )
         }
-        Column(Modifier.overlapAbove(PosterOverlap), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(13.dp),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard), Modifier.width(98.dp), progress = resumeProgress)
-                Column(Modifier.weight(1f).padding(bottom = 2.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(displayTitle(item), color = TextColor, fontSize = 24.sp, lineHeight = 28.sp, fontWeight = FontWeight.Black, letterSpacing = (-.35).sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                    if (item.originalTitle.isNotBlank() && item.originalTitle != displayTitle(item)) {
-                        Text(item.originalTitle, color = Muted, fontSize = 13.sp, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    val meta = detailMetadata(item)
-                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (item.officialRating.isNotBlank()) ContentRatingChip(item.officialRating)
-                    }
+        Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(displayTitle(item), color = TextColor, fontSize = 29.sp, lineHeight = 33.sp, fontWeight = FontWeight.Black, letterSpacing = (-.4).sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                if (item.originalTitle.isNotBlank() && item.originalTitle != displayTitle(item)) {
+                    Text(item.originalTitle, color = Muted, fontSize = 13.sp, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                val meta = detailMetadata(item)
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (item.officialRating.isNotBlank()) ContentRatingChip(item.officialRating)
                 }
             }
             Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {

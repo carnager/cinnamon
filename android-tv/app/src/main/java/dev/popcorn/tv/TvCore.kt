@@ -148,9 +148,20 @@ fun resumeFractionMap(progress: List<PlaybackProgress>): Map<Long, Float> {
 // through every screen composable.
 val LocalResumeProgress = compositionLocalOf { emptyMap<Long, Float>() }
 
-fun imageUrl(session: Session?, itemId: Long, kind: String, version: Long = 0): String {
+// Artwork width the server will generate for card-sized images (see
+// internal/server/thumbs.go — requests snap up to the nearest bucket, 400 or
+// 800). Source posters are routinely 1000x1500, so a shelf of cards otherwise
+// pulls megabytes per row. Full-screen backdrops omit the width and keep the
+// original, which a 1080p panel can actually use.
+const val ArtworkCard = 400
+
+fun imageUrl(session: Session?, itemId: Long, kind: String, version: Long = 0, width: Int = 0): String {
     if (session == null || itemId <= 0) return ""
-    val suffix = if (version > 0) "?v=$version" else ""
+    val params = buildList {
+        if (version > 0) add("v=$version")
+        if (width > 0) add("w=$width")
+    }
+    val suffix = if (params.isEmpty()) "" else "?" + params.joinToString("&")
     return "${session.server}/api/items/$itemId/image/$kind$suffix"
 }
 

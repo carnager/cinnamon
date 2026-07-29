@@ -742,7 +742,18 @@ private fun seasonToJson(season: SeasonSummary): JSONObject = JSONObject()
     .put("posterMtimeUnix", season.posterMtimeUnix)
     .put("overview", season.overview)
 
-fun imageUrl(session: Session, itemId: Long, version: Long, kind: String = "poster"): String = if (itemId > 0) "${session.server}/api/items/$itemId/image/$kind?v=$version" else ""
+// Artwork widths the server will generate (see internal/server/thumbs.go —
+// requests snap up to the nearest bucket). Source posters are routinely
+// 1000x1500 and backdrops 1920x1080, so asking for a scaled copy cuts a poster
+// wall from tens of megabytes to a few hundred kilobytes.
+const val ArtworkCard = 400
+const val ArtworkFull = 800
+
+fun imageUrl(session: Session, itemId: Long, version: Long, kind: String = "poster", width: Int = 0): String {
+    if (itemId <= 0) return ""
+    val sized = if (width > 0) "&w=$width" else ""
+    return "${session.server}/api/items/$itemId/image/$kind?v=$version$sized"
+}
 
 fun streamUrl(session: Session, itemId: Long): String = "${session.server}/api/items/$itemId/stream"
 

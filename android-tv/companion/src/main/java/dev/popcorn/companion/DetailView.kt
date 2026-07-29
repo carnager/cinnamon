@@ -228,7 +228,7 @@ private fun DetailAction(
 
 @Composable
 fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, streams: List<StreamInfo>, onBack: () -> Unit) {
-    val backdropUrl = if (item.backdropMtimeUnix > 0) imageUrl(session, item.id, item.backdropMtimeUnix, "backdrop") else ""
+    val backdropUrl = if (item.backdropMtimeUnix > 0) imageUrl(session, item.id, item.backdropMtimeUnix, "backdrop", ArtworkFull) else ""
     val genres = item.genres.split(Regex("[,;/]")).map { it.trim() }.filter { it.isNotBlank() }.take(3)
     Column {
         Box(Modifier.fillMaxWidth().height(330.dp)) {
@@ -250,7 +250,7 @@ fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, strea
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {
-                PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix), Modifier.width(104.dp))
+                PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard), Modifier.width(104.dp))
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(displayTitle(item), color = TextColor, fontSize = 25.sp, lineHeight = 29.sp, fontWeight = FontWeight.Black, letterSpacing = (-.35).sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
                     if (item.originalTitle.isNotBlank() && item.originalTitle != displayTitle(item)) {

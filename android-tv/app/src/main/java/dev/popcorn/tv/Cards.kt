@@ -558,9 +558,9 @@ fun EpisodeRow(session: Session?, item: PopItem, watched: Boolean = false, watch
         ) {
             if (session != null) {
                 val thumbUrl = if (item.backdropPath.isNotBlank()) {
-                    imageUrl(session, item.id, "backdrop", item.backdropMtimeUnix)
+                    imageUrl(session, item.id, "backdrop", item.backdropMtimeUnix, ArtworkCard)
                 } else if (item.posterPath.isNotBlank()) {
-                    imageUrl(session, item.id, "poster", item.posterMtimeUnix)
+                    imageUrl(session, item.id, "poster", item.posterMtimeUnix, ArtworkCard)
                 } else null
                 if (thumbUrl != null) {
                     SizedAsyncImage(model = thumbUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, widthPx = 260, heightPx = 150, authToken = session.token)

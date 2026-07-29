@@ -1061,7 +1061,7 @@ fun SeasonCard(
         onClick = onClick,
     ) {
         Box(Modifier.fillMaxSize().clip(RoundedCornerShape(6.dp)).background(Surface2), contentAlignment = Alignment.Center) {
-            val url = imageUrl(session, season.posterItemId, "season", season.posterMtimeUnix)
+            val url = imageUrl(session, season.posterItemId, "season", season.posterMtimeUnix, ArtworkCard)
             if (url.isNotBlank()) {
                 SizedAsyncImage(
                     model = url,
@@ -1228,9 +1228,9 @@ fun EpisodeStill(session: Session?, item: PopItem, modifier: Modifier) {
     Box(modifier.aspectRatio(16f / 9f).clip(RoundedCornerShape(6.dp)).background(Surface2), contentAlignment = Alignment.Center) {
         if (session != null) {
             val url = if (item.backdropPath.isNotBlank()) {
-                imageUrl(session, item.id, "backdrop", item.backdropMtimeUnix)
+                imageUrl(session, item.id, "backdrop", item.backdropMtimeUnix, ArtworkCard)
             } else if (item.posterPath.isNotBlank()) {
-                imageUrl(session, item.id, "poster", item.posterMtimeUnix)
+                imageUrl(session, item.id, "poster", item.posterMtimeUnix, ArtworkCard)
             } else {
                 ""
             }
@@ -1247,7 +1247,7 @@ fun EpisodeStill(session: Session?, item: PopItem, modifier: Modifier) {
 
 @Composable
 fun SeasonPoster(session: Session?, season: SeasonSummary, modifier: Modifier) {
-    val url = imageUrl(session, season.posterItemId, "season", season.posterMtimeUnix)
+    val url = imageUrl(session, season.posterItemId, "season", season.posterMtimeUnix, ArtworkCard)
     Box(modifier.aspectRatio(2f / 3f).clip(RoundedCornerShape(6.dp)).background(Surface2), contentAlignment = Alignment.Center) {
         if (url.isNotBlank()) {
             SizedAsyncImage(model = url, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, widthPx = 260, heightPx = 390, authToken = session?.token.orEmpty())

@@ -110,7 +110,7 @@ fun FocusButton(label: String, primary: Boolean, modifier: Modifier = Modifier, 
 
 @Composable
 fun Poster(session: Session?, itemId: Long, modifier: Modifier, version: Long = 0) {
-    val url = imageUrl(session, itemId, "poster", version)
+    val url = imageUrl(session, itemId, "poster", version, ArtworkCard)
     Box(modifier.aspectRatio(2f / 3f).clip(CardShape).background(Surface2), contentAlignment = Alignment.Center) {
         if (url.isNotBlank()) {
             SizedAsyncImage(model = url, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, widthPx = 260, heightPx = 390, authToken = session?.token.orEmpty())

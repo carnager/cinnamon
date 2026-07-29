@@ -232,7 +232,7 @@ private fun MobileHomeHero(
                     current.show?.let(onShow) ?: current.item?.let { if (it.kind == "episode") onEpisode(it) else onMovie(it) }
                 },
         ) {
-            AuthAsyncImage(session, imageUrl(session, current.backdropId, current.backdropVersion, "backdrop"), null, Modifier.fillMaxSize(), ContentScale.Crop)
+            AuthAsyncImage(session, imageUrl(session, current.backdropId, current.backdropVersion, "backdrop", ArtworkFull), null, Modifier.fillMaxSize(), ContentScale.Crop)
             Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Bg.copy(alpha = .96f), Bg.copy(alpha = .74f), Color.Transparent))))
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Bg.copy(alpha = .12f), Bg.copy(alpha = .72f)))))
             Column(Modifier.align(Alignment.BottomStart).fillMaxWidth(.78f).padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -585,7 +585,7 @@ fun SeasonList(
         items(seasons, key = { it.seasonNumber }) { season ->
             val seasonWatched = watchedSeasons.contains(season.seasonNumber)
             Row(Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Surface1).clickable { onSeason(season) }.padding(10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                PosterImage(session, imageUrl(session, season.posterItemId, season.posterMtimeUnix), Modifier.width(72.dp))
+                PosterImage(session, imageUrl(session, season.posterItemId, season.posterMtimeUnix, width = ArtworkCard), Modifier.width(72.dp))
                 Column(Modifier.weight(1f)) {
                     Text(season.title.ifBlank { "Season ${season.seasonNumber}" }, color = TextColor, fontWeight = FontWeight.Bold)
                     Text("${season.episodeCount} episodes", color = Muted, fontSize = 12.sp)
@@ -616,7 +616,7 @@ fun SeenToggle(watched: Boolean, onToggle: () -> Unit, modifier: Modifier = Modi
 // scrim, poster, title, run years, season/episode counts and genre chips.
 @Composable
 fun ShowHero(session: Session, show: ShowSummary, onBack: () -> Unit) {
-    val backdropUrl = if (show.backdropItemId > 0) imageUrl(session, show.backdropItemId, show.backdropMtimeUnix, "backdrop") else ""
+    val backdropUrl = if (show.backdropItemId > 0) imageUrl(session, show.backdropItemId, show.backdropMtimeUnix, "backdrop", ArtworkFull) else ""
     val genres = show.genres.split(Regex("[,;/]")).map { it.trim() }.filter { it.isNotBlank() }.take(3)
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Box(Modifier.fillMaxWidth().height(322.dp)) {
@@ -648,7 +648,7 @@ fun ShowHero(session: Session, show: ShowSummary, onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {
-                PosterImage(session, imageUrl(session, show.posterItemId, show.posterMtimeUnix), Modifier.width(104.dp), rating = show.rating)
+                PosterImage(session, imageUrl(session, show.posterItemId, show.posterMtimeUnix, width = ArtworkCard), Modifier.width(104.dp), rating = show.rating)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(show.title, color = TextColor, fontSize = 25.sp, lineHeight = 29.sp, fontWeight = FontWeight.Black, letterSpacing = (-.35).sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
                     val meta = listOfNotNull(
@@ -729,7 +729,7 @@ fun EpisodeThumb(session: Session, episode: PopItem, watched: Boolean, watchlist
             .background(Surface2),
         contentAlignment = Alignment.BottomStart,
     ) {
-        val thumbUrl = if (episode.backdropMtimeUnix > 0) imageUrl(session, episode.id, episode.backdropMtimeUnix, "backdrop") else ""
+        val thumbUrl = if (episode.backdropMtimeUnix > 0) imageUrl(session, episode.id, episode.backdropMtimeUnix, "backdrop", ArtworkCard) else ""
         if (thumbUrl.isNotBlank()) {
             AuthAsyncImage(session, thumbUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         }
@@ -1152,7 +1152,7 @@ fun ShowShelf(title: String, subtitle: String = "", session: Session, shows: Lis
 @Composable
 fun MovieCard(session: Session, item: PopItem, modifier: Modifier = Modifier, watched: Boolean = false, watchlisted: Boolean = false, onClick: () -> Unit) {
     Column(modifier.clickable(onClick = onClick)) {
-        PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix), Modifier.fillMaxWidth(), watched = watched, watchlisted = watchlisted, rating = item.rating)
+        PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard), Modifier.fillMaxWidth(), watched = watched, watchlisted = watchlisted, rating = item.rating)
         Spacer(Modifier.height(7.dp))
         Text(item.title, color = TextColor, fontSize = 13.sp, lineHeight = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(listOf(item.year.takeIf { it > 0 }?.toString(), fmtDuration(item.durationMs)).filterNotNull().joinToString(" \u00b7 "), color = Muted, fontSize = 11.sp, maxLines = 1)
@@ -1163,7 +1163,7 @@ fun MovieCard(session: Session, item: PopItem, modifier: Modifier = Modifier, wa
 @Composable
 fun ShowCard(session: Session, show: ShowSummary, modifier: Modifier = Modifier, watched: Boolean = false, watchlisted: Boolean = false, onClick: () -> Unit) {
     Column(modifier.clickable(onClick = onClick)) {
-        PosterImage(session, imageUrl(session, show.posterItemId, show.posterMtimeUnix), Modifier.fillMaxWidth(), watched = watched, watchlisted = watchlisted, rating = show.rating)
+        PosterImage(session, imageUrl(session, show.posterItemId, show.posterMtimeUnix, width = ArtworkCard), Modifier.fillMaxWidth(), watched = watched, watchlisted = watchlisted, rating = show.rating)
         Spacer(Modifier.height(7.dp))
         Text(show.title, color = TextColor, fontSize = 13.sp, lineHeight = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(
@@ -1346,7 +1346,7 @@ private fun ShelfHeading(title: String, subtitle: String) {
 fun ContinueCard(session: Session, item: PopItem, progress: Float, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val isEpisode = item.kind == "episode"
     Column(modifier.clickable(onClick = onClick)) {
-        PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix), Modifier.fillMaxWidth(), progress = progress)
+        PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard), Modifier.fillMaxWidth(), progress = progress)
         Spacer(Modifier.height(6.dp))
         Text(
             if (isEpisode) item.showTitle.ifBlank { item.title } else item.title,

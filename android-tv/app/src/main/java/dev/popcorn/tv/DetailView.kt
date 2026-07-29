@@ -405,7 +405,7 @@ private fun DetailHeroContent(
         if (detailItem.posterPath.isNotBlank() && session != null) {
             Column(Modifier.width(134.dp)) {
                 SizedAsyncImage(
-                    model = imageUrl(session, detailItem.id, "poster", detailItem.posterMtimeUnix),
+                    model = imageUrl(session, detailItem.id, "poster", detailItem.posterMtimeUnix, ArtworkCard),
                     contentDescription = null,
                     modifier = Modifier
                         .fillMaxWidth()

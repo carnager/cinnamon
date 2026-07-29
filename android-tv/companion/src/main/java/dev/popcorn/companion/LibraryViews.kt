@@ -92,6 +92,12 @@ import coil.request.ImageRequest
 import kotlinx.coroutines.delay
 import kotlin.math.abs
 
+// Minimum poster column width, shared by every poster grid so they all break
+// to the same number of columns. Deliberately under 120dp: at 120 a typical
+// 411dp-wide phone fits three columns without the alphabet gutter but only two
+// with it, so reserving the rail cost a column.
+val PosterColumnWidth = 110.dp
+
 @Composable
 fun BottomNavigation(page: Page, onHome: () -> Unit, onMovies: () -> Unit, onShows: () -> Unit, onSearch: () -> Unit) {
     val colors = NavigationBarItemDefaults.colors(
@@ -227,7 +233,7 @@ private fun MobileHomeHero(
     val pick = picks[index.coerceIn(0, picks.lastIndex)]
     Crossfade(targetState = pick, animationSpec = tween(650), label = "homeHero") { current ->
         Box(
-            Modifier.padding(horizontal = 12.dp).fillMaxWidth().height(278.dp).clip(RoundedCornerShape(12.dp)).background(Surface2)
+            Modifier.padding(horizontal = 12.dp).fillMaxWidth().height(320.dp).clip(RoundedCornerShape(12.dp)).background(Surface2)
                 .clickable {
                     current.show?.let(onShow) ?: current.item?.let { if (it.kind == "episode") onEpisode(it) else onMovie(it) }
                 },
@@ -236,14 +242,14 @@ private fun MobileHomeHero(
             Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Bg.copy(alpha = .96f), Bg.copy(alpha = .74f), Color.Transparent))))
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Bg.copy(alpha = .12f), Bg.copy(alpha = .72f)))))
             Column(Modifier.align(Alignment.BottomStart).fillMaxWidth(.78f).padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Text(current.kick, color = Teal, fontSize = 10.sp, fontWeight = FontWeight.Black, modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Teal.copy(alpha = .10f)).border(1.dp, Teal.copy(alpha = .34f), RoundedCornerShape(4.dp)).padding(horizontal = 7.dp, vertical = 3.dp))
-                Text(current.title, color = TextColor, fontSize = 27.sp, lineHeight = 30.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(current.kick, color = Teal, fontSize = 12.sp, fontWeight = FontWeight.Black, modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Teal.copy(alpha = .10f)).border(1.dp, Teal.copy(alpha = .34f), RoundedCornerShape(4.dp)).padding(horizontal = 7.dp, vertical = 3.dp))
+                Text(current.title, color = TextColor, fontSize = 30.sp, lineHeight = 34.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (current.rating > 0) Text("★ %.1f".format(current.rating), color = Gold, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    if (current.meta.isNotBlank()) Text(current.meta, color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (current.rating > 0) Text("★ %.1f".format(current.rating), color = Gold, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    if (current.meta.isNotBlank()) Text(current.meta, color = Muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                if (current.overview.isNotBlank()) Text(current.overview, color = TextColor.copy(alpha = .78f), fontSize = 12.sp, lineHeight = 16.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                Text("More info  ›", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.clip(RoundedCornerShape(7.dp)).background(Accent).padding(horizontal = 13.dp, vertical = 8.dp))
+                if (current.overview.isNotBlank()) Text(current.overview, color = TextColor.copy(alpha = .78f), fontSize = 14.sp, lineHeight = 19.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Text("More info  ›", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.clip(RoundedCornerShape(7.dp)).background(Accent).padding(horizontal = 13.dp, vertical = 8.dp))
             }
             Row(Modifier.align(Alignment.BottomEnd).padding(14.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 picks.take(6).forEachIndexed { dot, _ -> Box(Modifier.size(if (dot == index) 7.dp else 5.dp).clip(CircleShape).background(if (dot == index) Accent else Color.White.copy(alpha = .55f))) }
@@ -298,16 +304,16 @@ fun MediaGrid(
         LibraryFilterBar(genres, decades, filters, onFilters)
         Box(Modifier.fillMaxSize()) {
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(120.dp),
+                columns = GridCells.Adaptive(PosterColumnWidth),
                 state = gridState,
-                contentPadding = PaddingValues(start = 0.dp, end = if (alphabet.isEmpty()) 0.dp else 32.dp, top = 8.dp, bottom = 18.dp),
+                contentPadding = PaddingValues(start = 0.dp, end = if (filters.reservesAlphabetRail()) 32.dp else 0.dp, top = 8.dp, bottom = 18.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 items(items, key = { it.id }) { item -> MovieCard(session, item, watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), onClick = { onOpen(item) }) }
                 if (loadingMore) item(span = { GridItemSpan(maxLineSpan) }) { LoadingMoreRow() }
             }
-            if (filters.sort.isBlank() && alphabet.isNotEmpty()) {
+            if (filters.reservesAlphabetRail() && alphabet.isNotEmpty()) {
                 AlphabetRail(
                     alphabet = alphabet,
                     currentLetter = visibleLetter,
@@ -366,16 +372,16 @@ fun ShowGrid(
         LibraryFilterBar(genres, decades, filters, onFilters)
         Box(Modifier.fillMaxSize()) {
             LazyVerticalGrid(
-                columns = GridCells.Adaptive(120.dp),
+                columns = GridCells.Adaptive(PosterColumnWidth),
                 state = gridState,
-                contentPadding = PaddingValues(start = 0.dp, end = if (alphabet.isEmpty()) 0.dp else 32.dp, top = 8.dp, bottom = 18.dp),
+                contentPadding = PaddingValues(start = 0.dp, end = if (filters.reservesAlphabetRail()) 32.dp else 0.dp, top = 8.dp, bottom = 18.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 items(shows, key = { it.libraryId + it.title }) { show -> ShowCard(session, show, watched = completedShows.contains(showMarkerKey(show)), watchlisted = watchlistShows.contains(showMarkerKey(show)), onClick = { onShow(show) }) }
                 if (loadingMore) item(span = { GridItemSpan(maxLineSpan) }) { LoadingMoreRow() }
             }
-            if (filters.sort.isBlank() && alphabet.isNotEmpty()) {
+            if (filters.reservesAlphabetRail() && alphabet.isNotEmpty()) {
                 AlphabetRail(
                     alphabet = alphabet,
                     currentLetter = visibleLetter,
@@ -869,7 +875,7 @@ fun SearchPage(
             else -> {
                 Text("${results.size} results", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(vertical = 6.dp))
                 LazyVerticalGrid(
-                    columns = GridCells.Adaptive(120.dp),
+                    columns = GridCells.Adaptive(PosterColumnWidth),
                     contentPadding = PaddingValues(bottom = 24.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -1122,11 +1128,11 @@ fun MovieShelf(title: String, subtitle: String = "", session: Session, items: Li
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         ShelfHeading(title, subtitle)
         if (items.isEmpty()) {
-            Text("Nothing here yet", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 12.dp))
+            Text("Nothing here yet", color = Muted, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp))
         } else {
             LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(items, key = { it.id }) { item ->
-                    MovieCard(session, item, Modifier.width(132.dp), watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), onClick = { onClick(item) })
+                    MovieCard(session, item, Modifier.width(150.dp), watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), onClick = { onClick(item) })
                 }
             }
         }
@@ -1138,11 +1144,11 @@ fun ShowShelf(title: String, subtitle: String = "", session: Session, shows: Lis
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         ShelfHeading(title, subtitle)
         if (shows.isEmpty()) {
-            Text("Nothing here yet", color = Muted, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 12.dp))
+            Text("Nothing here yet", color = Muted, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 12.dp))
         } else {
             LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(shows, key = { it.libraryId + it.title }) { show ->
-                    ShowCard(session, show, Modifier.width(132.dp), watched = completedShows.contains(showMarkerKey(show)), watchlisted = watchlistShows.contains(showMarkerKey(show)), onClick = { onClick(show) })
+                    ShowCard(session, show, Modifier.width(150.dp), watched = completedShows.contains(showMarkerKey(show)), watchlisted = watchlistShows.contains(showMarkerKey(show)), onClick = { onClick(show) })
                 }
             }
         }
@@ -1154,9 +1160,9 @@ fun MovieCard(session: Session, item: PopItem, modifier: Modifier = Modifier, wa
     Column(modifier.clickable(onClick = onClick)) {
         PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard), Modifier.fillMaxWidth(), watched = watched, watchlisted = watchlisted, rating = item.rating)
         Spacer(Modifier.height(7.dp))
-        Text(item.title, color = TextColor, fontSize = 13.sp, lineHeight = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(listOf(item.year.takeIf { it > 0 }?.toString(), fmtDuration(item.durationMs)).filterNotNull().joinToString(" \u00b7 "), color = Muted, fontSize = 11.sp, maxLines = 1)
-        firstGenre(item.genres)?.let { Text(it, color = Teal.copy(alpha = .86f), fontSize = 9.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        Text(item.title, color = TextColor, fontSize = 15.sp, lineHeight = 19.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(listOf(item.year.takeIf { it > 0 }?.toString(), fmtDuration(item.durationMs)).filterNotNull().joinToString(" \u00b7 "), color = Muted, fontSize = 13.sp, maxLines = 1)
+        firstGenre(item.genres)?.let { Text(it, color = Teal.copy(alpha = .86f), fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) }
     }
 }
 
@@ -1165,12 +1171,12 @@ fun ShowCard(session: Session, show: ShowSummary, modifier: Modifier = Modifier,
     Column(modifier.clickable(onClick = onClick)) {
         PosterImage(session, imageUrl(session, show.posterItemId, show.posterMtimeUnix, width = ArtworkCard), Modifier.fillMaxWidth(), watched = watched, watchlisted = watchlisted, rating = show.rating)
         Spacer(Modifier.height(7.dp))
-        Text(show.title, color = TextColor, fontSize = 13.sp, lineHeight = 17.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(show.title, color = TextColor, fontSize = 15.sp, lineHeight = 19.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(
             listOfNotNull(show.yearsLabel().takeIf { it.isNotBlank() }, "${show.seasonCount} seasons").joinToString(" · "),
-            color = Muted, fontSize = 11.sp, maxLines = 1,
+            color = Muted, fontSize = 13.sp, maxLines = 1,
         )
-        firstGenre(show.genres)?.let { Text(it, color = Teal.copy(alpha = .86f), fontSize = 9.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        firstGenre(show.genres)?.let { Text(it, color = Teal.copy(alpha = .86f), fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) }
     }
 }
 
@@ -1328,7 +1334,7 @@ fun ContinueShelf(title: String, subtitle: String = "", session: Session, items:
         ShelfHeading(title, subtitle)
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             items(items, key = { it.id }) { item ->
-                ContinueCard(session, item, resume[item.id] ?: 0f, Modifier.width(128.dp)) { onClick(item) }
+                ContinueCard(session, item, resume[item.id] ?: 0f, Modifier.width(150.dp)) { onClick(item) }
             }
         }
     }
@@ -1337,8 +1343,8 @@ fun ContinueShelf(title: String, subtitle: String = "", session: Session, items:
 @Composable
 private fun ShelfHeading(title: String, subtitle: String) {
     Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
-        Text(title, color = TextColor, fontSize = 18.sp, fontWeight = FontWeight.Bold, letterSpacing = (-.2).sp)
-        if (subtitle.isNotBlank()) Text(subtitle, color = Muted, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        Text(title, color = TextColor, fontSize = 21.sp, fontWeight = FontWeight.Bold, letterSpacing = (-.2).sp)
+        if (subtitle.isNotBlank()) Text(subtitle, color = Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -1350,12 +1356,12 @@ fun ContinueCard(session: Session, item: PopItem, progress: Float, modifier: Mod
         Spacer(Modifier.height(6.dp))
         Text(
             if (isEpisode) item.showTitle.ifBlank { item.title } else item.title,
-            color = TextColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            color = TextColor, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis,
         )
         Text(
             if (isEpisode) "S%02dE%02d".format(item.seasonNumber, item.episodeNumber)
             else listOf(item.year.takeIf { it > 0 }?.toString(), fmtDuration(item.durationMs)).filterNotNull().joinToString(" · "),
-            color = Muted, fontSize = 11.sp, maxLines = 1,
+            color = Muted, fontSize = 13.sp, maxLines = 1,
         )
     }
 }

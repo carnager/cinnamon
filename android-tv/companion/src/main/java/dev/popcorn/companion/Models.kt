@@ -152,6 +152,15 @@ data class LibraryFilters(
     val decades: String = "",
 )
 
+// Whether a library view should reserve the gutter for the alphabet rail.
+// This has to be answerable before the alphabet itself arrives: deciding from
+// the loaded list instead re-flows the grid mid-load (three columns across,
+// then two) as the widened padding squeezes out an adaptive column. The
+// condition mirrors the one MainActivity uses to decide whether to request an
+// alphabet at all, so it is known from the first frame.
+fun LibraryFilters.reservesAlphabetRail(): Boolean =
+    sort.isBlank() && seenStatus.isBlank() && minRating <= 0
+
 data class AlphabetEntry(
     val letter: String,
     val offset: Int,

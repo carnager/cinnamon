@@ -229,11 +229,16 @@ data class StreamInfo(
     val default: Boolean,
     val forced: Boolean,
 ) {
+    // Track titles usually already name the language ("German", "Deutsch
+    // 5.1"), so a naive title + language + codec join reads "German · GER ·
+    // eac3". Drop any part the earlier ones already say.
     fun label(): String {
         val parts = mutableListOf<String>()
-        if (title.isNotBlank()) parts.add(title)
-        if (language.isNotBlank()) parts.add(language.uppercase())
-        if (codec.isNotBlank()) parts.add(codec)
+        if (title.isNotBlank()) parts.add(title.trim())
+        val lang = language.trim()
+        if (lang.isNotBlank() && parts.none { it.contains(lang, ignoreCase = true) }) parts.add(lang.uppercase())
+        val audioCodec = codec.trim()
+        if (audioCodec.isNotBlank() && parts.none { it.contains(audioCodec, ignoreCase = true) }) parts.add(audioCodec.uppercase())
         if (forced) parts.add("forced")
         return parts.joinToString(" · ").ifBlank { "Track $index" }
     }

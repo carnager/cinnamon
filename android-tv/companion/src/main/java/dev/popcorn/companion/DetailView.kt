@@ -285,22 +285,26 @@ fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, strea
             // The image fades in from the left, so the cover sits on settled
             // background rather than on competing artwork and the backdrop
             // reads from the right where nothing overlaps it.
-            Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Bg.copy(alpha = .93f), .42f to Bg.copy(alpha = .5f), .78f to Color.Transparent)))
+            Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Bg, .30f to Bg.copy(alpha = .82f), .62f to Bg.copy(alpha = .34f), .88f to Color.Transparent)))
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Black.copy(alpha = .06f), .5f to Bg.copy(alpha = .38f), .82f to Bg.copy(alpha = .9f), 1f to Bg)))
+            // The hero is 9/16 of the screen width and a 2:3 cover is 1.5x its
+            // own width tall, so the cover's height eats the hero fast: past
+            // ~110dp on a 400dp-wide phone its top reaches the back button.
             PosterImage(
                 session,
                 imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard),
-                Modifier.align(Alignment.BottomStart).padding(start = 16.dp, bottom = 8.dp).width(118.dp),
+                Modifier.align(Alignment.BottomStart).padding(start = 16.dp, bottom = 6.dp).width(110.dp),
                 progress = resumeProgress,
             )
-            // Drawn last so it always stays on top of the cover and tappable:
-            // on a narrow phone the taller poster reaches up behind it.
+            // Smaller and tighter into the corner to buy the cover room, and
+            // drawn last so it stays on top and tappable if a narrow screen
+            // still brings the two together.
             Box(
-                Modifier.align(Alignment.TopStart).padding(12.dp).size(42.dp).clip(CircleShape).background(Color.Black.copy(alpha = .58f))
+                Modifier.align(Alignment.TopStart).padding(10.dp).size(38.dp).clip(CircleShape).background(Color.Black.copy(alpha = .58f))
                     .border(1.dp, Color.White.copy(alpha = .13f), CircleShape).clickable(onClick = onBack),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White, modifier = Modifier.size(21.dp))
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White, modifier = Modifier.size(20.dp))
             }
         }
         Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -360,11 +364,18 @@ private fun detailMetadata(item: PopItem): String {
 }
 
 private fun techChips(item: PopItem, streams: List<StreamInfo>): List<String> = buildList {
+    // Width, not height: a 2.39:1 scope encode is ~1248x520, and keying off
+    // height labelled that "520p" when it is 720p-class content. Height is
+    // only the fallback for items scanned before width was recorded.
     when {
+        item.width >= 3600 -> add("4K")
+        item.width >= 1800 -> add("1080p")
+        item.width >= 1200 -> add("720p")
+        item.width > 0 -> add("SD")
         item.height >= 2000 -> add("4K")
         item.height >= 1000 -> add("1080p")
         item.height >= 700 -> add("720p")
-        item.height > 0 -> add("${item.height}p")
+        item.height > 0 -> add("SD")
     }
     (item.videoCodec.ifBlank { streams.firstOrNull { it.type == "video" }?.codec.orEmpty() }).takeIf { it.isNotBlank() }?.let { add(it.uppercase(Locale.US)) }
     (item.audioCodec.ifBlank { streams.firstOrNull { it.type == "audio" }?.codec.orEmpty() }).takeIf { it.isNotBlank() }?.let { add(it.uppercase(Locale.US)) }

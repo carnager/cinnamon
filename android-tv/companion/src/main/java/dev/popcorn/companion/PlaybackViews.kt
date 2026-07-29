@@ -605,21 +605,47 @@ fun BandwidthDialog(selectedBandwidth: Int?, onDismiss: () -> Unit, onBandwidth:
     }
 }
 
+// A bottom sheet rather than a dialog or an anchored dropdown: every other
+// picker in the app (bandwidth, playback target, user menu) is a sheet, and
+// real track labels like "German 5.1 DTS-HD MA" clip badly in a dropdown
+// anchored under a full-width button.
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TrackDialog(title: String, tracks: List<StreamInfo>, selected: Int?, emptyLabel: String, onDismiss: () -> Unit, onSelect: (Int?) -> Unit) {
-    AlertDialog(
+    ModalBottomSheet(
         onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                TrackChoice(emptyLabel, selected == null) { onSelect(null) }
-                tracks.forEach { track ->
-                    TrackChoice(track.label(), selected == track.index) { onSelect(track.index) }
-                }
-            }
+        containerColor = Bg,
+        contentColor = TextColor,
+        tonalElevation = 0.dp,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        dragHandle = {
+            Box(Modifier.padding(top = 11.dp, bottom = 5.dp).size(width = 38.dp, height = 4.dp).clip(RoundedCornerShape(99.dp)).background(Line))
         },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-    )
+    ) {
+        Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(title.uppercase(java.util.Locale.US), color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.3.sp)
+            Spacer(Modifier.height(8.dp))
+            TrackChoice(emptyLabel, selected == null) { onSelect(null) }
+            tracks.forEach { track ->
+                TrackChoice(track.label(), selected == track.index) { onSelect(track.index) }
+            }
+        }
+    }
+}
+
+// Compact summary of a selected track, for the chips under the Play button.
+@Composable
+fun TrackChip(icon: ImageVector, label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Row(
+        modifier.clip(RoundedCornerShape(7.dp)).background(Surface1).border(1.dp, Line, RoundedCornerShape(7.dp))
+            .clickable(onClick = onClick).padding(horizontal = 10.dp, vertical = 9.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = Muted, modifier = Modifier.size(16.dp))
+        Text(label, color = TextColor, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = Muted, modifier = Modifier.size(15.dp))
+    }
 }
 
 @Composable

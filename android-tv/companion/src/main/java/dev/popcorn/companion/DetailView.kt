@@ -29,15 +29,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -97,6 +97,8 @@ fun DetailPage(
     var userRating by remember(item.id) { mutableStateOf(0) }
     var ratingOpen by remember(item.id) { mutableStateOf(false) }
     var targetOpen by remember(item.id) { mutableStateOf(false) }
+    var audioOpen by remember(item.id) { mutableStateOf(false) }
+    var subtitleOpen by remember(item.id) { mutableStateOf(false) }
     val ratingScope = rememberCoroutineScope()
     val audioTracks = streams.filter { it.type == "audio" }
     val subtitleTracks = streams.filter { it.type == "subtitle" }
@@ -127,11 +129,11 @@ fun DetailPage(
         }
     }
 
-    LazyColumn(contentPadding = PaddingValues(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    LazyColumn(contentPadding = PaddingValues(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
         item { DetailHero(session, detailItem, ratings, streams, resumeFraction(resumeMs, progress?.durationMs ?: 0), onBack) }
         if (error.isNotBlank()) item { Text(error, color = ErrorRed, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
         item {
-            Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = { start(resumeMs) },
@@ -153,42 +155,59 @@ fun DetailPage(
                         }
                     }
                 }
-                // Says where playback lands and, when resuming, from when —
-                // and doubles as the way to change destination, so Play itself
-                // no longer has to interrupt with a picker every time.
+                // Says where playback lands, from when, and when it will finish
+                // — the remaining time, so resuming reports the truth. Also the
+                // way to change destination, so Play itself no longer has to
+                // interrupt with a picker every time.
+                val remainingMs = (detailItem.durationMs - resumeMs).coerceAtLeast(0)
                 Text(
                     buildString {
                         append("Plays on ")
                         append(targetLabel)
                         if (resumeMs > 0) append(" · from ${formatTime(resumeMs)}")
+                        fmtEndsAround(remainingMs).takeIf { it.isNotBlank() }?.let { append(" · ${it.replaceFirstChar { c -> c.lowercase() }}") }
                         append("  ·  Change")
                     },
                     color = Muted,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.clickable { targetOpen = true },
                 )
-            }
-        }
-        item {
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                DetailAction(
-                    label = "Trailer",
-                    icon = Icons.Filled.PlayCircleOutline,
-                    modifier = Modifier.weight(1f),
-                    onClick = {
-                        val query = Uri.encode(listOf(displayTitle(detailItem), detailItem.year.takeIf { it > 0 }?.toString(), "trailer").filterNotNull().joinToString(" "))
-                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=$query"))) }
-                    },
-                )
-                DetailAction("Seen", Icons.Filled.CheckCircle, Modifier.weight(1f), watched, Accent) { onSetWatched(!watched) }
-                DetailAction("Watchlist", Icons.Filled.Bookmark, Modifier.weight(1f), watchlisted, Teal) { onSetWatchlisted(!watchlisted) }
-                DetailAction(if (userRating > 0) "$userRating/10" else "Rate", Icons.Filled.Star, Modifier.weight(1f), userRating > 0, Gold) { ratingOpen = !ratingOpen }
+                // Track choices belong with Play, not below the overview: they
+                // are decisions made in the same breath as starting playback.
+                if (audioTracks.isNotEmpty() || subtitleTracks.isNotEmpty()) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TrackChip(
+                            icon = Icons.Default.MusicNote,
+                            label = audioTracks.firstOrNull { it.index == selectedAudio }?.label() ?: "Default audio",
+                            modifier = Modifier.weight(1f),
+                        ) { audioOpen = true }
+                        TrackChip(
+                            icon = Icons.Default.Subtitles,
+                            label = subtitleTracks.firstOrNull { it.index == selectedSubtitle }?.label() ?: "Subtitles off",
+                            modifier = Modifier.weight(1f),
+                        ) { subtitleOpen = true }
+                    }
+                }
+                Spacer(Modifier.height(2.dp))
+                // Secondary to Play: no borders unless active, so the primary
+                // action keeps the visual weight it deserves.
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DetailAction("Seen", Icons.Filled.CheckCircle, Modifier.weight(1f), watched, Accent) { onSetWatched(!watched) }
+                    DetailAction("Watchlist", Icons.Filled.Bookmark, Modifier.weight(1f), watchlisted, Teal) { onSetWatchlisted(!watchlisted) }
+                    DetailAction(if (userRating > 0) "$userRating/10" else "Rate", Icons.Filled.Star, Modifier.weight(1f), userRating > 0, Gold) { ratingOpen = !ratingOpen }
+                    DetailAction(
+                        label = "Trailer",
+                        icon = Icons.Filled.PlayCircleOutline,
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            val query = Uri.encode(listOf(displayTitle(detailItem), detailItem.year.takeIf { it > 0 }?.toString(), "trailer").filterNotNull().joinToString(" "))
+                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=$query"))) }
+                        },
+                    )
+                }
             }
         }
         if (ratingOpen) {
@@ -197,11 +216,10 @@ fun DetailPage(
                     Text(if (userRating > 0) "Your rating · $userRating/10" else "Rate this", color = Gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         for (star in 1..10) {
-                            Text(
-                                "★",
-                                color = if (star <= userRating) Gold else Muted.copy(alpha = .38f),
-                                fontSize = 23.sp,
-                                modifier = Modifier.clickable {
+                            // The glyph is 23sp but the target is 40dp: picking
+                            // 7 versus 8 was otherwise a guess.
+                            Box(
+                                Modifier.size(40.dp).clip(RoundedCornerShape(6.dp)).clickable {
                                     val value = if (star == userRating) 0 else star
                                     ratingScope.launch {
                                         runCatching {
@@ -210,25 +228,30 @@ fun DetailPage(
                                             .onFailure { error = it.message ?: "Failed to save rating" }
                                     }
                                 },
-                            )
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text("★", color = if (star <= userRating) Gold else Muted.copy(alpha = .38f), fontSize = 23.sp)
+                            }
                         }
                     }
                 }
             }
         }
         if (detailItem.overview.isNotBlank() || detailFacts(detailItem).isNotEmpty()) item { DetailOverview(detailItem) }
-        item {
-            Column(
-                Modifier.padding(horizontal = 16.dp).fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Surface1)
-                    .border(1.dp, Line, RoundedCornerShape(8.dp)).padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                TrackSection("Audio", audioTracks, selectedAudio, "Default") { selectedAudio = it }
-                TrackSection("Subtitles", subtitleTracks, selectedSubtitle, "Off") { selectedSubtitle = it }
-            }
-        }
         if (detailItem.actors.isNotEmpty()) item { CastStrip(session, detailItem.actors, onActor) }
         if (similar.isNotEmpty()) item { SimilarRow(session, similar, onOpenSimilar) }
+    }
+    if (audioOpen) {
+        TrackDialog("Audio", audioTracks, selectedAudio, "Default", { audioOpen = false }) {
+            selectedAudio = it
+            audioOpen = false
+        }
+    }
+    if (subtitleOpen) {
+        TrackDialog("Subtitles", subtitleTracks, selectedSubtitle, "Off", { subtitleOpen = false }) {
+            selectedSubtitle = it
+            subtitleOpen = false
+        }
     }
     if (targetOpen) {
         // Picking a destination now only sets it — playback starts from the
@@ -260,14 +283,17 @@ private fun DetailAction(
     activeColor: Color = Accent,
     onClick: () -> Unit,
 ) {
-    val tint = if (active) activeColor else TextColor.copy(alpha = .82f)
+    val tint = if (active) activeColor else Muted
+    // Borderless unless active. These sit under the primary Play button, and
+    // four equally-bordered boxes outweighed it.
     Column(
-        modifier.clip(RoundedCornerShape(8.dp)).border(1.dp, if (active) activeColor.copy(alpha = .65f) else Line, RoundedCornerShape(8.dp))
-            .background(if (active) activeColor.copy(alpha = .10f) else Color.Transparent).clickable(onClick = onClick).padding(vertical = 9.dp),
+        modifier.clip(RoundedCornerShape(8.dp))
+            .background(if (active) activeColor.copy(alpha = .10f) else Color.Transparent)
+            .clickable(onClick = onClick).padding(vertical = 7.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(23.dp))
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(22.dp))
         Text(label, color = tint, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
@@ -277,7 +303,11 @@ fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, strea
     val backdropUrl = if (item.backdropMtimeUnix > 0) imageUrl(session, item.id, item.backdropMtimeUnix, "backdrop", ArtworkFull) else ""
     val genres = item.genres.split(Regex("[,;/]")).map { it.trim() }.filter { it.isNotBlank() }.take(3)
     Column {
-        Box(Modifier.fillMaxWidth().height(330.dp)) {
+        // The backdrop keeps its native 16:9 rather than being cropped to a
+        // fixed height, and carries the title alone — the poster that used to
+        // sit here showed the same artwork the user just tapped to arrive, and
+        // cost the title a third of the width.
+        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
             if (backdropUrl.isNotBlank()) {
                 AuthAsyncImage(session, backdropUrl, null, Modifier.fillMaxSize(), ContentScale.Crop)
             } else {
@@ -291,28 +321,26 @@ fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, strea
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White, modifier = Modifier.size(21.dp))
             }
-            Row(
-                Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard), Modifier.width(104.dp), progress = resumeProgress)
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                    Text(displayTitle(item), color = TextColor, fontSize = 25.sp, lineHeight = 29.sp, fontWeight = FontWeight.Black, letterSpacing = (-.35).sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                    if (item.originalTitle.isNotBlank() && item.originalTitle != displayTitle(item)) {
-                        Text(item.originalTitle, color = Muted, fontSize = 13.sp, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    val meta = detailMetadata(item)
-                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                        if (item.officialRating.isNotBlank()) ContentRatingChip(item.officialRating)
-                    }
+            // How far in you are, full width along the bottom edge — legible in
+            // a way a 4dp sliver on a small poster never was.
+            if (resumeProgress > 0.001f) {
+                Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Line)) {
+                    Box(Modifier.fillMaxWidth(resumeProgress).height(3.dp).background(Accent))
                 }
             }
         }
-        Column(Modifier.padding(horizontal = 16.dp).padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        Column(Modifier.padding(horizontal = 16.dp).padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            Text(displayTitle(item), color = TextColor, fontSize = 30.sp, lineHeight = 34.sp, fontWeight = FontWeight.Black, letterSpacing = (-.4).sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+            if (item.originalTitle.isNotBlank() && item.originalTitle != displayTitle(item)) {
+                Text(item.originalTitle, color = Muted, fontSize = 13.sp, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            val meta = detailMetadata(item)
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                if (item.officialRating.isNotBlank()) ContentRatingChip(item.officialRating)
+            }
             if (genres.isNotEmpty()) {
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     genres.forEach { DetailChip(it.uppercase(Locale.US), Color.Transparent, Teal.copy(alpha = .86f)) }
                 }
             }
@@ -346,10 +374,10 @@ private fun detailMetadata(item: PopItem): String {
         if (item.showTitle.isNotBlank()) parts.add(item.showTitle)
         if (item.seasonNumber > 0 || item.episodeNumber > 0) parts.add("S%02dE%02d".format(item.seasonNumber, item.episodeNumber))
     } else if (item.year > 0) parts.add(item.year.toString())
-    if (item.durationMs > 0) {
-        parts.add(fmtDuration(item.durationMs))
-        parts.add(fmtEndsAround(item.durationMs))
-    }
+    // Runtime only. "Ends around …" belongs next to Play, where it can account
+    // for the resume position and is read at the moment it is true — here it
+    // was computed from the full runtime and went stale as the page sat open.
+    if (item.durationMs > 0) parts.add(fmtDuration(item.durationMs))
     return parts.joinToString(" · ")
 }
 
@@ -507,27 +535,6 @@ private fun SourceRatingBadge(label: String, value: String) {
     ) {
         Text(label, color = Teal, fontWeight = FontWeight.Black, fontSize = 11.sp)
         Text(value, color = TextColor, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-    }
-}
-
-@Composable
-fun TrackSection(title: String, tracks: List<StreamInfo>, selected: Int?, emptyLabel: String, onSelect: (Int?) -> Unit) {
-    var expanded by remember(title, tracks, selected) { mutableStateOf(false) }
-    val selectedLabel = tracks.firstOrNull { it.index == selected }?.label() ?: emptyLabel
-    Column(verticalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
-        Text(title, color = Muted, fontWeight = FontWeight.Black, fontSize = 12.sp)
-        Box(Modifier.fillMaxWidth()) {
-            OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(6.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)) {
-                Text(selectedLabel, color = TextColor, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("▾", color = Muted, fontSize = 14.sp)
-            }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.background(Surface2)) {
-                DropdownMenuItem(text = { Text(emptyLabel, color = TextColor, fontWeight = if (selected == null) FontWeight.Bold else FontWeight.Normal) }, onClick = { onSelect(null); expanded = false })
-                tracks.forEach { track ->
-                    DropdownMenuItem(text = { Text(track.label(), color = TextColor, fontWeight = if (selected == track.index) FontWeight.Bold else FontWeight.Normal) }, onClick = { onSelect(track.index); expanded = false })
-                }
-            }
-        }
     }
 }
 

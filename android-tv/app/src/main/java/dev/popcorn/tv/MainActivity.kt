@@ -373,7 +373,17 @@ fun PopcornApp() {
                                 lastDetail = Screen.Detail(item, null, fromHome = true)
                                 val audio = command.payload.optIntOrNull("audioIndex")
                                 val subtitle = command.payload.optIntOrNull("subtitleIndex")
-                                screen = Screen.Player(item, audio, subtitle, 0L, token = command.id)
+                                // Honour an explicit position from the remote so
+                                // "Start over" really starts over. Without one
+                                // (older companion builds), resume like every
+                                // other play path here does — casting used to
+                                // restart a half-watched item from zero.
+                                val start = command.payload.optLongOrNull("positionMs")
+                                    ?: runCatching { Api(activeSession).progress(itemId) }.getOrNull()
+                                        ?.takeIf { progressResumable(it.positionMs, it.durationMs) }
+                                        ?.positionMs
+                                    ?: 0L
+                                screen = Screen.Player(item, audio, subtitle, start, token = command.id)
                             }
                             .onFailure { error = it.message ?: "Remote play failed" }
                     }

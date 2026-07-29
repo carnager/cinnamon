@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PlayCircleOutline
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -79,13 +80,14 @@ fun DetailPage(
     onSelectPhone: () -> Unit,
     onSelectDevice: (Device) -> Unit,
     onBack: () -> Unit,
-    onPlay: (PopItem, Int?, Int?) -> Unit,
-    onPlayLocal: (PopItem, Int?, Int?) -> Unit,
+    onPlay: (PopItem, Int?, Int?, Long) -> Unit,
+    onPlayLocal: (PopItem, Int?, Int?, Long) -> Unit,
     onOpenSimilar: (PopItem) -> Unit,
     onActor: (Actor) -> Unit,
 ) {
     val context = LocalContext.current
     var detailItem by remember(item.id) { mutableStateOf(item) }
+    var progress by remember(item.id) { mutableStateOf<PlaybackProgress?>(null) }
     var streams by remember(item.id) { mutableStateOf<List<StreamInfo>>(emptyList()) }
     var ratings by remember(item.id) { mutableStateOf<ExternalRatings?>(null) }
     var similar by remember(item.id) { mutableStateOf<List<PopItem>>(emptyList()) }
@@ -110,20 +112,64 @@ fun DetailPage(
             .onFailure { error = it.message ?: "Could not load streams" }
         runCatching { api.ratings(item.id) }.onSuccess { ratings = it }
         runCatching { api.itemRating(item.id) }.onSuccess { userRating = it }
+        runCatching { api.progress(item.id) }.onSuccess { progress = it }
         if (item.kind == "movie") similar = runCatching { api.similar(item.id) }.getOrDefault(emptyList())
     }
 
+    val resumeMs = progress?.takeIf { progressResumable(it.positionMs, it.durationMs) }?.positionMs ?: 0L
+    val targetLabel = if (playbackTarget == PlaybackTarget.Phone) "this phone" else selectedDevice?.displayName() ?: "the TV"
+
+    fun start(positionMs: Long) {
+        if (playbackTarget == PlaybackTarget.Phone) {
+            onPlayLocal(detailItem, selectedAudio, selectedSubtitle, positionMs)
+        } else {
+            onPlay(detailItem, selectedAudio, selectedSubtitle, positionMs)
+        }
+    }
+
     LazyColumn(contentPadding = PaddingValues(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item { DetailHero(session, detailItem, ratings, streams, onBack) }
+        item { DetailHero(session, detailItem, ratings, streams, resumeFraction(resumeMs, progress?.durationMs ?: 0), onBack) }
+        if (error.isNotBlank()) item { Text(error, color = ErrorRed, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
         item {
-            Button(
-                onClick = { targetOpen = true },
-                colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(52.dp),
-                shape = RoundedCornerShape(8.dp),
-            ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(22.dp))
-                Text("  Play", fontWeight = FontWeight.Black, fontSize = 16.sp)
+            Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { start(resumeMs) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
+                        modifier = Modifier.weight(1f).height(52.dp),
+                        shape = RoundedCornerShape(8.dp),
+                    ) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(22.dp))
+                        Text(if (resumeMs > 0) "  Resume" else "  Play", fontWeight = FontWeight.Black, fontSize = 16.sp)
+                    }
+                    if (resumeMs > 0) {
+                        OutlinedButton(
+                            onClick = { start(0) },
+                            modifier = Modifier.height(52.dp),
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            Icon(Icons.Default.Replay, contentDescription = null, tint = TextColor, modifier = Modifier.size(19.dp))
+                            Text("  Start over", color = TextColor, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1)
+                        }
+                    }
+                }
+                // Says where playback lands and, when resuming, from when —
+                // and doubles as the way to change destination, so Play itself
+                // no longer has to interrupt with a picker every time.
+                Text(
+                    buildString {
+                        append("Plays on ")
+                        append(targetLabel)
+                        if (resumeMs > 0) append(" · from ${formatTime(resumeMs)}")
+                        append("  ·  Change")
+                    },
+                    color = Muted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.clickable { targetOpen = true },
+                )
             }
         }
         item {
@@ -148,7 +194,7 @@ fun DetailPage(
         if (ratingOpen) {
             item {
                 Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(if (userRating > 0) "Your rating · $userRating/10" else "Rate this", color = Gold, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text(if (userRating > 0) "Your rating · $userRating/10" else "Rate this", color = Gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         for (star in 1..10) {
                             Text(
@@ -183,9 +229,11 @@ fun DetailPage(
         }
         if (detailItem.actors.isNotEmpty()) item { CastStrip(session, detailItem.actors, onActor) }
         if (similar.isNotEmpty()) item { SimilarRow(session, similar, onOpenSimilar) }
-        if (error.isNotBlank()) item { Text(error, color = ErrorRed, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
     }
     if (targetOpen) {
+        // Picking a destination now only sets it — playback starts from the
+        // Play button, so changing your mind about the target does not commit
+        // you to watching something right now.
         PlaybackTargetSheet(
             devices = devices,
             selectedDevice = selectedDevice,
@@ -194,12 +242,10 @@ fun DetailPage(
             onSelectPhone = {
                 targetOpen = false
                 onSelectPhone()
-                onPlayLocal(detailItem, selectedAudio, selectedSubtitle)
             },
             onSelectDevice = {
                 targetOpen = false
                 onSelectDevice(it)
-                onPlay(detailItem, selectedAudio, selectedSubtitle)
             },
         )
     }
@@ -221,13 +267,13 @@ private fun DetailAction(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(21.dp))
-        Text(label, color = tint, fontSize = 9.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(23.dp))
+        Text(label, color = tint, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
 
 @Composable
-fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, streams: List<StreamInfo>, onBack: () -> Unit) {
+fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, streams: List<StreamInfo>, resumeProgress: Float, onBack: () -> Unit) {
     val backdropUrl = if (item.backdropMtimeUnix > 0) imageUrl(session, item.id, item.backdropMtimeUnix, "backdrop", ArtworkFull) else ""
     val genres = item.genres.split(Regex("[,;/]")).map { it.trim() }.filter { it.isNotBlank() }.take(3)
     Column {
@@ -250,15 +296,15 @@ fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, strea
                 horizontalArrangement = Arrangement.spacedBy(14.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {
-                PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard), Modifier.width(104.dp))
+                PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard), Modifier.width(104.dp), progress = resumeProgress)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text(displayTitle(item), color = TextColor, fontSize = 25.sp, lineHeight = 29.sp, fontWeight = FontWeight.Black, letterSpacing = (-.35).sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
                     if (item.originalTitle.isNotBlank() && item.originalTitle != displayTitle(item)) {
-                        Text(item.originalTitle, color = Muted, fontSize = 12.sp, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(item.originalTitle, color = Muted, fontSize = 13.sp, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     val meta = detailMetadata(item)
                     Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         if (item.officialRating.isNotBlank()) ContentRatingChip(item.officialRating)
                     }
                 }
@@ -270,10 +316,18 @@ fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, strea
                     genres.forEach { DetailChip(it.uppercase(Locale.US), Color.Transparent, Teal.copy(alpha = .86f)) }
                 }
             }
-            RatingBadges(item, ratings)
+            // Ratings and technical details share one scrolling row: three
+            // stacked scrollers read as clutter and it was easy to miss that
+            // any of them scrolled at all.
+            val badges = ratingBadges(item, ratings)
             val tech = techChips(item, streams)
-            if (tech.isNotEmpty()) {
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            if (badges.isNotEmpty() || tech.isNotEmpty()) {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    badges.forEach { (label, value) -> SourceRatingBadge(label, value) }
                     tech.forEach { DetailChip(it, Color.Transparent, TextColor.copy(alpha = .85f)) }
                 }
             }
@@ -283,7 +337,7 @@ fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, strea
 
 @Composable
 private fun ContentRatingChip(text: String) {
-    Text(text, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Black, maxLines = 1, modifier = Modifier.border(1.dp, Color.White.copy(alpha = .5f), RoundedCornerShape(3.dp)).padding(horizontal = 5.dp, vertical = 1.dp))
+    Text(text, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Black, maxLines = 1, modifier = Modifier.border(1.dp, Color.White.copy(alpha = .5f), RoundedCornerShape(3.dp)).padding(horizontal = 5.dp, vertical = 1.dp))
 }
 
 private fun detailMetadata(item: PopItem): String {
@@ -313,13 +367,13 @@ private fun techChips(item: PopItem, streams: List<StreamInfo>): List<String> = 
 @Composable
 private fun DetailOverview(item: PopItem) {
     Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Overview", color = TextColor, fontWeight = FontWeight.Bold, fontSize = 17.sp)
-        if (item.tagline.isNotBlank()) Text(item.tagline, color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-        if (item.overview.isNotBlank()) Text(item.overview, color = TextColor.copy(alpha = .84f), fontSize = 14.sp, lineHeight = 20.sp)
+        Text("Overview", color = TextColor, fontWeight = FontWeight.Bold, fontSize = 19.sp)
+        if (item.tagline.isNotBlank()) Text(item.tagline, color = Accent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        if (item.overview.isNotBlank()) Text(item.overview, color = TextColor.copy(alpha = .84f), fontSize = 15.sp, lineHeight = 22.sp)
         detailFacts(item).forEach { (label, value) ->
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
-                Text(label, color = Accent.copy(alpha = .86f), fontSize = 11.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(58.dp))
-                Text(value, color = TextColor.copy(alpha = .72f), fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.weight(1f))
+                Text(label, color = Accent.copy(alpha = .86f), fontSize = 12.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(66.dp))
+                Text(value, color = TextColor.copy(alpha = .72f), fontSize = 13.sp, lineHeight = 17.sp, modifier = Modifier.weight(1f))
             }
         }
     }
@@ -335,16 +389,16 @@ private fun detailFacts(item: PopItem): List<Pair<String, String>> = listOfNotNu
 @Composable
 fun CastStrip(session: Session, actors: List<Actor>, onActor: (Actor) -> Unit) {
     Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Cast", color = TextColor, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+        Text("Cast", color = TextColor, fontWeight = FontWeight.Bold, fontSize = 19.sp)
         LazyRow(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             items(actors.take(20), key = { it.name }) { actor ->
-                Column(Modifier.width(76.dp).clickable { onActor(actor) }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Box(Modifier.size(64.dp).clip(CircleShape).background(Surface2).border(1.dp, Line, CircleShape), contentAlignment = Alignment.Center) {
+                Column(Modifier.width(84.dp).clickable { onActor(actor) }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Box(Modifier.size(72.dp).clip(CircleShape).background(Surface2).border(1.dp, Line, CircleShape), contentAlignment = Alignment.Center) {
                         Text(actorInitials(actor.name), color = Accent, fontSize = 17.sp, fontWeight = FontWeight.Black)
                         AuthAsyncImage(session, actorImageUrl(session, actor), actor.name, Modifier.fillMaxSize(), ContentScale.Crop)
                     }
-                    Text(actor.name, color = TextColor, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
-                    if (actor.role.isNotBlank()) Text(actor.role, color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                    Text(actor.name, color = TextColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                    if (actor.role.isNotBlank()) Text(actor.role, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
                 }
             }
         }
@@ -389,8 +443,8 @@ fun PersonPage(
                         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                             Text(person.actor.name, color = TextColor, fontSize = 25.sp, lineHeight = 29.sp, fontWeight = FontWeight.Black)
                             val meta = listOf(person.info.knownForDepartment, person.info.birthday, person.info.placeOfBirth).filter { it.isNotBlank() }.joinToString(" · ")
-                            if (meta.isNotBlank()) Text(meta, color = Accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            if (person.info.biography.isNotBlank()) Text(person.info.biography, color = TextColor.copy(alpha = .8f), fontSize = 13.sp, lineHeight = 18.sp, maxLines = 8, overflow = TextOverflow.Ellipsis)
+                            if (meta.isNotBlank()) Text(meta, color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            if (person.info.biography.isNotBlank()) Text(person.info.biography, color = TextColor.copy(alpha = .8f), fontSize = 14.sp, lineHeight = 20.sp, maxLines = 8, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -424,32 +478,25 @@ private fun actorInitials(name: String): String = name.trim().split(Regex("\\s+"
 @Composable
 fun SimilarRow(session: Session, items: List<PopItem>, onOpen: (PopItem) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("More like this", color = TextColor, fontWeight = FontWeight.Bold, fontSize = 17.sp, modifier = Modifier.padding(horizontal = 16.dp))
+        Text("More like this", color = TextColor, fontWeight = FontWeight.Bold, fontSize = 19.sp, modifier = Modifier.padding(horizontal = 16.dp))
         LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(items, key = { it.id }) { movie -> MovieCard(session, movie, Modifier.width(120.dp), onClick = { onOpen(movie) }) }
+            items(items, key = { it.id }) { movie -> MovieCard(session, movie, Modifier.width(150.dp), onClick = { onOpen(movie) }) }
         }
     }
 }
 
 @Composable
 fun DetailChip(label: String, bg: Color, fg: Color) {
-    Text(label, color = fg, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(bg).border(1.dp, Line, RoundedCornerShape(4.dp)).padding(horizontal = 8.dp, vertical = 4.dp))
+    Text(label, color = fg, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(bg).border(1.dp, Line, RoundedCornerShape(4.dp)).padding(horizontal = 8.dp, vertical = 4.dp))
 }
 
-@Composable
-fun RatingBadges(item: PopItem, ratings: ExternalRatings?) {
-    val badges = buildList {
-        ratings?.imdbRating?.takeIf { it > 0 }?.let { add("IMDb" to "%.1f".format(Locale.US, it)) }
-        ratings?.tmdbRating?.takeIf { it > 0 }?.let { add("TMDb" to "%.1f".format(Locale.US, it)) }
-        ratings?.rottenTomatoesRating?.takeIf { it > 0 }?.let { add("RT" to "$it%") }
-        ratings?.metacriticRating?.takeIf { it > 0 }?.let { add("MC" to it.toString()) }
-        if (isEmpty() && item.rating > 0) add("NFO" to "%.1f".format(Locale.US, item.rating))
-    }
-    if (badges.isEmpty()) return
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        badges.take(4).forEach { (label, value) -> SourceRatingBadge(label, value) }
-    }
-}
+private fun ratingBadges(item: PopItem, ratings: ExternalRatings?): List<Pair<String, String>> = buildList {
+    ratings?.imdbRating?.takeIf { it > 0 }?.let { add("IMDb" to "%.1f".format(Locale.US, it)) }
+    ratings?.tmdbRating?.takeIf { it > 0 }?.let { add("TMDb" to "%.1f".format(Locale.US, it)) }
+    ratings?.rottenTomatoesRating?.takeIf { it > 0 }?.let { add("RT" to "$it%") }
+    ratings?.metacriticRating?.takeIf { it > 0 }?.let { add("MC" to it.toString()) }
+    if (isEmpty() && item.rating > 0) add("NFO" to "%.1f".format(Locale.US, item.rating))
+}.take(4)
 
 @Composable
 private fun SourceRatingBadge(label: String, value: String) {
@@ -458,8 +505,8 @@ private fun SourceRatingBadge(label: String, value: String) {
         horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, color = Teal, fontWeight = FontWeight.Black, fontSize = 10.sp)
-        Text(value, color = TextColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+        Text(label, color = Teal, fontWeight = FontWeight.Black, fontSize = 11.sp)
+        Text(value, color = TextColor, fontWeight = FontWeight.Bold, fontSize = 13.sp)
     }
 }
 
@@ -468,7 +515,7 @@ fun TrackSection(title: String, tracks: List<StreamInfo>, selected: Int?, emptyL
     var expanded by remember(title, tracks, selected) { mutableStateOf(false) }
     val selectedLabel = tracks.firstOrNull { it.index == selected }?.label() ?: emptyLabel
     Column(verticalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
-        Text(title, color = Muted, fontWeight = FontWeight.Black, fontSize = 10.sp)
+        Text(title, color = Muted, fontWeight = FontWeight.Black, fontSize = 12.sp)
         Box(Modifier.fillMaxWidth()) {
             OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(6.dp), contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp)) {
                 Text(selectedLabel, color = TextColor, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)

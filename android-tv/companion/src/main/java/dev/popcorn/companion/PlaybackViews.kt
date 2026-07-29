@@ -683,7 +683,7 @@ private fun setImmersive(context: Context, enabled: Boolean) {
     }
 }
 
-private fun formatTime(ms: Long): String {
+fun formatTime(ms: Long): String {
     val total = (ms / 1000).coerceAtLeast(0)
     val h = total / 3600
     val m = (total % 3600) / 60

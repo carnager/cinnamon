@@ -566,8 +566,11 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         send("bandwidth", payload)
     }
 
-    fun play(itemId: Long, audioIndex: Int?, subtitleIndex: Int?) {
-        val payload = JSONObject().put("itemId", itemId)
+    // positionMs is sent explicitly so the TV starts exactly where the user
+    // asked: resuming and starting over are both a deliberate choice here, not
+    // something the TV should second-guess.
+    fun play(itemId: Long, audioIndex: Int?, subtitleIndex: Int?, positionMs: Long = 0) {
+        val payload = JSONObject().put("itemId", itemId).put("positionMs", positionMs.coerceAtLeast(0))
         if (audioIndex != null) payload.put("audioIndex", audioIndex)
         if (subtitleIndex != null) payload.put("subtitleIndex", subtitleIndex)
         val bandwidth = selectedBandwidth
@@ -764,13 +767,12 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         }
     }
 
-    fun playLocally(item: PopItem, audioIndex: Int?, subtitleIndex: Int?) {
-        scope.launch {
-            val resume = runCatching { api.progress(item.id) }.getOrNull()
-            val start = resume?.takeIf { !it.completed }?.positionMs ?: 0L
-            loadPhonePlayback(item, audioIndex, subtitleIndex, null, start, "auto")
-            navigate(Page.LocalPlayer(item, audioIndex, subtitleIndex, page))
-        }
+    // The caller decides the start position: the detail page already knows
+    // whether the user asked to resume or start over, and re-deriving it here
+    // would override that choice.
+    fun playLocally(item: PopItem, audioIndex: Int?, subtitleIndex: Int?, positionMs: Long = 0) {
+        loadPhonePlayback(item, audioIndex, subtitleIndex, null, positionMs.coerceAtLeast(0), "auto")
+        navigate(Page.LocalPlayer(item, audioIndex, subtitleIndex, page))
     }
 
     fun seekTo(positionMs: Long) {
@@ -1450,8 +1452,8 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 onSelectPhone = ::selectPhoneTarget,
                                 onSelectDevice = ::selectTvTarget,
                                 onBack = ::goBack,
-                                onPlay = { item, audio, subtitle -> play(item.id, audio, subtitle) },
-                                onPlayLocal = ::playLocally,
+                                onPlay = { target, audio, subtitle, position -> play(target.id, audio, subtitle, position) },
+                                onPlayLocal = { target, audio, subtitle, position -> playLocally(target, audio, subtitle, position) },
                                 onOpenSimilar = ::openDetail,
                                 onActor = ::openActor,
                             )

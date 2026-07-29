@@ -63,6 +63,26 @@ data class PlaybackPlan(
     val usesHls: Boolean get() = mode != "direct"
 }
 
+// Mirrors progressFinished/progressResumable in the TV app (TvCore.kt) and the
+// server's isFinished. The completed flag can't decide this on its own: a
+// re-watch resets the position but leaves completed = true, so only the saved
+// position is consulted — near the end means finished, a meaningful mid-point
+// means offer to resume.
+fun progressFinished(positionMs: Long, durationMs: Long): Boolean {
+    if (durationMs <= 0 || positionMs <= 0) return false
+    return durationMs - positionMs <= 90_000 || positionMs.toDouble() / durationMs.toDouble() >= 0.92
+}
+
+fun progressResumable(positionMs: Long, durationMs: Long): Boolean {
+    if (durationMs <= 0 || positionMs < 30_000) return false
+    return !progressFinished(positionMs, durationMs)
+}
+
+fun resumeFraction(positionMs: Long, durationMs: Long): Float {
+    if (durationMs <= 0) return 0f
+    return (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+}
+
 fun PlayerState.isActivePlayback(): Boolean {
     val normalized = state.lowercase()
     return itemId > 0 && normalized != "idle" && normalized != "stopped"

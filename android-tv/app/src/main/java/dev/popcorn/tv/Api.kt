@@ -238,6 +238,10 @@ fun JSONObject.optIntOrNull(name: String): Int? {
     return if (has(name) && !isNull(name)) optInt(name) else null
 }
 
+fun JSONObject.optLongOrNull(name: String): Long? {
+    return if (has(name) && !isNull(name)) optLong(name) else null
+}
+
 class Api(private val session: Session) {
     suspend fun login(username: String, password: String): Session = withContext(Dispatchers.IO) {
         val body = JSONObject().put("username", username).put("password", password).toString()

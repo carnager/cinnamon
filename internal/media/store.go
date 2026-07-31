@@ -2609,3 +2609,36 @@ func splitGenreList(value string) []string {
 	}
 	return out
 }
+
+// HomeLayout returns the stored home layout document for a user and profile.
+// The empty string means the user never customised that profile and should get
+// the built-in default.
+func (s *Store) HomeLayout(ctx context.Context, userID int64, profile string) (string, error) {
+	var doc string
+	err := s.db.QueryRowContext(ctx, `
+SELECT sections_json
+FROM home_layouts
+WHERE user_id = ? AND profile = ?`, userID, profile).Scan(&doc)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return doc, nil
+}
+
+func (s *Store) SaveHomeLayout(ctx context.Context, userID int64, profile, doc string) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO home_layouts(user_id, profile, sections_json)
+VALUES (?, ?, ?)
+ON CONFLICT(user_id, profile) DO UPDATE SET
+	sections_json = excluded.sections_json,
+	updated_at = CURRENT_TIMESTAMP`, userID, profile, doc)
+	return err
+}
+
+func (s *Store) DeleteHomeLayout(ctx context.Context, userID int64, profile string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM home_layouts WHERE user_id = ? AND profile = ?`, userID, profile)
+	return err
+}

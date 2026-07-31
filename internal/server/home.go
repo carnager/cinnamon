@@ -26,6 +26,7 @@ type homePayload struct {
 	Watchlist                  media.Watchlist          `json:"watchlist"`
 	Recommendations            []media.Recommendation   `json:"recommendations"`
 	ExcludedRecommendationKeys []string                 `json:"excludedRecommendationKeys"`
+	Sections                   []media.HomeSection      `json:"sections"`
 }
 
 func (a *App) home(w http.ResponseWriter, r *http.Request) {
@@ -34,12 +35,13 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	compact := r.URL.Query().Get("compact") == "1"
+	profile := r.URL.Query().Get("profile")
 	a.writeCachedJSON(w, r, cacheKey(r, "home", user.ID), 15*time.Second, func() (any, error) {
-		return a.buildHomePayload(r.Context(), user, compact)
+		return a.buildHomePayload(r.Context(), user, compact, profile)
 	})
 }
 
-func (a *App) buildHomePayload(ctx context.Context, user auth.User, compact bool) (homePayload, error) {
+func (a *App) buildHomePayload(ctx context.Context, user auth.User, compact bool, profile string) (homePayload, error) {
 	payload := homePayload{
 		User:      user,
 		Libraries: a.cfg.Libraries,
@@ -97,6 +99,10 @@ func (a *App) buildHomePayload(ctx context.Context, user auth.User, compact bool
 		return payload, err
 	}
 	payload.Recommendations, err = a.homeRecommendations(ctx, user.ID, movieLib, tvLib, payload)
+	if err != nil {
+		return payload, err
+	}
+	payload.Sections, err = a.buildHomeSections(ctx, user.ID, profile, movieLib, tvLib, &payload)
 	if err != nil {
 		return payload, err
 	}

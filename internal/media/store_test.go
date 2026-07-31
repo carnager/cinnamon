@@ -4,6 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1140,4 +1143,79 @@ func TestItemsByPathsReturnsOnlyRequestedItems(t *testing.T) {
 	if len(empty) != 0 {
 		t.Fatalf("items for no paths = %#v, want none", empty)
 	}
+}
+
+func TestSearchShowsSeenStatusFilters(t *testing.T) {
+	store, ctx := newTestStore(t)
+	userID := insertTestUser(t, store, "viewer")
+
+	episode := func(show string, number int) Item {
+		return upsertTestItem(t, ctx, store, Item{
+			LibraryID:     "tv",
+			Kind:          "episode",
+			Title:         show + " E" + strconv.Itoa(number),
+			SortTitle:     strings.ToLower(show),
+			Path:          "/tv/" + strings.ToLower(show) + "/e" + strconv.Itoa(number) + ".mkv",
+			ShowTitle:     show,
+			SeasonNumber:  1,
+			EpisodeNumber: number,
+			DurationMS:    600_000,
+		})
+	}
+	watchedS1, watchedS2 := episode("Watched", 1), episode("Watched", 2)
+	startedS1, _ := episode("Started", 1), episode("Started", 2)
+	episode("Fresh", 1)
+
+	for _, id := range []int64{watchedS1.ID, watchedS2.ID} {
+		if _, err := store.SaveProgress(ctx, userID, id, 600_000, 600_000, true); err != nil {
+			t.Fatalf("save completed progress: %v", err)
+		}
+	}
+	if _, err := store.SaveProgress(ctx, userID, startedS1.ID, 300_000, 600_000, false); err != nil {
+		t.Fatalf("save partial progress: %v", err)
+	}
+
+	titles := func(status string) []string {
+		shows, err := store.ListShowsForUser(ctx, "tv", "", "", "", "", status, userID, 0, 50, 0)
+		if err != nil {
+			t.Fatalf("list shows (%s): %v", status, err)
+		}
+		out := make([]string, 0, len(shows))
+		for _, show := range shows {
+			out = append(out, show.Title)
+		}
+		sort.Strings(out)
+		return out
+	}
+
+	for _, tc := range []struct {
+		status string
+		want   []string
+	}{
+		{"", []string{"Fresh", "Started", "Watched"}},
+		{"seen", []string{"Watched"}},
+		{"unseen", []string{"Fresh", "Started"}},
+		{"started", []string{"Started"}},
+	} {
+		if got := titles(tc.status); !slices.Equal(got, tc.want) {
+			t.Errorf("shows for seen=%q = %v, want %v", tc.status, got, tc.want)
+		}
+	}
+
+	// Without a user there is nothing watched, so "unseen" must not filter.
+	if got := len(mustShows(t, store, ctx, "unseen", 0)); got != 3 {
+		t.Errorf("anonymous unseen returned %d shows, want 3", got)
+	}
+	if got := len(mustShows(t, store, ctx, "seen", 0)); got != 0 {
+		t.Errorf("anonymous seen returned %d shows, want 0", got)
+	}
+}
+
+func mustShows(t *testing.T, store *Store, ctx context.Context, status string, userID int64) []ShowSummary {
+	t.Helper()
+	shows, err := store.ListShowsForUser(ctx, "tv", "", "", "", "", status, userID, 0, 50, 0)
+	if err != nil {
+		t.Fatalf("list shows (%s): %v", status, err)
+	}
+	return shows
 }

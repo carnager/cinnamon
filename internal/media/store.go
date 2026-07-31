@@ -1380,6 +1380,22 @@ func (s *Store) ListShowsForUserWithFields(ctx context.Context, libraryID, q, ge
 	})
 }
 
+// Per-show watch counters for the seen filter. They aggregate the already
+// joined progress row instead of running a correlated EXISTS per episode: the
+// subquery form could not use the (library_id, show_title) index and rescanned
+// every episode in the library for every episode row, which cost seconds on a
+// few thousand episodes.
+const showCompletedEpisodes = `SUM(CASE WHEN pp.completed = 1 THEN 1 ELSE 0 END)`
+
+const showStartedEpisodes = `SUM(CASE WHEN pp.item_id IS NOT NULL AND (
+	pp.completed = 1
+	OR (
+		pp.completed = 0
+		AND pp.position_ms >= 60000
+		AND (pp.duration_ms <= 0 OR pp.duration_ms - pp.position_ms >= 60000)
+	)
+) THEN 1 ELSE 0 END)`
+
 func (s *Store) SearchShows(ctx context.Context, opts ShowOptions) ([]ShowSummary, error) {
 	libraryID := opts.LibraryID
 	q := opts.Query
@@ -1473,43 +1489,11 @@ SELECT mi.library_id,
 	COALESCE(ms.premiered, MAX(NULLIF(mi.premiered, '')), '')
 FROM media_items mi
 LEFT JOIN media_shows ms ON ms.library_id = mi.library_id AND ms.show_title = mi.show_title
+LEFT JOIN playback_progress pp ON pp.user_id = ? AND pp.item_id = mi.id
 WHERE mi.kind = 'episode'
 AND (? = '' OR mi.library_id = ?)
 `+genreWhere+`
 AND mi.show_title IS NOT NULL AND mi.show_title != ''
-AND (
-	? = ''
-	OR (? = 'seen' AND ? > 0 AND NOT EXISTS (
-		SELECT 1 FROM media_items e
-		LEFT JOIN playback_progress pp ON pp.user_id = ? AND pp.item_id = e.id AND pp.completed = 1
-		WHERE e.kind = 'episode' AND e.library_id = mi.library_id AND e.show_title = mi.show_title
-		AND pp.item_id IS NULL
-	))
-	OR (? = 'unseen' AND (? <= 0 OR EXISTS (
-		SELECT 1 FROM media_items e
-		LEFT JOIN playback_progress pp ON pp.user_id = ? AND pp.item_id = e.id AND pp.completed = 1
-		WHERE e.kind = 'episode' AND e.library_id = mi.library_id AND e.show_title = mi.show_title
-		AND pp.item_id IS NULL
-	)))
-	OR (? = 'started' AND ? > 0 AND EXISTS (
-		SELECT 1 FROM media_items e
-		JOIN playback_progress pp ON pp.user_id = ? AND pp.item_id = e.id
-		WHERE e.kind = 'episode' AND e.library_id = mi.library_id AND e.show_title = mi.show_title
-		AND (
-			pp.completed = 1
-			OR (
-				pp.completed = 0
-				AND pp.position_ms >= 60000
-				AND (pp.duration_ms <= 0 OR pp.duration_ms - pp.position_ms >= 60000)
-			)
-		)
-	) AND EXISTS (
-		SELECT 1 FROM media_items e
-		LEFT JOIN playback_progress pp ON pp.user_id = ? AND pp.item_id = e.id AND pp.completed = 1
-		WHERE e.kind = 'episode' AND e.library_id = mi.library_id AND e.show_title = mi.show_title
-		AND pp.item_id IS NULL
-	))
-)
 AND (
 	? = ''
 	OR (? = '#' AND LOWER(COALESCE(NULLIF(ms.sort_title, ''), mi.show_title, '')) NOT GLOB '[a-z]*')
@@ -1519,8 +1503,14 @@ AND (
 GROUP BY mi.library_id, mi.show_title
 HAVING (? <= 0 OR COALESCE(ms.rating, MAX(mi.rating), 0) >= ?)
 `+decadeHaving+`
+AND (
+	? = ''
+	OR (? = 'seen' AND ? > 0 AND `+showCompletedEpisodes+` = COUNT(*))
+	OR (? = 'unseen' AND (? <= 0 OR `+showCompletedEpisodes+` < COUNT(*)))
+	OR (? = 'started' AND ? > 0 AND `+showStartedEpisodes+` > 0 AND `+showCompletedEpisodes+` < COUNT(*))
+)
 `+orderBy+`
-LIMIT ? OFFSET ?`, append(append(append([]any{libraryID, libraryID}, genreArgs...), seenStatus, seenStatus, userID, userID, seenStatus, userID, userID, seenStatus, userID, userID, userID, nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith), append(textArgs, opts.MinRating, opts.MinRating, limit, offset)...)...)
+LIMIT ? OFFSET ?`, append(append(append([]any{userID, libraryID, libraryID}, genreArgs...), nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith), append(textArgs, opts.MinRating, opts.MinRating, seenStatus, seenStatus, userID, seenStatus, userID, seenStatus, userID, limit, offset)...)...)
 	if err != nil {
 		return nil, err
 	}

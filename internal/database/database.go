@@ -332,12 +332,10 @@ CREATE TABLE IF NOT EXISTS recommendation_exclusions (
 	PRIMARY KEY(user_id, exclusion_key)
 );
 CREATE TABLE IF NOT EXISTS home_layouts (
-	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-	profile TEXT NOT NULL DEFAULT 'default',
+	user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
 	sections_json TEXT NOT NULL,
 	created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-	PRIMARY KEY(user_id, profile)
+	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS external_ratings_cache (
 	item_id INTEGER PRIMARY KEY REFERENCES media_items(id) ON DELETE CASCADE,
@@ -392,6 +390,9 @@ CREATE TABLE IF NOT EXISTS app_updates (
 	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );`)
 	if err != nil {
+		return err
+	}
+	if err := dropProfiledHomeLayouts(db); err != nil {
 		return err
 	}
 	for _, stmt := range []string{
@@ -547,12 +548,10 @@ CREATE TABLE IF NOT EXISTS app_updates (
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_recommendation_exclusions_user ON recommendation_exclusions(user_id, updated_at)`,
 		`CREATE TABLE IF NOT EXISTS home_layouts (
-			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			profile TEXT NOT NULL DEFAULT 'default',
+			user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
 			sections_json TEXT NOT NULL,
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			PRIMARY KEY(user_id, profile)
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`ALTER TABLE external_ratings_cache ADD COLUMN tmdb_rating REAL`,
 		`CREATE INDEX IF NOT EXISTS idx_remote_commands_device ON remote_commands(device_id, id)`,
@@ -565,6 +564,39 @@ CREATE TABLE IF NOT EXISTS app_updates (
 		}
 	}
 	return nil
+}
+
+// dropProfiledHomeLayouts removes the home_layouts table from the short-lived
+// per-client-profile design, so the single-layout table can be created in its
+// place. Layouts are cheap to redo and this only fires once.
+func dropProfiledHomeLayouts(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(home_layouts)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	profiled := false
+	for rows.Next() {
+		var (
+			cid, notNull, primaryKey int
+			name, columnType         string
+			defaultValue             any
+		)
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == "profile" {
+			profiled = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !profiled {
+		return nil
+	}
+	_, err = db.Exec(`DROP TABLE home_layouts`)
+	return err
 }
 
 func isDuplicateColumn(err error) bool {

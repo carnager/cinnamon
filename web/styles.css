@@ -3940,7 +3940,6 @@ body {
 }
 
 /* ── Home layout editor ── */
-.home-layout-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 14px; }
 .home-layout-list { display: flex; flex-direction: column; }
 .home-layout-row {
   display: grid;

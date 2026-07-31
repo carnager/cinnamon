@@ -50,9 +50,9 @@ func newHomeSectionsApp(t *testing.T) (*App, *media.Store, int64) {
 	return app, store, userID
 }
 
-func homeSectionsFor(t *testing.T, app *App, userID int64, profile string) []media.HomeSection {
+func homeSectionsFor(t *testing.T, app *App, userID int64) []media.HomeSection {
 	t.Helper()
-	payload, err := app.buildHomePayload(context.Background(), auth.User{ID: userID, Username: "alice"}, profile)
+	payload, err := app.buildHomePayload(context.Background(), auth.User{ID: userID, Username: "alice"})
 	if err != nil {
 		t.Fatalf("build home payload: %v", err)
 	}
@@ -70,7 +70,7 @@ func sectionTypes(sections []media.HomeSection) []string {
 func TestHomeSectionsUseTheDefaultLayoutWhenUnconfigured(t *testing.T) {
 	app, _, userID := newHomeSectionsApp(t)
 
-	sections := homeSectionsFor(t, app, userID, "")
+	sections := homeSectionsFor(t, app, userID)
 	types := sectionTypes(sections)
 	if len(types) == 0 {
 		t.Fatal("default layout produced no sections")
@@ -104,11 +104,11 @@ func TestHomeSectionsFollowStoredLayoutOrderAndToggles(t *testing.T) {
 		t.Fatalf("validate layout: %v", err)
 	}
 	body, _ := json.Marshal(saved)
-	if err := store.SaveHomeLayout(context.Background(), userID, "tv", string(body)); err != nil {
+	if err := store.SaveHomeLayout(context.Background(), userID, string(body)); err != nil {
 		t.Fatalf("save layout: %v", err)
 	}
 
-	sections := homeSectionsFor(t, app, userID, "tv")
+	sections := homeSectionsFor(t, app, userID)
 	types := sectionTypes(sections)
 	if len(types) != 2 || types[0] != "recent_tv" || types[1] != "recommendations" {
 		t.Fatalf("sections = %v, want recent_tv then recommendations", types)
@@ -117,10 +117,12 @@ func TestHomeSectionsFollowStoredLayoutOrderAndToggles(t *testing.T) {
 		t.Fatalf("title override ignored: %q", sections[1].Title)
 	}
 
-	// A profile without its own row falls back to the default profile's layout,
-	// which here is still the built-in one.
-	if got := len(homeSectionsFor(t, app, userID, "phone")); got == 2 {
-		t.Fatal("phone profile reused the tv layout instead of falling back")
+	// Dropping the layout falls back to the built-in one.
+	if err := store.DeleteHomeLayout(context.Background(), userID); err != nil {
+		t.Fatalf("delete layout: %v", err)
+	}
+	if got := len(homeSectionsFor(t, app, userID)); got == 2 {
+		t.Fatal("deleted layout was still applied")
 	}
 }
 
@@ -136,11 +138,11 @@ func TestHomeSectionsRepeatParameterisedGenreShelves(t *testing.T) {
 		t.Fatalf("validate layout: %v", err)
 	}
 	body, _ := json.Marshal(layout)
-	if err := store.SaveHomeLayout(context.Background(), userID, defaultHomeProfile, string(body)); err != nil {
+	if err := store.SaveHomeLayout(context.Background(), userID, string(body)); err != nil {
 		t.Fatalf("save layout: %v", err)
 	}
 
-	sections := homeSectionsFor(t, app, userID, "")
+	sections := homeSectionsFor(t, app, userID)
 	if len(sections) != 2 {
 		t.Fatalf("got %d sections, want the two genres with matches", len(sections))
 	}
@@ -190,7 +192,7 @@ func TestValidateHomeLayoutRejectsBadConfigurations(t *testing.T) {
 
 func TestHomeSectionCatalogLeadsWithTheDefaultLayout(t *testing.T) {
 	catalog := homeSectionCatalog()
-	if len(catalog) < len(defaultHomeLayout(defaultHomeProfile).Sections) {
+	if len(catalog) < len(defaultHomeLayout().Sections) {
 		t.Fatalf("catalog has %d entries, fewer than the default layout", len(catalog))
 	}
 	if catalog[0].Type != "recommendations" {
@@ -209,14 +211,5 @@ func TestHomeSectionCatalogLeadsWithTheDefaultLayout(t *testing.T) {
 	}
 	if len(genre.Params) == 0 {
 		t.Fatal("genre shelf must declare its parameters")
-	}
-}
-
-func TestNormalizeHomeProfileFallsBackToDefault(t *testing.T) {
-	if got := normalizeHomeProfile(" TV "); got != "tv" {
-		t.Fatalf("profile = %q", got)
-	}
-	if got := normalizeHomeProfile("toaster"); got != defaultHomeProfile {
-		t.Fatalf("unknown profile = %q, want %q", got, defaultHomeProfile)
 	}
 }

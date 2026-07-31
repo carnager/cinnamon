@@ -816,28 +816,21 @@ function appUploadForm(title, app) {
 /* ── Home layout editor ──
    The catalog drives this page: every section type, its parameters and their
    allowed values come from the server, so a new section type shows up here
-   without a change to this file. */
+   without a change to this file. One layout per account, used by every client
+   the user signs in from. */
 
-const HOME_PROFILE_LABELS = [
-  ["default", "Default"],
-  ["tv", "TV"],
-  ["phone", "Phone"],
-  ["web", "Web"],
-];
-
-async function renderHomeLayout(profile, skipHistory) {
+async function renderHomeLayout(skipHistory) {
   stopPlayer();
   activeView = "settings";
   currentShow = null;
   currentSeason = null;
   search.value = "";
   renderNav();
-  const active = HOME_PROFILE_LABELS.some(([id]) => id === profile) ? profile : "default";
-  if (!skipHistory) pushState({ view: "homeLayout", profile: active });
+  if (!skipHistory) pushState({ view: "homeLayout" });
 
   const [catalog, layout] = await Promise.all([
     api("/api/home/catalog").catch(() => ({ sections: [] })),
-    api(`/api/home/layout?profile=${encodeURIComponent(active)}`).catch(() => ({ sections: [] })),
+    api("/api/home/layout").catch(() => ({ sections: [] })),
   ]);
   const types = new Map((catalog.sections || []).map((entry) => [entry.type, entry]));
   const draft = { sections: (layout.sections || []).map((section) => ({ ...section, params: { ...(section.params || {}) } })) };
@@ -849,21 +842,9 @@ async function renderHomeLayout(profile, skipHistory) {
   content.append(header);
 
   const section = settingsSection("Home layout", "Which shelves home shows, and in what order");
-  const tabs = el("div", "home-layout-tabs");
-  for (const [id, label] of HOME_PROFILE_LABELS) {
-    const tab = el("button", id === active ? "genre-filter active" : "genre-filter", label);
-    tab.type = "button";
-    tab.addEventListener("click", () => renderHomeLayout(id).catch(console.error));
-    tabs.append(tab);
-  }
-  section.append(tabs);
-
-  const inherited = active !== "default" && layout.source !== active;
-  if (inherited) {
-    section.append(el("p", "settings-copy", `${labelForProfile(active)} follows the default layout. Saving here gives it a layout of its own.`));
-  } else if (active === "default") {
-    section.append(el("p", "settings-copy", "Used by every client that has no layout of its own."));
-  }
+  section.append(el("p", "settings-copy", layout.source === "user"
+    ? "Your layout, used on every device you sign in from."
+    : "Currently the default layout. Saving replaces it with your own, on every device."));
 
   const list = el("div", "home-layout-list");
   const output = el("div", "settings-output");
@@ -910,7 +891,7 @@ async function renderHomeLayout(profile, skipHistory) {
     output.textContent = "Saving…";
     try {
       const body = { sections: draft.sections.map(({ id, type, enabled, title, params }) => ({ id, type, enabled, title, params })) };
-      await api(`/api/home/layout?profile=${encodeURIComponent(active)}`, { method: "PUT", body: JSON.stringify(body) });
+      await api("/api/home/layout", { method: "PUT", body: JSON.stringify(body) });
       output.textContent = "Saved. Home will use it on the next load.";
     } catch (err) {
       output.className = "settings-output error";
@@ -924,8 +905,8 @@ async function renderHomeLayout(profile, skipHistory) {
   reset.addEventListener("click", async () => {
     reset.disabled = true;
     try {
-      await api(`/api/home/layout?profile=${encodeURIComponent(active)}`, { method: "DELETE" });
-      await renderHomeLayout(active, true);
+      await api("/api/home/layout", { method: "DELETE" });
+      await renderHomeLayout(true);
     } catch (err) {
       reset.disabled = false;
       output.className = "settings-output error";
@@ -940,9 +921,6 @@ async function renderHomeLayout(profile, skipHistory) {
   setView(settingsShell("home", content));
 }
 
-function labelForProfile(profile) {
-  return (HOME_PROFILE_LABELS.find(([id]) => id === profile) || [profile, profile])[1];
-}
 
 function homeLayoutRow(entry, index, draft, types, redraw) {
   const definition = types.get(entry.type);
@@ -1032,7 +1010,7 @@ function settingsShell(active, content) {
   const sidebar = el("aside", "settings-sidebar");
   const nav = el("nav", "settings-sidebar-nav");
   nav.append(settingsNavButton("Overview", active === "overview", () => renderSettings().catch(console.error)));
-  nav.append(settingsNavButton("Home layout", active === "home", () => renderHomeLayout("default").catch(console.error)));
+  nav.append(settingsNavButton("Home layout", active === "home", () => renderHomeLayout().catch(console.error)));
   if (currentUser?.isAdmin) {
     nav.append(settingsNavButton("Users", active === "users", () => renderUsers().catch(console.error)));
   }

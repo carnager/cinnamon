@@ -12,14 +12,8 @@ import (
 	"popcorn/internal/media"
 )
 
-// Home layouts are stored per user and per client kind, because a TV wants a
-// handful of large shelves where a phone wants many small ones. A profile with
-// no row of its own falls back to "default", and a user with no row at all gets
-// defaultHomeLayout.
-const defaultHomeProfile = "default"
-
-var homeProfiles = []string{defaultHomeProfile, "tv", "phone", "web"}
-
+// One layout per user, shared by every client they sign in from. Users who
+// have never customised it get defaultHomeLayout.
 const (
 	homeLayoutMaxSections = 30
 	homeSectionMaxLimit   = 60
@@ -251,7 +245,7 @@ func buildGenreSection(scope homeSectionScope, cfg media.HomeLayoutSection) (med
 
 // defaultHomeLayout is what every client rendered before layouts existed, so an
 // untouched account sees no change.
-func defaultHomeLayout(profile string) media.HomeLayoutDoc {
+func defaultHomeLayout() media.HomeLayoutDoc {
 	types := []string{
 		"recommendations",
 		"continue_movies",
@@ -267,7 +261,7 @@ func defaultHomeLayout(profile string) media.HomeLayoutDoc {
 	for _, name := range types {
 		sections = append(sections, media.HomeLayoutSection{ID: name, Type: name, Enabled: true})
 	}
-	return media.HomeLayoutDoc{Profile: profile, Source: "default", Sections: sections}
+	return media.HomeLayoutDoc{Source: "default", Sections: sections}
 }
 
 func homeSectionCatalog() []media.HomeSectionType {
@@ -275,7 +269,7 @@ func homeSectionCatalog() []media.HomeSectionType {
 	out := make([]media.HomeSectionType, 0, len(defs))
 	// Catalog order follows the default layout so the editor lists the familiar
 	// shelves first, with the repeatable ones after them.
-	for _, section := range defaultHomeLayout(defaultHomeProfile).Sections {
+	for _, section := range defaultHomeLayout().Sections {
 		if def, ok := defs[section.Type]; ok {
 			out = append(out, def.HomeSectionType)
 			delete(defs, section.Type)
@@ -287,35 +281,30 @@ func homeSectionCatalog() []media.HomeSectionType {
 	return out
 }
 
-// resolveHomeLayout returns the layout for a profile: its own row, else the
-// default profile's row, else the built-in default.
-func (a *App) resolveHomeLayout(ctx context.Context, userID int64, profile string) (media.HomeLayoutDoc, error) {
-	profile = normalizeHomeProfile(profile)
-	for _, candidate := range []string{profile, defaultHomeProfile} {
-		doc, err := a.store.HomeLayout(ctx, userID, candidate)
-		if err != nil {
-			return media.HomeLayoutDoc{}, err
-		}
-		if strings.TrimSpace(doc) == "" {
-			continue
-		}
-		var parsed media.HomeLayoutDoc
-		if err := json.Unmarshal([]byte(doc), &parsed); err != nil {
-			// A layout we cannot read must not take home down with it.
-			if a.log != nil {
-				a.log.Warn("home layout unreadable, using default", "user", userID, "profile", candidate, "error", err)
-			}
-			continue
-		}
-		parsed.Profile = profile
-		parsed.Source = candidate
-		return parsed, nil
+// resolveHomeLayout returns the user's stored layout, or the built-in default
+// when they have never saved one.
+func (a *App) resolveHomeLayout(ctx context.Context, userID int64) (media.HomeLayoutDoc, error) {
+	doc, err := a.store.HomeLayout(ctx, userID)
+	if err != nil {
+		return media.HomeLayoutDoc{}, err
 	}
-	return defaultHomeLayout(profile), nil
+	if strings.TrimSpace(doc) == "" {
+		return defaultHomeLayout(), nil
+	}
+	var parsed media.HomeLayoutDoc
+	if err := json.Unmarshal([]byte(doc), &parsed); err != nil {
+		// A layout we cannot read must not take home down with it.
+		if a.log != nil {
+			a.log.Warn("home layout unreadable, using default", "user", userID, "error", err)
+		}
+		return defaultHomeLayout(), nil
+	}
+	parsed.Source = "user"
+	return parsed, nil
 }
 
-func (a *App) buildHomeSections(ctx context.Context, userID int64, profile string, movieLib, tvLib *config.Library, payload *homePayload) ([]media.HomeSection, error) {
-	layout, err := a.resolveHomeLayout(ctx, userID, profile)
+func (a *App) buildHomeSections(ctx context.Context, userID int64, movieLib, tvLib *config.Library, payload *homePayload) ([]media.HomeSection, error) {
+	layout, err := a.resolveHomeLayout(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -469,14 +458,6 @@ func paramOrDefault(cfg media.HomeLayoutSection, name, fallback string) string {
 	return fallback
 }
 
-func normalizeHomeProfile(profile string) string {
-	profile = strings.ToLower(strings.TrimSpace(profile))
-	if containsString(homeProfiles, profile) {
-		return profile
-	}
-	return defaultHomeProfile
-}
-
 func countLabel(count int, noun string) string {
 	if count == 0 {
 		return ""
@@ -510,10 +491,7 @@ func (a *App) homeSectionCatalogGet(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.requireUser(w, r); !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"profiles": homeProfiles,
-		"sections": homeSectionCatalog(),
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"sections": homeSectionCatalog()})
 }
 
 func (a *App) homeLayoutGet(w http.ResponseWriter, r *http.Request) {
@@ -521,7 +499,7 @@ func (a *App) homeLayoutGet(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	layout, err := a.resolveHomeLayout(r.Context(), user.ID, r.URL.Query().Get("profile"))
+	layout, err := a.resolveHomeLayout(r.Context(), user.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -539,20 +517,18 @@ func (a *App) homeLayoutSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid layout body", http.StatusBadRequest)
 		return
 	}
-	profile := normalizeHomeProfile(firstNonEmpty(r.URL.Query().Get("profile"), in.Profile))
 	layout, err := validateHomeLayout(in)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	layout.Profile = profile
-	layout.Source = profile
+	layout.Source = "user"
 	body, err := json.Marshal(layout)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if err := a.store.SaveHomeLayout(r.Context(), user.ID, profile, string(body)); err != nil {
+	if err := a.store.SaveHomeLayout(r.Context(), user.ID, string(body)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -565,13 +541,12 @@ func (a *App) homeLayoutDelete(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	profile := normalizeHomeProfile(r.URL.Query().Get("profile"))
-	if err := a.store.DeleteHomeLayout(r.Context(), user.ID, profile); err != nil {
+	if err := a.store.DeleteHomeLayout(r.Context(), user.ID); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	a.invalidateResponseCache()
-	layout, err := a.resolveHomeLayout(r.Context(), user.ID, profile)
+	layout, err := a.resolveHomeLayout(r.Context(), user.ID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

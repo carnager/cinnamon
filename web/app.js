@@ -1363,7 +1363,7 @@ async function loadHome(skipHistory) {
   renderNav();
   setLoading();
 
-  const payload = await api("/api/home?profile=web").catch(() => null);
+  const payload = await api("/api/home").catch(() => null);
   if (payload) applyHomePayload(payload);
   renderHome(skipHistory);
 }
@@ -1568,7 +1568,7 @@ async function navigate(state, replaceURL = false) {
   } else if (state.view === "users") {
     await renderUsers(true);
   } else if (state.view === "homeLayout") {
-    await renderHomeLayout(state.profile || "default", true);
+    await renderHomeLayout(true);
   } else if (state.view === "library") {
     await loadLibraryPage(true);
   } else if ((state.view === "show" || state.view === "season") && state.showTitle) {
@@ -1622,10 +1622,7 @@ function routeFromLocation() {
   } else if (parts[0] === "settings") {
     state.view = "settings";
     if (parts[1] === "users") state.view = "users";
-    if (parts[1] === "home") {
-      state.view = "homeLayout";
-      state.profile = parts[2] || "default";
-    }
+    if (parts[1] === "home") state.view = "homeLayout";
   } else if (parts[0] === "library") {
     state.view = "library";
   }
@@ -1657,7 +1654,7 @@ function urlForState(state) {
   else if (state.view === "history") path = "/history";
   else if (state.view === "settings") path = "/settings";
   else if (state.view === "users") path = "/settings/users";
-  else if (state.view === "homeLayout") path = `/settings/home/${encodeURIComponent(state.profile || "default")}`;
+  else if (state.view === "homeLayout") path = "/settings/home";
   else if (libraryId) path = `/library/${libraryId}`;
   if ((state.view === "show" || state.view === "season") && state.showTitle) {
     path += `/show/${encodeURIComponent(state.showTitle)}`;

@@ -20,8 +20,9 @@ type HomeSection struct {
 }
 
 // HomeLayoutDoc is what a user stores and what PUT /api/home/layout accepts.
+// Source is "user" once they have saved one, "default" while they are still on
+// the built-in layout.
 type HomeLayoutDoc struct {
-	Profile  string              `json:"profile"`
 	Source   string              `json:"source,omitempty"`
 	Sections []HomeLayoutSection `json:"sections"`
 }

@@ -310,9 +310,7 @@ class Api(private val session: Session) {
     // The compact response contains every user-specific home row and marker,
     // but skips the 300-item library samples used only by the TV client.
     suspend fun home(): HomeContent = withContext(Dispatchers.IO) {
-        // profile=phone picks this client's home layout, falling back to the
-        // user's default layout when they have not customised the phone.
-        val o = request("/api/home?profile=phone")
+        val o = request("/api/home")
         val libraries = o.optJSONArray("libraries") ?: JSONArray()
         val progress = o.optJSONArray("progress") ?: JSONArray()
         val showProgress = o.optJSONArray("showProgress") ?: JSONArray()

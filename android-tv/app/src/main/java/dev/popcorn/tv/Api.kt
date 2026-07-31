@@ -332,9 +332,7 @@ class Api(private val session: Session) {
     }
 
     suspend fun home(): HomePayload = withContext(Dispatchers.IO) {
-        // profile=tv picks this client's home layout, falling back to the
-        // user's default layout when they have not customised the TV.
-        val json = request("/api/home?profile=tv")
+        val json = request("/api/home")
         val libraries = json.optJSONArray("libraries") ?: JSONArray()
         val watchlistJson = json.optJSONObject("watchlist") ?: JSONObject()
         HomePayload(

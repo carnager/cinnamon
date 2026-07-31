@@ -37,13 +37,12 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	profile := r.URL.Query().Get("profile")
 	a.writeCachedJSON(w, r, cacheKey(r, "home", user.ID), 15*time.Second, func() (any, error) {
-		return a.buildHomePayload(r.Context(), user, profile)
+		return a.buildHomePayload(r.Context(), user)
 	})
 }
 
-func (a *App) buildHomePayload(ctx context.Context, user auth.User, profile string) (homePayload, error) {
+func (a *App) buildHomePayload(ctx context.Context, user auth.User) (homePayload, error) {
 	payload := homePayload{
 		User:      user,
 		Libraries: a.cfg.Libraries,
@@ -92,7 +91,7 @@ func (a *App) buildHomePayload(ctx context.Context, user auth.User, profile stri
 	if err != nil {
 		return payload, err
 	}
-	payload.Sections, err = a.buildHomeSections(ctx, user.ID, profile, movieLib, tvLib, &payload)
+	payload.Sections, err = a.buildHomeSections(ctx, user.ID, movieLib, tvLib, &payload)
 	if err != nil {
 		return payload, err
 	}

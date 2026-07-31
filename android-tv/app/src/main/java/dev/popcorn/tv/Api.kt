@@ -45,6 +45,16 @@ object AppCache {
         writeCachedList(cacheFile(context, session, "shows_$libraryId"), shows, fullyLoaded, ::showToJson)
     }
 
+    fun readHomeSections(context: Context, session: Session): List<HomeSection> {
+        return runCatching {
+            jsonToHomeSections(JSONArray(cacheFile(context, session, "home_sections").readText()))
+        }.getOrDefault(emptyList())
+    }
+
+    fun writeHomeSections(context: Context, session: Session, sectionsJson: String) {
+        runCatching { cacheFile(context, session, "home_sections").writeText(sectionsJson) }
+    }
+
     private fun <T> readCachedList(file: File, parser: (JSONObject) -> T): CachedList<T> {
         return runCatching {
             val root = JSONObject(file.readText())
@@ -125,6 +135,34 @@ private fun showToJson(show: ShowSummary): JSONObject {
         .put("overview", show.overview)
         .put("genres", show.genres)
         .put("rating", show.rating)
+}
+
+private fun jsonToHomeSections(arr: JSONArray): List<HomeSection> = (0 until arr.length()).map { index ->
+    val o = arr.getJSONObject(index)
+    val items = o.optJSONArray("items") ?: JSONArray()
+    val shows = o.optJSONArray("shows") ?: JSONArray()
+    val entries = o.optJSONArray("entries") ?: JSONArray()
+    HomeSection(
+        id = o.optString("id"),
+        type = o.optString("type"),
+        layout = o.optString("layout"),
+        kind = o.optString("kind"),
+        title = o.optString("title"),
+        subtitle = o.optString("subtitle"),
+        more = o.optString("more"),
+        items = (0 until items.length()).map { jsonToItem(items.getJSONObject(it)) },
+        shows = (0 until shows.length()).map { jsonToShow(shows.getJSONObject(it)) },
+        entries = (0 until entries.length()).map { index ->
+            val row = entries.getJSONObject(index)
+            Recommendation(
+                key = row.optString("key"),
+                reason = row.optString("reason"),
+                source = row.optString("source"),
+                item = row.optJSONObject("item")?.let(::jsonToItem),
+                show = row.optJSONObject("show")?.let(::jsonToShow),
+            )
+        },
+    )
 }
 
 private fun jsonToItem(o: JSONObject): PopItem {
@@ -294,7 +332,9 @@ class Api(private val session: Session) {
     }
 
     suspend fun home(): HomePayload = withContext(Dispatchers.IO) {
-        val json = request("/api/home")
+        // profile=tv picks this client's home layout, falling back to the
+        // user's default layout when they have not customised the TV.
+        val json = request("/api/home?profile=tv")
         val libraries = json.optJSONArray("libraries") ?: JSONArray()
         val watchlistJson = json.optJSONObject("watchlist") ?: JSONObject()
         HomePayload(
@@ -311,7 +351,14 @@ class Api(private val session: Session) {
             watchlist = parseWatchlist(watchlistJson),
             recommendations = parseRecommendations(json.optJSONArray("recommendations") ?: JSONArray()),
             excludedRecommendationKeys = jsonStringSet(json.optJSONArray("excludedRecommendationKeys") ?: JSONArray()),
+            sections = jsonToHomeSections(json.optJSONArray("sections") ?: JSONArray()),
+            sectionsJson = (json.optJSONArray("sections") ?: JSONArray()).toString(),
         )
+    }
+
+    suspend fun surprise(): Pair<PopItem?, ShowSummary?> = withContext(Dispatchers.IO) {
+        val json = request("/api/surprise")
+        json.optJSONObject("item")?.let(::jsonToItem) to json.optJSONObject("show")?.let(::jsonToShow)
     }
 
     suspend fun item(itemId: Long): PopItem = withContext(Dispatchers.IO) {
@@ -344,9 +391,6 @@ class Api(private val session: Session) {
         parseItems(requestArray("/api/items?libraryId=${enc(libraryId)}&limit=$limit&offset=$offset$genreParam$sortParam$ratingParam$seenParam$decadesParam"))
     }
 
-    suspend fun recentItems(libraryId: String, limit: Int): List<PopItem> = withContext(Dispatchers.IO) {
-        parseItems(requestArray("/api/items?libraryId=${enc(libraryId)}&limit=$limit&offset=0&sort=mtime"))
-    }
 
     suspend fun similar(itemId: Long): List<PopItem> = withContext(Dispatchers.IO) {
         parseItems(requestArray("/api/items/$itemId/similar"))
@@ -386,9 +430,6 @@ class Api(private val session: Session) {
         parseShows(requestArray("/api/tv/shows?libraryId=${enc(libraryId)}&limit=$limit&offset=$offset$genreParam$sortParam$ratingParam$seenParam$decadesParam"))
     }
 
-    suspend fun recentShows(libraryId: String, limit: Int): List<ShowSummary> = withContext(Dispatchers.IO) {
-        parseShows(requestArray("/api/tv/shows?libraryId=${enc(libraryId)}&limit=$limit&offset=0&sort=mtime"))
-    }
 
     suspend fun genres(libraryId: String): List<String> = withContext(Dispatchers.IO) {
         val arr = requestArray("/api/genres?libraryId=${enc(libraryId)}")

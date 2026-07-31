@@ -110,19 +110,11 @@ private fun String.withoutLeadingArticleForRail(): String {
 fun HomeView(
     session: Session?,
     libraries: List<Library>,
-    items: List<PopItem>,
-    shows: List<ShowSummary>,
+    sections: List<HomeSection>,
     completedItems: Set<Long>,
     completedShows: Set<String>,
     watchlistItems: Set<Long>,
     watchlistShows: Set<String>,
-    continueMovies: List<PopItem>,
-    continueEpisodes: List<PopItem>,
-    recommendations: List<Recommendation>,
-    recentMovies: List<PopItem>,
-    recentShows: List<ShowSummary>,
-    watchlistMovies: List<PopItem>,
-    watchlistTvShows: List<ShowSummary>,
     error: String,
     loading: Boolean,
     showUpdate: Boolean,
@@ -138,10 +130,8 @@ fun HomeView(
     onPlayShow: (ShowSummary) -> Unit,
     onItem: (PopItem) -> Unit,
     onShow: (ShowSummary) -> Unit,
-    onMoreContinueMovies: () -> Unit,
-    onMoreContinueTv: () -> Unit,
-    onMoreRecentMovies: () -> Unit,
-    onMoreRecentTv: () -> Unit,
+    onMore: (HomeSection) -> Unit,
+    onSurprise: () -> Unit,
     onItemMenu: (PopItem, FocusRequester?) -> Unit,
     onShowMenu: (ShowSummary, FocusRequester?) -> Unit,
 ) {
@@ -174,20 +164,7 @@ fun HomeView(
             Pill(
                 text = "Surprise Me",
                 selected = false,
-                onClick = {
-                    val unseenMovies = items.filter { it.id !in completedItems }
-                    val unseenShows = shows.filter { "${it.libraryId}\n${it.title.lowercase()}" !in completedShows }
-                    val ratedMovies = unseenMovies.filter { it.rating >= 6.5 }
-                    val ratedShows = unseenShows.filter { it.rating >= 6.5 }
-                    val hasRatedPicks = ratedMovies.isNotEmpty() || ratedShows.isNotEmpty()
-                    val moviePicks = if (hasRatedPicks) ratedMovies else unseenMovies
-                    val showPicks = if (hasRatedPicks) ratedShows else unseenShows
-                    val choiceCount = moviePicks.size + showPicks.size
-                    if (choiceCount > 0) {
-                        val choice = (0 until choiceCount).random()
-                        if (choice < moviePicks.size) onItem(moviePicks[choice]) else onShow(showPicks[choice - moviePicks.size])
-                    }
-                },
+                onClick = onSurprise,
             )
         },
     ) {
@@ -201,27 +178,16 @@ fun HomeView(
         } else {
             CuratedLanding(
                 session = session,
-                movies = items,
-                shows = shows,
+                sections = sections,
                 completedItems = completedItems,
                 completedShows = completedShows,
                 watchlistItems = watchlistItems,
                 watchlistShows = watchlistShows,
-                continueMovies = continueMovies,
-                continueEpisodes = continueEpisodes,
-                recommendations = recommendations,
-                recentMovies = recentMovies,
-                recentShows = recentShows,
-                watchlistMovies = watchlistMovies,
-                watchlistTvShows = watchlistTvShows,
                 onPlayItem = onPlayItem,
                 onPlayShow = onPlayShow,
                 onItem = onItem,
                 onShow = onShow,
-                onMoreContinueMovies = onMoreContinueMovies,
-                onMoreContinueTv = onMoreContinueTv,
-                onMoreRecentMovies = onMoreRecentMovies,
-                onMoreRecentTv = onMoreRecentTv,
+                onMore = onMore,
                 onItemMenu = onItemMenu,
                 onShowMenu = onShowMenu,
                 onContentFocus = { restoreContentFocus = it },
@@ -1873,38 +1839,32 @@ private fun HeroActionButton(
 @Composable
 fun CuratedLanding(
     session: Session?,
-    movies: List<PopItem>,
-    shows: List<ShowSummary>,
+    sections: List<HomeSection>,
     completedItems: Set<Long>,
     completedShows: Set<String>,
     watchlistItems: Set<Long>,
     watchlistShows: Set<String>,
-    continueMovies: List<PopItem>,
-    continueEpisodes: List<PopItem>,
-    recommendations: List<Recommendation>,
-    recentMovies: List<PopItem>,
-    recentShows: List<ShowSummary>,
-    watchlistMovies: List<PopItem>,
-    watchlistTvShows: List<ShowSummary>,
     onPlayItem: (PopItem) -> Unit,
     onPlayShow: (ShowSummary) -> Unit,
     onItem: (PopItem) -> Unit,
     onShow: (ShowSummary) -> Unit,
-    onMoreContinueMovies: () -> Unit,
-    onMoreContinueTv: () -> Unit,
-    onMoreRecentMovies: () -> Unit,
-    onMoreRecentTv: () -> Unit,
+    onMore: (HomeSection) -> Unit,
     onItemMenu: (PopItem, FocusRequester?) -> Unit,
     onShowMenu: (ShowSummary, FocusRequester?) -> Unit,
     onContentFocus: (FocusRequester) -> Unit = {},
     onHeroLeft: (() -> Boolean)? = null,
 ) {
-    if (movies.isEmpty() && shows.isEmpty()) {
+    // Layouts this build can draw. Anything else is a section type from a newer
+    // server: skip it rather than render a blank row.
+    val drawable = remember(sections) { sections.filter { it.layout == "hero" || it.layout == "poster" } }
+    if (drawable.isEmpty()) {
         EmptyState("No media found")
         return
     }
-    val heroEntries = remember(recommendations) {
-        recommendations.mapNotNull { recommendation ->
+    val heroSection = drawable.firstOrNull { it.layout == "hero" }
+    val shelves = remember(drawable) { drawable.filter { it !== heroSection && it.hasContent() } }
+    val heroEntries = remember(heroSection) {
+        heroSection?.entries.orEmpty().mapNotNull { recommendation ->
             recommendation.item?.let { heroItemPick(it, recommendation.reason) }
                 ?: recommendation.show?.let { heroShowPick(it, recommendation.reason) }
         }
@@ -1918,11 +1878,7 @@ fun CuratedLanding(
     val firstShelfCardRequester = remember { FocusRequester() }
     val initialFocusTarget = when {
         heroEntries.isNotEmpty() -> "hero"
-        continueMovies.isNotEmpty() -> "continueMovies"
-        continueEpisodes.isNotEmpty() -> "continueEpisodes"
-        recentMovies.isNotEmpty() -> "recentMovies"
-        recentShows.isNotEmpty() -> "recentShows"
-        else -> ""
+        else -> shelves.firstOrNull()?.id.orEmpty()
     }
     fun shouldInitialFocus(target: String, autoFocus: Boolean): Boolean {
         return initialFocusPending && autoFocus && initialFocusTarget == target
@@ -1939,7 +1895,7 @@ fun CuratedLanding(
     ) {
         item {
             if (heroEntries.isEmpty()) {
-                BrowserHeader("Home", "${movies.size} movies \u00b7 ${shows.size} shows loaded")
+                BrowserHeader("Home", "")
             } else {
                 HomeHero(
                     session = session,
@@ -1962,48 +1918,48 @@ fun CuratedLanding(
                 )
             }
         }
-        if (continueMovies.isNotEmpty()) {
-            item {
-                PosterShelf("Continue Movies", "${continueMovies.size} in progress", continueMovies.take(HomeShelfLimit), key = { it.id }, autoFocusFirst = true, moreVisible = continueMovies.size > HomeShelfLimit, onMore = onMoreContinueMovies) { item, autoFocus ->
+        itemsIndexed(shelves, key = { _, section -> section.id }) { index, section ->
+            val firstShelf = index == 0
+            val moreVisible = section.more.isNotBlank() && section.contentSize() > HomeShelfLimit
+            if (section.shows.isNotEmpty()) {
+                PosterShelf(
+                    section.title,
+                    section.subtitle,
+                    section.shows.take(HomeShelfLimit),
+                    key = { it.title },
+                    autoFocusFirst = firstShelf,
+                    moreVisible = moreVisible,
+                    onMore = { onMore(section) },
+                ) { show, autoFocus ->
                     val fallback = remember { FocusRequester() }
-                    val requester = if (autoFocus) firstShelfCardRequester else fallback
-                    val focusNow = shouldInitialFocus("continueMovies", autoFocus)
-                    ItemCard(session, item, watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), autoFocus = focusNow, focusRequester = requester, onFocus = { onContentFocus(requester); consumeInitialFocus("continueMovies", autoFocus) }, onClick = { onItem(item) }, onLongClick = { requester -> onItemMenu(item, requester) })
+                    val requester = if (autoFocus && firstShelf) firstShelfCardRequester else fallback
+                    val focusNow = shouldInitialFocus(section.id, autoFocus)
+                    val key = "${show.libraryId}\n${show.title.lowercase()}"
+                    ShowCard(session, show, watched = completedShows.contains(key), watchlisted = watchlistShows.contains(key), autoFocus = focusNow, focusRequester = requester, onFocus = { onContentFocus(requester); consumeInitialFocus(section.id, autoFocus) }, onClick = { onShow(show) }, onLongClick = { requester -> onShowMenu(show, requester) })
                 }
-            }
-        }
-        if (continueEpisodes.isNotEmpty()) {
-            item {
-                PosterShelf("Continue TV", "${continueEpisodes.size} episodes", continueEpisodes.take(HomeShelfLimit), key = { it.id }, autoFocusFirst = continueMovies.isEmpty(), moreVisible = continueEpisodes.size > HomeShelfLimit, onMore = onMoreContinueTv) { item, autoFocus ->
+            } else {
+                PosterShelf(
+                    section.title,
+                    section.subtitle,
+                    section.items.take(HomeShelfLimit),
+                    key = { it.id },
+                    autoFocusFirst = firstShelf,
+                    moreVisible = moreVisible,
+                    onMore = { onMore(section) },
+                ) { item, autoFocus ->
                     val fallback = remember { FocusRequester() }
-                    val requester = if (autoFocus) firstShelfCardRequester else fallback
-                    val focusNow = shouldInitialFocus("continueEpisodes", autoFocus)
-                    ItemCard(session, item, watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), autoFocus = focusNow, focusRequester = requester, onFocus = { onContentFocus(requester); consumeInitialFocus("continueEpisodes", autoFocus) }, onClick = { onItem(item) }, onLongClick = { requester -> onItemMenu(item, requester) })
-                }
-            }
-        }
-        if (recentMovies.isNotEmpty()) {
-            item {
-                PosterShelf("Recently Added Movies", "${recentMovies.size} new", recentMovies.take(HomeShelfLimit), key = { it.id }, autoFocusFirst = continueMovies.isEmpty() && continueEpisodes.isEmpty(), moreVisible = recentMovies.size > HomeShelfLimit, onMore = onMoreRecentMovies) { item, autoFocus ->
-                    val fallback = remember { FocusRequester() }
-                    val requester = if (autoFocus) firstShelfCardRequester else fallback
-                    val focusNow = shouldInitialFocus("recentMovies", autoFocus)
-                    ItemCard(session, item, watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), autoFocus = focusNow, focusRequester = requester, onFocus = { onContentFocus(requester); consumeInitialFocus("recentMovies", autoFocus) }, onClick = { onItem(item) }, onLongClick = { requester -> onItemMenu(item, requester) })
-                }
-            }
-        }
-        if (recentShows.isNotEmpty()) {
-            item {
-                PosterShelf("Recently Added TV", "${recentShows.size} shows", recentShows.take(HomeShelfLimit), key = { it.title }, autoFocusFirst = continueMovies.isEmpty() && continueEpisodes.isEmpty() && recentMovies.isEmpty(), moreVisible = recentShows.size > HomeShelfLimit, onMore = onMoreRecentTv) { show, autoFocus ->
-                    val fallback = remember { FocusRequester() }
-                    val requester = if (autoFocus) firstShelfCardRequester else fallback
-                    val focusNow = shouldInitialFocus("recentShows", autoFocus)
-                    ShowCard(session, show, watched = completedShows.contains("${show.libraryId}\n${show.title.lowercase()}"), watchlisted = watchlistShows.contains("${show.libraryId}\n${show.title.lowercase()}"), autoFocus = focusNow, focusRequester = requester, onFocus = { onContentFocus(requester); consumeInitialFocus("recentShows", autoFocus) }, onClick = { onShow(show) }, onLongClick = { requester -> onShowMenu(show, requester) })
+                    val requester = if (autoFocus && firstShelf) firstShelfCardRequester else fallback
+                    val focusNow = shouldInitialFocus(section.id, autoFocus)
+                    ItemCard(session, item, watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), autoFocus = focusNow, focusRequester = requester, onFocus = { onContentFocus(requester); consumeInitialFocus(section.id, autoFocus) }, onClick = { onItem(item) }, onLongClick = { requester -> onItemMenu(item, requester) })
                 }
             }
         }
     }
 }
+
+private fun HomeSection.hasContent(): Boolean = items.isNotEmpty() || shows.isNotEmpty() || entries.isNotEmpty()
+
+private fun HomeSection.contentSize(): Int = maxOf(items.size, shows.size, entries.size)
 
 private const val HomeShelfLimit = 10
 

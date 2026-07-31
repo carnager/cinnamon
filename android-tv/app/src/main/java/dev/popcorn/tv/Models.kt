@@ -151,6 +151,27 @@ data class HomePayload(
     val watchlist: Watchlist,
     val recommendations: List<Recommendation>,
     val excludedRecommendationKeys: Set<String>,
+    val sections: List<HomeSection>,
+    // The raw sections array, kept verbatim so the offline cache can replay the
+    // payload through the same parser instead of a second serializer that would
+    // drift from it.
+    val sectionsJson: String,
+)
+
+// A home shelf as composed by the server. The client switches on layout, never
+// on type, so section types added server-side render without an app change and
+// unknown layouts are skipped.
+data class HomeSection(
+    val id: String,
+    val type: String,
+    val layout: String,
+    val kind: String,
+    val title: String,
+    val subtitle: String,
+    val more: String,
+    val items: List<PopItem>,
+    val shows: List<ShowSummary>,
+    val entries: List<Recommendation>,
 )
 data class RemoteCommand(val id: Long, val type: String, val payload: JSONObject)
 data class PlayerRemoteCommand(val id: Long, val type: String, val payload: JSONObject)

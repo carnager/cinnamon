@@ -95,14 +95,8 @@ fun PopcornApp() {
     var activeLibrary by remember { mutableStateOf<Library?>(null) }
     var items by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var shows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
-    var homeMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
-    var homeShows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
-    var continueMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
-    var continueEpisodes by remember { mutableStateOf<List<PopItem>>(emptyList()) }
-    var recommendations by remember { mutableStateOf<List<Recommendation>>(emptyList()) }
+    var homeSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
     var recommendationExclusionKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var recentMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
-    var recentShows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
     var completedItems by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var resumeFractionById by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
     var completedShows by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -176,42 +170,6 @@ fun PopcornApp() {
         }
     }
 
-    suspend fun loadContinueRows(api: Api, knownProgress: List<PlaybackProgress>? = null, knownShowProgress: List<ShowProgress>? = null): Pair<List<PopItem>, List<PopItem>> {
-        val progress = knownProgress ?: api.progressList()
-        val completedItemIds = progress.filter { it.completed }.map { it.itemId }.toSet()
-        val resumable = progress
-            // Resume is driven by saved position, not the sticky completed flag,
-            // so re-watching a finished show still surfaces here.
-            .filter { progressResumable(it.positionMs, it.durationMs) }
-            .take(40)
-        val entries = coroutineScope {
-            resumable.map { progress ->
-                async { runCatching { api.item(progress.itemId) }.getOrNull() }
-            }.awaitAll().filterNotNull()
-        }
-        val resumeMovies = entries.filter { it.kind == "movie" }.take(24)
-        val resumeEpisodes = entries.filter { it.kind == "episode" }.toMutableList()
-        val resumeEpisodeIds = resumeEpisodes.map { it.id }.toMutableSet()
-        val partialShows = (knownShowProgress ?: api.showProgress()).filter { it.completedCount > 0 && !it.completed }.take(24)
-        val nextEpisodes = coroutineScope {
-            partialShows.map { show ->
-                async {
-                    runCatching {
-                        api.episodes(show.libraryId, show.showTitle)
-                            .firstOrNull { episode -> episode.id !in completedItemIds }
-                    }.getOrNull()
-                }
-            }.awaitAll().filterNotNull()
-        }
-        for (nextEpisode in nextEpisodes) {
-            if (resumeEpisodes.size >= 24) break
-            if (resumeEpisodeIds.add(nextEpisode.id)) {
-                resumeEpisodes.add(nextEpisode)
-            }
-        }
-        return resumeMovies to resumeEpisodes.take(24)
-    }
-
     fun refreshWatchlist(activeSession: Session) {
         scope.launch {
             runCatching {
@@ -238,13 +196,7 @@ fun PopcornApp() {
             prefs.edit().putString("username", payload.user.username).putString("displayName", payload.user.displayName).putBoolean("isAdmin", payload.user.isAdmin).putLong("userId", payload.user.id).putString("avatar", payload.user.avatar).apply()
             session = updated
         }
-        homeMovies = payload.homeMovies
-        homeShows = payload.homeShows
-        recentMovies = payload.recentMovies
-        recentShows = payload.recentShows
-        continueMovies = payload.continueMovies
-        continueEpisodes = payload.continueEpisodes
-        recommendations = payload.recommendations
+        homeSections = payload.sections
         recommendationExclusionKeys = payload.excludedRecommendationKeys
         completedItems = payload.progress.filter { it.completed }.map { it.itemId }.toSet()
         resumeFractionById = resumeFractionMap(payload.progress)
@@ -253,12 +205,7 @@ fun PopcornApp() {
         watchlistTvShows = payload.watchlist.shows
         watchlistItems = payload.watchlist.items.map { it.id }.toSet()
         watchlistShows = payload.watchlist.shows.map { showKey(it) }.toSet()
-        payload.libraries.firstOrNull { it.type == "movies" }?.let { library ->
-            AppCache.writeItems(context, activeSession, library.id, payload.homeMovies, false)
-        }
-        payload.libraries.firstOrNull { it.type == "tv" }?.let { library ->
-            AppCache.writeShows(context, activeSession, library.id, payload.homeShows, false)
-        }
+        AppCache.writeHomeSections(context, activeSession, payload.sectionsJson)
         AppCache.writeLibraries(context, activeSession, payload.libraries)
         screen = Screen.Home
         loading = false
@@ -363,6 +310,14 @@ fun PopcornApp() {
         }
     }
 
+    // "Not interested" hides the entry straight away; the next home refresh
+    // rebuilds the shelf without it.
+    fun dropRecommendation(sections: List<HomeSection>, key: String): List<HomeSection> {
+        return sections
+            .map { section -> section.copy(entries = section.entries.filterNot { it.key == key }) }
+            .filter { it.entries.isNotEmpty() || it.items.isNotEmpty() || it.shows.isNotEmpty() }
+    }
+
     fun setItemRecommendationExcluded(activeSession: Session, item: PopItem, excluded: Boolean) {
         scope.launch {
             val key = "item:${item.id}"
@@ -371,7 +326,7 @@ fun PopcornApp() {
                 if (excluded) api.excludeItemRecommendation(item.id) else api.restoreItemRecommendation(item.id)
             }.onSuccess {
                 recommendationExclusionKeys = if (excluded) recommendationExclusionKeys + key else recommendationExclusionKeys - key
-                recommendations = recommendations.filterNot { it.key == key }
+                homeSections = dropRecommendation(homeSections, key)
             }.onFailure { error = it.message ?: "Failed to update recommendations" }
         }
     }
@@ -384,7 +339,7 @@ fun PopcornApp() {
                 if (excluded) api.excludeShowRecommendation(show.libraryId, show.title) else api.restoreShowRecommendation(show.libraryId, show.title)
             }.onSuccess {
                 recommendationExclusionKeys = if (excluded) recommendationExclusionKeys + key else recommendationExclusionKeys - key
-                recommendations = recommendations.filterNot { it.key == key }
+                homeSections = dropRecommendation(homeSections, key)
             }.onFailure { error = it.message ?: "Failed to update recommendations" }
         }
     }
@@ -411,7 +366,7 @@ fun PopcornApp() {
             }.onSuccess {
                 completedItems = if (preference == MediaPreference.Seen) completedItems + item.id else completedItems - item.id
                 recommendationExclusionKeys = if (preference == MediaPreference.NotInterested) recommendationExclusionKeys + key else recommendationExclusionKeys - key
-                if (preference == MediaPreference.NotInterested) recommendations = recommendations.filterNot { it.key == key }
+                if (preference == MediaPreference.NotInterested) homeSections = dropRecommendation(homeSections, key)
                 refreshProgress(activeSession)
             }.onFailure { error = it.message ?: "Failed to update viewing preference" }
         }
@@ -440,7 +395,7 @@ fun PopcornApp() {
             }.onSuccess {
                 completedShows = if (preference == MediaPreference.Seen) completedShows + marker else completedShows - marker
                 recommendationExclusionKeys = if (preference == MediaPreference.NotInterested) recommendationExclusionKeys + key else recommendationExclusionKeys - key
-                if (preference == MediaPreference.NotInterested) recommendations = recommendations.filterNot { it.key == key }
+                if (preference == MediaPreference.NotInterested) homeSections = dropRecommendation(homeSections, key)
                 refreshProgress(activeSession)
             }.onFailure { error = it.message ?: "Failed to update viewing preference" }
         }
@@ -599,74 +554,12 @@ fun PopcornApp() {
         loadGeneration += 1
         val generation = loadGeneration
         scope.launch {
-            loading = homeMovies.isEmpty() && homeShows.isEmpty() && continueMovies.isEmpty() && continueEpisodes.isEmpty()
+            loading = homeSections.isEmpty()
             error = ""
             screen = Screen.Home
-            val movieLib = libs.firstOrNull { it.type == "movies" }
-            val tvLib = libs.firstOrNull { it.type == "tv" }
-            runCatching {
-                val api = Api(activeSession)
-                val homePayload = runCatching { api.home() }.getOrNull()
-                if (homePayload != null) {
-                    applyHomePayload(activeSession, homePayload, generation)
-                    return@runCatching
-                }
-                coroutineScope {
-                    val progressDeferred = async { api.progressList() }
-                    val showProgressDeferred = async { api.showProgress() }
-                    val watchlistDeferred = async { api.watchlist() }
-                    val homeMoviesDeferred = movieLib?.let { library -> async { api.itemsPage(library.id, 150, 0) } }
-                    val recentMoviesDeferred = movieLib?.let { library -> async { api.recentItems(library.id, 24) } }
-                    val homeShowsDeferred = tvLib?.let { library -> async { api.showsPage(library.id, 150, 0) } }
-                    val recentShowsDeferred = tvLib?.let { library -> async { api.recentShows(library.id, 24) } }
-
-                    homeMoviesDeferred?.await()?.let { loaded ->
-                        if (generation == loadGeneration) {
-                            homeMovies = loaded
-                            AppCache.writeItems(context, activeSession, movieLib!!.id, loaded, false)
-                        }
-                    }
-                    homeShowsDeferred?.await()?.let { loaded ->
-                        if (generation == loadGeneration) {
-                            homeShows = loaded
-                            AppCache.writeShows(context, activeSession, tvLib!!.id, loaded, false)
-                        }
-                    }
-                    recentMoviesDeferred?.await()?.let { loaded ->
-                        if (generation == loadGeneration) {
-                            recentMovies = loaded
-                        }
-                    }
-                    recentShowsDeferred?.await()?.let { loaded ->
-                        if (generation == loadGeneration) {
-                            recentShows = loaded
-                        }
-                    }
-                    if (generation == loadGeneration) loading = false
-
-                    val progress = progressDeferred.await()
-                    val showProgress = showProgressDeferred.await()
-                    if (generation == loadGeneration) {
-                        completedItems = progress.filter { it.completed }.map { it.itemId }.toSet()
-                        resumeFractionById = resumeFractionMap(progress)
-                        completedShows = showProgress.filter { it.completed }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
-                    }
-
-                    val list = watchlistDeferred.await()
-                    if (generation == loadGeneration) {
-                        watchlistMovies = list.items.filter { it.kind == "movie" }
-                        watchlistTvShows = list.shows
-                        watchlistItems = list.items.map { it.id }.toSet()
-                        watchlistShows = list.shows.map { showKey(it) }.toSet()
-                    }
-
-                    val (resumeMovies, resumeEpisodes) = loadContinueRows(api, progress, showProgress)
-                    if (generation == loadGeneration) {
-                        continueMovies = resumeMovies
-                        continueEpisodes = resumeEpisodes
-                    }
-                }
-            }.onFailure { error = it.message ?: "Load failed" }
+            runCatching { Api(activeSession).home() }
+                .onSuccess { applyHomePayload(activeSession, it, generation) }
+                .onFailure { error = it.message ?: "Load failed" }
             if (generation == loadGeneration) loading = false
         }
     }
@@ -852,31 +745,57 @@ fun PopcornApp() {
         val cachedLibraries = withContext(Dispatchers.IO) { AppCache.readLibraries(context, active) }
         if (cachedLibraries.isNotEmpty()) {
             libraries = cachedLibraries
-            homeMovies = cachedLibraries.firstOrNull { it.type == "movies" }?.let { AppCache.readItems(context, active, it.id).entries } ?: emptyList()
-            homeShows = cachedLibraries.firstOrNull { it.type == "tv" }?.let { AppCache.readShows(context, active, it.id).entries } ?: emptyList()
-            screen = Screen.Home
-            loading = false
-        }
-        runCatching {
-            val api = Api(active)
-            val homePayload = runCatching { api.home() }.getOrNull()
-            if (homePayload != null) {
-                applyHomePayload(active, homePayload)
-            } else {
-                val me = api.me()
-                if (active.username != me.username || active.displayName != me.displayName || active.isAdmin != me.isAdmin || active.userId != me.id || active.avatar != me.avatar) {
-                    val updated = active.copy(username = me.username, displayName = me.displayName, isAdmin = me.isAdmin, userId = me.id, avatar = me.avatar)
-                    prefs.edit().putString("username", me.username).putString("displayName", me.displayName).putBoolean("isAdmin", me.isAdmin).putLong("userId", me.id).putString("avatar", me.avatar).apply()
-                    session = updated
-                }
-                libraries = api.libraries()
-                AppCache.writeLibraries(context, active, libraries)
-                loadHome(active, libraries)
+            homeSections = withContext(Dispatchers.IO) { AppCache.readHomeSections(context, active) }
+            if (homeSections.isNotEmpty()) {
+                screen = Screen.Home
+                loading = false
             }
-        }.onFailure {
-            error = it.message ?: "Server unavailable"
-            screen = Screen.Login
-            loading = false
+        }
+        runCatching { Api(active).home() }
+            .onSuccess { applyHomePayload(active, it) }
+            .onFailure {
+                error = it.message ?: "Server unavailable"
+                // Cached sections are better than bouncing to login when the
+                // server is merely unreachable.
+                if (homeSections.isEmpty()) screen = Screen.Login
+                loading = false
+            }
+    }
+
+    // The "More" chip on a shelf. Known targets open the screen that shows the
+    // whole set; anything else falls back to a plain shelf of what the section
+    // carries, so a section type this build predates still works.
+    fun openShelfTarget(section: HomeSection) {
+        val active = session ?: return
+        when (section.more) {
+            "recent/movies" -> libraries.firstOrNull { it.type == "movies" || it.type == "movie" }?.let { library ->
+                loadLibraryPage(library, active, page = 0, genre = "", sort = "mtime", minRating = 0.0, seenStatus = "", decades = "", resetFiltersOnLibraryChange = false)
+            }
+            "recent/tv" -> libraries.firstOrNull { it.type == "tv" }?.let { library ->
+                loadLibraryPage(library, active, page = 0, genre = "", sort = "mtime", minRating = 0.0, seenStatus = "", decades = "", resetFiltersOnLibraryChange = false)
+            }
+            "watchlist" -> {
+                refreshWatchlist(active)
+                screen = Screen.Watchlist
+            }
+            else -> if (section.items.isNotEmpty()) screen = Screen.ItemShelf(section.title, section.items)
+        }
+    }
+
+    fun surpriseMe(activeSession: Session) {
+        scope.launch {
+            runCatching { Api(activeSession).surprise() }
+                .onSuccess { (item, show) ->
+                    when {
+                        item != null -> screen = Screen.Detail(item, null, fromHome = true)
+                        show != null -> {
+                            showFocusSeason = null
+                            screen = Screen.Show(show, fromHome = true)
+                        }
+                        else -> error = "Nothing left to surprise you with"
+                    }
+                }
+                .onFailure { error = it.message ?: "Surprise failed" }
         }
     }
 
@@ -1008,19 +927,11 @@ fun PopcornApp() {
         Screen.Home -> HomeView(
             session = session,
             libraries = libraries,
-            items = homeMovies,
-            shows = homeShows,
+            sections = homeSections,
             completedItems = completedItems,
             completedShows = completedShows,
             watchlistItems = watchlistItems,
             watchlistShows = watchlistShows,
-            continueMovies = continueMovies,
-            continueEpisodes = continueEpisodes,
-            recommendations = recommendations,
-            recentMovies = recentMovies,
-            recentShows = recentShows,
-            watchlistMovies = watchlistMovies,
-            watchlistTvShows = watchlistTvShows,
             error = error,
             loading = loading,
             showUpdate = updateAvailable,
@@ -1039,26 +950,8 @@ fun PopcornApp() {
                 session = null
                 screen = Screen.Login
             },
-            onMoreContinueMovies = {
-                screen = Screen.ItemShelf("Continue Movies", continueMovies)
-            },
-            onMoreContinueTv = {
-                screen = Screen.ItemShelf("Continue TV", continueEpisodes)
-            },
-            onMoreRecentMovies = {
-                val active = session
-                val movieLib = libraries.firstOrNull { it.type == "movies" || it.type == "movie" }
-                if (active != null && movieLib != null) {
-                    loadLibraryPage(movieLib, active, page = 0, genre = "", sort = "mtime", minRating = 0.0, seenStatus = "", decades = "", resetFiltersOnLibraryChange = false)
-                }
-            },
-            onMoreRecentTv = {
-                val active = session
-                val tvLib = libraries.firstOrNull { it.type == "tv" }
-                if (active != null && tvLib != null) {
-                    loadLibraryPage(tvLib, active, page = 0, genre = "", sort = "mtime", minRating = 0.0, seenStatus = "", decades = "", resetFiltersOnLibraryChange = false)
-                }
-            },
+            onMore = ::openShelfTarget,
+            onSurprise = { session?.let { active -> surpriseMe(active) } },
             onPlayItem = { item ->
                 scope.launch {
                     val progress = session?.let { active -> runCatching { Api(active).progress(item.id) }.getOrNull() }

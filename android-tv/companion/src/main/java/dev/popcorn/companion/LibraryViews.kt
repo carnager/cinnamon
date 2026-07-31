@@ -155,16 +155,8 @@ fun BottomNavigation(page: Page, onHome: () -> Unit, onMovies: () -> Unit, onSho
 @Composable
 fun HomePage(
     session: Session,
-    recommendations: List<Recommendation>,
-    continueMovies: List<PopItem>,
-    continueEpisodes: List<PopItem>,
+    sections: List<HomeSection>,
     resume: Map<Long, Float>,
-    recentMovies: List<PopItem>,
-    recentShows: List<ShowSummary>,
-    topMovies: List<PopItem>,
-    topShows: List<ShowSummary>,
-    watchlistMovies: List<PopItem>,
-    watchlistTvShows: List<ShowSummary>,
     completedItems: Set<Long>,
     completedShows: Set<String>,
     watchlistItems: Set<Long>,
@@ -173,25 +165,24 @@ fun HomePage(
     onShow: (ShowSummary) -> Unit,
     onEpisode: (PopItem) -> Unit,
 ) {
-    val heroPicks = remember(recommendations) {
-        recommendations.mapNotNull { recommendation ->
+    val heroSection = sections.firstOrNull { it.layout == "hero" }
+    val heroPicks = remember(heroSection) {
+        heroSection?.entries.orEmpty().mapNotNull { recommendation ->
             recommendation.item?.let { HomeHeroPick.fromItem(it, recommendation.reason) }
                 ?: recommendation.show?.let { HomeHeroPick.fromShow(it, recommendation.reason) }
         }.filter { it.backdropId > 0 && it.backdropVersion > 0 }
     }
     LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 22.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
         if (heroPicks.isNotEmpty()) item { MobileHomeHero(session, heroPicks, onMovie, onShow, onEpisode) }
-        if (continueMovies.isNotEmpty()) item { ContinueShelf("Continue Movies", "${continueMovies.size} in progress", session, continueMovies, resume, onMovie) }
-        if (continueEpisodes.isNotEmpty()) item { ContinueShelf("Continue TV", "${continueEpisodes.size} episodes", session, continueEpisodes, resume, onEpisode) }
-        if (recentMovies.isNotEmpty()) item { MovieShelf("Recently Added Movies", "${recentMovies.size} new", session, recentMovies, completedItems, watchlistItems, onMovie) }
-        if (recentShows.isNotEmpty()) item { ShowShelf("Recently Added TV", "${recentShows.size} shows", session, recentShows, completedShows, watchlistShows, onShow) }
-        // Watchlist and top rated were being fetched and handed to this screen
-        // only to seed the hero, so saved titles had nowhere to be seen. Same
-        // shelves, same order as the web home.
-        if (watchlistMovies.isNotEmpty()) item { MovieShelf("Your Watchlist", "${watchlistMovies.size} saved", session, watchlistMovies, completedItems, watchlistItems, onMovie) }
-        if (watchlistTvShows.isNotEmpty()) item { ShowShelf("Your Watchlist · TV", "${watchlistTvShows.size} saved", session, watchlistTvShows, completedShows, watchlistShows, onShow) }
-        if (topMovies.isNotEmpty()) item { MovieShelf("Top Rated Movies", "", session, topMovies, completedItems, watchlistItems, onMovie) }
-        if (topShows.isNotEmpty()) item { ShowShelf("Top Rated TV", "", session, topShows, completedShows, watchlistShows, onShow) }
+        // Anything whose layout this build cannot draw is a section type from a
+        // newer server: skip it rather than render an empty row.
+        items(sections.filter { it !== heroSection && it.layout in setOf("poster", "progress") }, key = { it.id }) { section ->
+            when {
+                section.layout == "progress" -> ContinueShelf(section.title, section.subtitle, session, section.items, resume, if (section.kind == "episode") onEpisode else onMovie)
+                section.shows.isNotEmpty() -> ShowShelf(section.title, section.subtitle, session, section.shows, completedShows, watchlistShows, onShow)
+                section.items.isNotEmpty() -> MovieShelf(section.title, section.subtitle, session, section.items, completedItems, watchlistItems, onMovie)
+            }
+        }
     }
 }
 

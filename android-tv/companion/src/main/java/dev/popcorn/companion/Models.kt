@@ -35,16 +35,31 @@ data class WatchHistoryEntry(
     val source: String,
 )
 data class WatchHistory(val items: List<WatchHistoryEntry>, val source: String, val traktLinked: Boolean)
+// A home shelf as composed by the server. The client switches on layout, never
+// on type, so section types added server-side render without an app change and
+// unknown layouts are skipped.
+data class HomeSection(
+    val id: String,
+    val type: String,
+    val layout: String,
+    val kind: String,
+    val title: String,
+    val subtitle: String,
+    val more: String,
+    val items: List<PopItem>,
+    val shows: List<ShowSummary>,
+    val entries: List<Recommendation>,
+)
+
 data class HomeContent(
     val libraries: List<Library>,
-    val recentMovies: List<PopItem>,
-    val recentShows: List<ShowSummary>,
-    val continueMovies: List<PopItem>,
-    val continueEpisodes: List<PopItem>,
+    val sections: List<HomeSection>,
+    // The raw sections array, kept verbatim so the offline cache replays the
+    // payload through the same parser instead of a second serializer.
+    val sectionsJson: String,
     val progress: List<PlaybackProgress>,
     val showProgress: List<ShowProgress>,
     val watchlist: Watchlist,
-    val recommendations: List<Recommendation>,
     val excludedRecommendationKeys: Set<String>,
 ) {
     val resume: Map<Long, Float>

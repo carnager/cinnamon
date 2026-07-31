@@ -29,6 +29,16 @@ object CompanionCache {
         }
     }
 
+    fun readHomeSections(context: Context, session: Session): List<HomeSection> {
+        return runCatching {
+            jsonToHomeSections(JSONArray(cacheFile(context, session, "home_sections").readText()))
+        }.getOrDefault(emptyList())
+    }
+
+    fun writeHomeSections(context: Context, session: Session, sectionsJson: String) {
+        runCatching { cacheFile(context, session, "home_sections").writeText(sectionsJson) }
+    }
+
     fun readItems(context: Context, session: Session, key: String): List<PopItem> {
         return runCatching {
             val arr = JSONArray(cacheFile(context, session, key).readText())
@@ -300,17 +310,17 @@ class Api(private val session: Session) {
     // The compact response contains every user-specific home row and marker,
     // but skips the 300-item library samples used only by the TV client.
     suspend fun home(): HomeContent = withContext(Dispatchers.IO) {
-        val o = request("/api/home?compact=1")
+        // profile=phone picks this client's home layout, falling back to the
+        // user's default layout when they have not customised the phone.
+        val o = request("/api/home?profile=phone")
         val libraries = o.optJSONArray("libraries") ?: JSONArray()
         val progress = o.optJSONArray("progress") ?: JSONArray()
         val showProgress = o.optJSONArray("showProgress") ?: JSONArray()
         val watchlist = o.optJSONObject("watchlist") ?: JSONObject()
         HomeContent(
             libraries = (0 until libraries.length()).map { jsonToLibrary(libraries.getJSONObject(it)) },
-            recentMovies = parseItems(o.optJSONArray("recentMovies") ?: JSONArray()),
-            recentShows = parseShows(o.optJSONArray("recentShows") ?: JSONArray()),
-            continueMovies = parseItems(o.optJSONArray("continueMovies") ?: JSONArray()),
-            continueEpisodes = parseItems(o.optJSONArray("continueEpisodes") ?: JSONArray()),
+            sections = jsonToHomeSections(o.optJSONArray("sections") ?: JSONArray()),
+            sectionsJson = (o.optJSONArray("sections") ?: JSONArray()).toString(),
             progress = (0 until progress.length()).map {
                 val item = progress.getJSONObject(it)
                 PlaybackProgress(
@@ -334,7 +344,6 @@ class Api(private val session: Session) {
                 items = parseItems(watchlist.optJSONArray("items") ?: JSONArray()),
                 shows = parseShows(watchlist.optJSONArray("shows") ?: JSONArray()),
             ),
-            recommendations = parseRecommendations(o.optJSONArray("recommendations") ?: JSONArray()),
             excludedRecommendationKeys = jsonStringSet(o.optJSONArray("excludedRecommendationKeys") ?: JSONArray()),
         )
     }
@@ -602,16 +611,6 @@ class Api(private val session: Session) {
 
     private fun parseItems(arr: JSONArray): List<PopItem> = (0 until arr.length()).map { jsonToItem(arr.getJSONObject(it)) }
 
-    private fun parseRecommendations(arr: JSONArray): List<Recommendation> = (0 until arr.length()).map { index ->
-        val row = arr.getJSONObject(index)
-        Recommendation(
-            key = row.optString("key"),
-            reason = row.optString("reason"),
-            source = row.optString("source"),
-            item = row.optJSONObject("item")?.let(::jsonToItem),
-            show = row.optJSONObject("show")?.let(::jsonToShow),
-        )
-    }
 
     private fun jsonStringSet(arr: JSONArray): Set<String> =
         (0 until arr.length()).mapNotNull { arr.optString(it).takeIf(String::isNotBlank) }.toSet()
@@ -678,6 +677,34 @@ private fun libraryToJson(library: Library): JSONObject = JSONObject()
     .put("id", library.id)
     .put("name", library.name)
     .put("type", library.type)
+
+private fun jsonToHomeSections(arr: JSONArray): List<HomeSection> = (0 until arr.length()).map { index ->
+    val o = arr.getJSONObject(index)
+    val items = o.optJSONArray("items") ?: JSONArray()
+    val shows = o.optJSONArray("shows") ?: JSONArray()
+    val entries = o.optJSONArray("entries") ?: JSONArray()
+    HomeSection(
+        id = o.optString("id"),
+        type = o.optString("type"),
+        layout = o.optString("layout"),
+        kind = o.optString("kind"),
+        title = o.optString("title"),
+        subtitle = o.optString("subtitle"),
+        more = o.optString("more"),
+        items = (0 until items.length()).map { jsonToItem(items.getJSONObject(it)) },
+        shows = (0 until shows.length()).map { jsonToShow(shows.getJSONObject(it)) },
+        entries = (0 until entries.length()).map { entryIndex ->
+            val row = entries.getJSONObject(entryIndex)
+            Recommendation(
+                key = row.optString("key"),
+                reason = row.optString("reason"),
+                source = row.optString("source"),
+                item = row.optJSONObject("item")?.let(::jsonToItem),
+                show = row.optJSONObject("show")?.let(::jsonToShow),
+            )
+        },
+    )
+}
 
 private fun jsonToItem(o: JSONObject): PopItem = PopItem(
     id = o.getLong("id"),

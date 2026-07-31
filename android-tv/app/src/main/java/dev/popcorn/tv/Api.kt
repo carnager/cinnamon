@@ -137,6 +137,24 @@ private fun showToJson(show: ShowSummary): JSONObject {
         .put("rating", show.rating)
 }
 
+private fun jsonToHomeLayout(o: JSONObject): HomeLayout {
+    val arr = o.optJSONArray("sections") ?: JSONArray()
+    return HomeLayout(
+        source = o.optString("source"),
+        sections = (0 until arr.length()).map { index ->
+            val row = arr.getJSONObject(index)
+            val params = row.optJSONObject("params") ?: JSONObject()
+            HomeLayoutSection(
+                id = row.optString("id"),
+                type = row.optString("type"),
+                title = row.optString("title"),
+                enabled = row.optBoolean("enabled"),
+                params = params.keys().asSequence().associateWith { params.optString(it) },
+            )
+        },
+    )
+}
+
 private fun jsonToHomeSections(arr: JSONArray): List<HomeSection> = (0 until arr.length()).map { index ->
     val o = arr.getJSONObject(index)
     val items = o.optJSONArray("items") ?: JSONArray()
@@ -354,9 +372,53 @@ class Api(private val session: Session) {
         )
     }
 
-    suspend fun surprise(): Pair<PopItem?, ShowSummary?> = withContext(Dispatchers.IO) {
-        val json = request("/api/surprise")
-        json.optJSONObject("item")?.let(::jsonToItem) to json.optJSONObject("show")?.let(::jsonToShow)
+    suspend fun homeCatalog(): List<HomeSectionType> = withContext(Dispatchers.IO) {
+        val arr = request("/api/home/catalog").optJSONArray("sections") ?: JSONArray()
+        (0 until arr.length()).map { index ->
+            val o = arr.getJSONObject(index)
+            val params = o.optJSONArray("params") ?: JSONArray()
+            HomeSectionType(
+                type = o.optString("type"),
+                label = o.optString("label"),
+                description = o.optString("description"),
+                layout = o.optString("layout"),
+                kind = o.optString("kind"),
+                repeatable = o.optBoolean("repeatable"),
+                params = (0 until params.length()).map { paramIndex ->
+                    val p = params.getJSONObject(paramIndex)
+                    val options = p.optJSONArray("options") ?: JSONArray()
+                    HomeSectionParam(
+                        name = p.optString("name"),
+                        label = p.optString("label"),
+                        type = p.optString("type"),
+                        options = (0 until options.length()).map { options.optString(it) },
+                        default = p.optString("default"),
+                        required = p.optBoolean("required"),
+                    )
+                },
+            )
+        }
+    }
+
+    suspend fun homeLayout(): HomeLayout = withContext(Dispatchers.IO) {
+        jsonToHomeLayout(request("/api/home/layout"))
+    }
+
+    suspend fun saveHomeLayout(sections: List<HomeLayoutSection>): HomeLayout = withContext(Dispatchers.IO) {
+        val arr = JSONArray()
+        sections.forEach { section ->
+            val params = JSONObject()
+            section.params.forEach { (key, value) -> params.put(key, value) }
+            arr.put(
+                JSONObject()
+                    .put("id", section.id)
+                    .put("type", section.type)
+                    .put("title", section.title)
+                    .put("enabled", section.enabled)
+                    .put("params", params)
+            )
+        }
+        jsonToHomeLayout(request("/api/home/layout", "PUT", JSONObject().put("sections", arr).toString()))
     }
 
     suspend fun item(itemId: Long): PopItem = withContext(Dispatchers.IO) {

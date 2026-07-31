@@ -173,6 +173,34 @@ data class HomeSection(
     val shows: List<ShowSummary>,
     val entries: List<Recommendation>,
 )
+// The layout editor's vocabulary: what shelves exist (catalog) and which ones
+// this account has chosen, in order.
+data class HomeSectionType(
+    val type: String,
+    val label: String,
+    val description: String,
+    val layout: String,
+    val kind: String,
+    val repeatable: Boolean,
+    val params: List<HomeSectionParam>,
+)
+data class HomeSectionParam(
+    val name: String,
+    val label: String,
+    val type: String,
+    val options: List<String>,
+    val default: String,
+    val required: Boolean,
+)
+data class HomeLayoutSection(
+    val id: String,
+    val type: String,
+    val title: String = "",
+    val enabled: Boolean = true,
+    val params: Map<String, String> = emptyMap(),
+)
+data class HomeLayout(val source: String, val sections: List<HomeLayoutSection>)
+
 data class RemoteCommand(val id: Long, val type: String, val payload: JSONObject)
 data class PlayerRemoteCommand(val id: Long, val type: String, val payload: JSONObject)
 data class QRLoginStart(val code: String, val expiresAt: String)

@@ -111,6 +111,15 @@ fun HomeView(
     session: Session?,
     libraries: List<Library>,
     sections: List<HomeSection>,
+    editing: Boolean,
+    editDraft: List<HomeLayoutSection>,
+    editCatalog: List<HomeSectionType>,
+    editSelection: Int?,
+    onEdit: () -> Unit,
+    onEditDone: () -> Unit,
+    onEditShelves: () -> Unit,
+    onEditSelect: (Int?) -> Unit,
+    onEditMove: (Int, Int) -> Unit,
     completedItems: Set<Long>,
     completedShows: Set<String>,
     watchlistItems: Set<Long>,
@@ -131,7 +140,6 @@ fun HomeView(
     onItem: (PopItem) -> Unit,
     onShow: (ShowSummary) -> Unit,
     onMore: (HomeSection) -> Unit,
-    onSurprise: () -> Unit,
     onItemMenu: (PopItem, FocusRequester?) -> Unit,
     onShowMenu: (ShowSummary, FocusRequester?) -> Unit,
 ) {
@@ -161,11 +169,12 @@ fun HomeView(
             }
         },
         headerActions = {
-            Pill(
-                text = "Surprise Me",
-                selected = false,
-                onClick = onSurprise,
-            )
+            if (editing) {
+                Pill(text = "Shelves", selected = false, onClick = onEditShelves)
+                Pill(text = "Done", selected = true, onClick = onEditDone)
+            } else {
+                Pill(text = "Edit", selected = false, onClick = onEdit)
+            }
         },
     ) {
         if (error.isNotBlank()) {
@@ -175,6 +184,17 @@ fun HomeView(
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
             }
+        } else if (editing) {
+            EditableHome(
+                session = session,
+                draft = editDraft,
+                catalog = editCatalog,
+                rendered = sections,
+                selectedIndex = editSelection,
+                onSelect = onEditSelect,
+                onMove = onEditMove,
+                onLeftEdge = { runCatching { sideNavigationFocus.requestFocus() }.isSuccess },
+            )
         } else {
             CuratedLanding(
                 session = session,

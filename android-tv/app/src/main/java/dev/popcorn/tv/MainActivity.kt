@@ -96,6 +96,13 @@ fun PopcornApp() {
     var items by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var shows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
     var homeSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
+    var homeEditing by remember { mutableStateOf(false) }
+    var homeEditDraft by remember { mutableStateOf<List<HomeLayoutSection>>(emptyList()) }
+    var homeCatalog by remember { mutableStateOf<List<HomeSectionType>>(emptyList()) }
+    var homeEditSelection by remember { mutableStateOf<Int?>(null) }
+    var homeShelvesOpen by remember { mutableStateOf(false) }
+    var homeGenrePicker by remember { mutableStateOf(false) }
+    var homeGenres by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var recommendationExclusionKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
     var completedItems by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var resumeFractionById by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
@@ -782,20 +789,51 @@ fun PopcornApp() {
         }
     }
 
-    fun surpriseMe(activeSession: Session) {
+    // Edit mode works on the layout document, not on the rendered shelves: the
+    // server owns what a shelf contains, the user owns which ones there are.
+    fun startHomeEdit(activeSession: Session) {
         scope.launch {
-            runCatching { Api(activeSession).surprise() }
-                .onSuccess { (item, show) ->
-                    when {
-                        item != null -> screen = Screen.Detail(item, null, fromHome = true)
-                        show != null -> {
-                            showFocusSeason = null
-                            screen = Screen.Show(show, fromHome = true)
-                        }
-                        else -> error = "Nothing left to surprise you with"
-                    }
-                }
-                .onFailure { error = it.message ?: "Surprise failed" }
+            val api = Api(activeSession)
+            val catalog = runCatching { api.homeCatalog() }.getOrNull()
+            val layout = runCatching { api.homeLayout() }.getOrNull()
+            if (catalog == null || layout == null) {
+                error = "Could not load the shelf list"
+                return@launch
+            }
+            homeCatalog = catalog
+            homeEditDraft = layout.sections
+            homeEditSelection = null
+            homeEditing = true
+        }
+    }
+
+    fun finishHomeEdit(activeSession: Session) {
+        val draft = homeEditDraft
+        homeEditing = false
+        homeEditSelection = null
+        homeShelvesOpen = false
+        homeGenrePicker = false
+        scope.launch {
+            runCatching { Api(activeSession).saveHomeLayout(draft) }
+                .onSuccess { loadHome(activeSession, libraries) }
+                .onFailure { error = it.message ?: "Could not save the layout" }
+        }
+    }
+
+    fun loadHomeGenres(activeSession: Session) {
+        if (homeGenres.isNotEmpty()) return
+        scope.launch {
+            val api = Api(activeSession)
+            val movieLib = libraries.firstOrNull { it.type == "movies" || it.type == "movie" }
+            val tvLib = libraries.firstOrNull { it.type == "tv" }
+            val rows = mutableListOf<Pair<String, String>>()
+            movieLib?.let { library ->
+                runCatching { api.genres(library.id) }.getOrDefault(emptyList()).forEach { rows.add(it to "movies") }
+            }
+            tvLib?.let { library ->
+                runCatching { api.genres(library.id) }.getOrDefault(emptyList()).forEach { rows.add(it to "tv") }
+            }
+            homeGenres = rows
         }
     }
 
@@ -878,6 +916,16 @@ fun PopcornApp() {
         }
     }
 
+    // Leaving edit mode saves, so Back and Done do the same thing.
+    BackHandler(enabled = screen is Screen.Home && homeEditing) {
+        when {
+            homeGenrePicker -> homeGenrePicker = false
+            homeShelvesOpen -> homeShelvesOpen = false
+            homeEditSelection != null -> homeEditSelection = null
+            else -> session?.let { finishHomeEdit(it) }
+        }
+    }
+
     BackHandler(
         enabled = screen !is Screen.Home &&
             screen !is Screen.Login &&
@@ -928,6 +976,18 @@ fun PopcornApp() {
             session = session,
             libraries = libraries,
             sections = homeSections,
+            editing = homeEditing,
+            editDraft = homeEditDraft,
+            editCatalog = homeCatalog,
+            editSelection = homeEditSelection,
+            onEdit = { session?.let { startHomeEdit(it) } },
+            onEditDone = { session?.let { finishHomeEdit(it) } },
+            onEditShelves = { homeShelvesOpen = true },
+            onEditSelect = { homeEditSelection = it },
+            onEditMove = { from, to ->
+                homeEditDraft = moveSection(homeEditDraft, from, to)
+                homeEditSelection = to
+            },
             completedItems = completedItems,
             completedShows = completedShows,
             watchlistItems = watchlistItems,
@@ -951,7 +1011,6 @@ fun PopcornApp() {
                 screen = Screen.Login
             },
             onMore = ::openShelfTarget,
-            onSurprise = { session?.let { active -> surpriseMe(active) } },
             onPlayItem = { item ->
                 scope.launch {
                     val progress = session?.let { active -> runCatching { Api(active).progress(item.id) }.getOrNull() }
@@ -1361,6 +1420,63 @@ fun PopcornApp() {
             onDismiss = { closeWatchMenu(menu) },
         )
     }
+    if (homeShelvesOpen && !homeGenrePicker) {
+        val genreType = homeCatalog.firstOrNull { it.repeatable && it.params.any { param -> param.name == "genre" } }
+        TvCheckListShelf(
+            title = "SHELVES",
+            subtitle = "What home shows",
+            rows = homeCatalog.map { type ->
+                if (type.type == genreType?.type) {
+                    val count = homeEditDraft.count { it.type == type.type }
+                    TvCheckRow(
+                        key = type.type,
+                        label = type.label,
+                        description = if (count > 0) "$count on home · pick genres" else "Pick one or more genres",
+                        checked = count > 0,
+                        onToggle = {
+                            session?.let { loadHomeGenres(it) }
+                            homeGenrePicker = true
+                        },
+                    )
+                } else {
+                    TvCheckRow(
+                        key = type.type,
+                        label = type.label,
+                        description = type.description,
+                        checked = homeEditDraft.any { it.type == type.type },
+                        onToggle = {
+                            homeEditDraft = toggleSectionType(homeEditDraft, type)
+                            homeEditSelection = null
+                        },
+                    )
+                }
+            },
+            onDismiss = { homeShelvesOpen = false },
+        )
+    }
+
+    if (homeGenrePicker) {
+        val genreType = homeCatalog.firstOrNull { it.repeatable && it.params.any { param -> param.name == "genre" } }
+        TvCheckListShelf(
+            title = "GENRE SHELVES",
+            subtitle = "One shelf per genre",
+            rows = homeGenres.map { (genre, kind) ->
+                TvCheckRow(
+                    key = "$kind:$genre",
+                    label = genre,
+                    description = if (kind == "tv") "TV shows" else "Movies",
+                    checked = homeEditDraft.any { it.type == genreType?.type && it.params["genre"] == genre && genreKind(it) == kind },
+                    onToggle = {
+                        val type = genreType ?: return@TvCheckRow
+                        homeEditDraft = toggleGenreSection(homeEditDraft, type, genre, kind)
+                        homeEditSelection = null
+                    },
+                )
+            },
+            onDismiss = { homeGenrePicker = false },
+        )
+    }
+
     if (updateDialogOpen) {
         UpdateApplyDialog(
             session = session,

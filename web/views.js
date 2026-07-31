@@ -813,11 +813,226 @@ function appUploadForm(title, app) {
   return form;
 }
 
+/* ── Home layout editor ──
+   The catalog drives this page: every section type, its parameters and their
+   allowed values come from the server, so a new section type shows up here
+   without a change to this file. */
+
+const HOME_PROFILE_LABELS = [
+  ["default", "Default"],
+  ["tv", "TV"],
+  ["phone", "Phone"],
+  ["web", "Web"],
+];
+
+async function renderHomeLayout(profile, skipHistory) {
+  stopPlayer();
+  activeView = "settings";
+  currentShow = null;
+  currentSeason = null;
+  search.value = "";
+  renderNav();
+  const active = HOME_PROFILE_LABELS.some(([id]) => id === profile) ? profile : "default";
+  if (!skipHistory) pushState({ view: "homeLayout", profile: active });
+
+  const [catalog, layout] = await Promise.all([
+    api("/api/home/catalog").catch(() => ({ sections: [] })),
+    api(`/api/home/layout?profile=${encodeURIComponent(active)}`).catch(() => ({ sections: [] })),
+  ]);
+  const types = new Map((catalog.sections || []).map((entry) => [entry.type, entry]));
+  const draft = { sections: (layout.sections || []).map((section) => ({ ...section, params: { ...(section.params || {}) } })) };
+
+  const header = el("div", "view-header settings-hero");
+  header.append(el("div", "settings-hero-copy", el("h1", null, "Settings")));
+
+  const content = el("div", "settings-view");
+  content.append(header);
+
+  const section = settingsSection("Home layout", "Which shelves home shows, and in what order");
+  const tabs = el("div", "home-layout-tabs");
+  for (const [id, label] of HOME_PROFILE_LABELS) {
+    const tab = el("button", id === active ? "genre-filter active" : "genre-filter", label);
+    tab.type = "button";
+    tab.addEventListener("click", () => renderHomeLayout(id).catch(console.error));
+    tabs.append(tab);
+  }
+  section.append(tabs);
+
+  const inherited = active !== "default" && layout.source !== active;
+  if (inherited) {
+    section.append(el("p", "settings-copy", `${labelForProfile(active)} follows the default layout. Saving here gives it a layout of its own.`));
+  } else if (active === "default") {
+    section.append(el("p", "settings-copy", "Used by every client that has no layout of its own."));
+  }
+
+  const list = el("div", "home-layout-list");
+  const output = el("div", "settings-output");
+
+  const redraw = () => {
+    list.replaceChildren();
+    if (!draft.sections.length) {
+      list.append(el("p", "settings-copy", "No shelves. Add one below, or reset to the default layout."));
+    }
+    draft.sections.forEach((entry, index) => {
+      list.append(homeLayoutRow(entry, index, draft, types, redraw));
+    });
+  };
+  redraw();
+  section.append(list);
+
+  const adder = el("select", "home-layout-add");
+  adder.append(el("option", null, "Add a shelf…"));
+  for (const entry of catalog.sections || []) {
+    const used = draft.sections.some((s) => s.type === entry.type);
+    if (used && !entry.repeatable) continue;
+    const option = el("option", null, entry.label);
+    option.value = entry.type;
+    adder.append(option);
+  }
+  adder.addEventListener("change", () => {
+    const type = adder.value;
+    const entry = types.get(type);
+    adder.selectedIndex = 0;
+    if (!entry) return;
+    const params = {};
+    for (const param of entry.params || []) {
+      if (param.default) params[param.name] = param.default;
+    }
+    draft.sections.push({ id: "", type, enabled: true, title: "", params });
+    redraw();
+  });
+
+  const save = el("button", "primary", "Save layout");
+  save.type = "button";
+  save.addEventListener("click", async () => {
+    save.disabled = true;
+    output.className = "settings-output";
+    output.textContent = "Saving…";
+    try {
+      const body = { sections: draft.sections.map(({ id, type, enabled, title, params }) => ({ id, type, enabled, title, params })) };
+      await api(`/api/home/layout?profile=${encodeURIComponent(active)}`, { method: "PUT", body: JSON.stringify(body) });
+      output.textContent = "Saved. Home will use it on the next load.";
+    } catch (err) {
+      output.className = "settings-output error";
+      output.textContent = cleanError(err);
+    }
+    save.disabled = false;
+  });
+
+  const reset = el("button", "secondary", "Reset to default");
+  reset.type = "button";
+  reset.addEventListener("click", async () => {
+    reset.disabled = true;
+    try {
+      await api(`/api/home/layout?profile=${encodeURIComponent(active)}`, { method: "DELETE" });
+      await renderHomeLayout(active, true);
+    } catch (err) {
+      reset.disabled = false;
+      output.className = "settings-output error";
+      output.textContent = cleanError(err);
+    }
+  });
+
+  const actions = el("div", "home-layout-actions");
+  actions.append(adder, save, reset);
+  section.append(actions, output);
+  content.append(section);
+  setView(settingsShell("home", content));
+}
+
+function labelForProfile(profile) {
+  return (HOME_PROFILE_LABELS.find(([id]) => id === profile) || [profile, profile])[1];
+}
+
+function homeLayoutRow(entry, index, draft, types, redraw) {
+  const definition = types.get(entry.type);
+  const row = el("div", entry.enabled ? "home-layout-row" : "home-layout-row disabled");
+
+  const move = el("div", "home-layout-move");
+  const up = el("button", "secondary", "↑");
+  up.type = "button";
+  up.disabled = index === 0;
+  up.addEventListener("click", () => {
+    draft.sections.splice(index - 1, 0, draft.sections.splice(index, 1)[0]);
+    redraw();
+  });
+  const down = el("button", "secondary", "↓");
+  down.type = "button";
+  down.disabled = index === draft.sections.length - 1;
+  down.addEventListener("click", () => {
+    draft.sections.splice(index + 1, 0, draft.sections.splice(index, 1)[0]);
+    redraw();
+  });
+  move.append(up, down);
+
+  const copy = el("div", "setting-copy");
+  copy.append(el("strong", null, definition?.label || entry.type));
+  if (definition?.description) copy.append(el("span", null, definition.description));
+  else if (!definition) copy.append(el("span", null, "This server no longer offers this shelf."));
+
+  const params = el("div", "home-layout-params");
+  for (const param of definition?.params || []) {
+    params.append(homeLayoutParam(param, entry, redraw));
+  }
+
+  const toggle = el("label", "home-layout-toggle");
+  const check = el("input");
+  check.type = "checkbox";
+  check.checked = Boolean(entry.enabled);
+  check.addEventListener("change", () => {
+    entry.enabled = check.checked;
+    redraw();
+  });
+  toggle.append(check, el("span", null, "Show"));
+
+  const remove = el("button", "secondary", "Remove");
+  remove.type = "button";
+  remove.addEventListener("click", () => {
+    draft.sections.splice(index, 1);
+    redraw();
+  });
+
+  const controls = el("div", "home-layout-controls");
+  controls.append(toggle, remove);
+  row.append(move, copy, params, controls);
+  return row;
+}
+
+function homeLayoutParam(param, entry, redraw) {
+  const wrap = el("label", "home-layout-param");
+  wrap.append(el("span", null, param.label || param.name));
+  let input;
+  if (param.type === "enum") {
+    input = el("select");
+    for (const option of param.options || []) {
+      const node = el("option", null, option);
+      node.value = option;
+      input.append(node);
+    }
+    input.value = entry.params[param.name] || param.default || (param.options || [])[0] || "";
+  } else {
+    input = el("input");
+    input.type = param.type === "int" ? "number" : "text";
+    if (param.type === "int") input.min = "1";
+    input.value = entry.params[param.name] || param.default || "";
+    if (param.required) input.placeholder = "required";
+  }
+  input.addEventListener("change", () => {
+    const value = String(input.value || "").trim();
+    if (value) entry.params[param.name] = value;
+    else delete entry.params[param.name];
+    if (param.type === "enum") redraw();
+  });
+  wrap.append(input);
+  return wrap;
+}
+
 function settingsShell(active, content) {
   const shell = el("div", "settings-shell settings-page");
   const sidebar = el("aside", "settings-sidebar");
   const nav = el("nav", "settings-sidebar-nav");
   nav.append(settingsNavButton("Overview", active === "overview", () => renderSettings().catch(console.error)));
+  nav.append(settingsNavButton("Home layout", active === "home", () => renderHomeLayout("default").catch(console.error)));
   if (currentUser?.isAdmin) {
     nav.append(settingsNavButton("Users", active === "users", () => renderUsers().catch(console.error)));
   }

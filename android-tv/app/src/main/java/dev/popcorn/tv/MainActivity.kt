@@ -99,12 +99,13 @@ fun PopcornApp() {
     var homeShows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
     var continueMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var continueEpisodes by remember { mutableStateOf<List<PopItem>>(emptyList()) }
+    var recommendations by remember { mutableStateOf<List<Recommendation>>(emptyList()) }
+    var recommendationExclusionKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
     var recentMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var recentShows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
     var completedItems by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var resumeFractionById by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
     var completedShows by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var heroAnchorShows by remember { mutableStateOf<Set<String>>(emptySet()) }
     var userItemRatings by remember { mutableStateOf<Map<Long, Int>>(emptyMap()) }
     var watchlistItems by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var watchlistShows by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -157,7 +158,6 @@ fun PopcornApp() {
                 completedItems = progress.filter { it.completed }.map { it.itemId }.toSet()
                 resumeFractionById = resumeFractionMap(progress)
                 completedShows = showProgress.filter { it.completed }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
-                heroAnchorShows = showProgress.filter { it.completed || it.completedCount >= 2 }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
                 userItemRatings = api.userRatings().filter { it.kind != "show" && it.itemId > 0 }.associate { it.itemId to it.rating }
             }
         }
@@ -244,10 +244,11 @@ fun PopcornApp() {
         recentShows = payload.recentShows
         continueMovies = payload.continueMovies
         continueEpisodes = payload.continueEpisodes
+        recommendations = payload.recommendations
+        recommendationExclusionKeys = payload.excludedRecommendationKeys
         completedItems = payload.progress.filter { it.completed }.map { it.itemId }.toSet()
         resumeFractionById = resumeFractionMap(payload.progress)
         completedShows = payload.showProgress.filter { it.completed }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
-        heroAnchorShows = payload.showProgress.filter { it.completed || it.completedCount >= 2 }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
         watchlistMovies = payload.watchlist.items.filter { it.kind == "movie" }
         watchlistTvShows = payload.watchlist.shows
         watchlistItems = payload.watchlist.items.map { it.id }.toSet()
@@ -359,6 +360,89 @@ fun PopcornApp() {
             }.onFailure {
                 error = it.message ?: "Failed to update watchlist"
             }
+        }
+    }
+
+    fun setItemRecommendationExcluded(activeSession: Session, item: PopItem, excluded: Boolean) {
+        scope.launch {
+            val key = "item:${item.id}"
+            runCatching {
+                val api = Api(activeSession)
+                if (excluded) api.excludeItemRecommendation(item.id) else api.restoreItemRecommendation(item.id)
+            }.onSuccess {
+                recommendationExclusionKeys = if (excluded) recommendationExclusionKeys + key else recommendationExclusionKeys - key
+                recommendations = recommendations.filterNot { it.key == key }
+            }.onFailure { error = it.message ?: "Failed to update recommendations" }
+        }
+    }
+
+    fun setShowRecommendationExcluded(activeSession: Session, show: ShowSummary, excluded: Boolean) {
+        scope.launch {
+            val key = "show:${show.libraryId.trim().lowercase()}:${show.title.trim().lowercase()}"
+            runCatching {
+                val api = Api(activeSession)
+                if (excluded) api.excludeShowRecommendation(show.libraryId, show.title) else api.restoreShowRecommendation(show.libraryId, show.title)
+            }.onSuccess {
+                recommendationExclusionKeys = if (excluded) recommendationExclusionKeys + key else recommendationExclusionKeys - key
+                recommendations = recommendations.filterNot { it.key == key }
+            }.onFailure { error = it.message ?: "Failed to update recommendations" }
+        }
+    }
+
+    fun setItemPreference(activeSession: Session, item: PopItem, preference: MediaPreference) {
+        scope.launch {
+            val key = "item:${item.id}"
+            runCatching {
+                val api = Api(activeSession)
+                when (preference) {
+                    MediaPreference.Unwatched -> {
+                        api.restoreItemRecommendation(item.id)
+                        api.unmarkItemWatched(item.id)
+                    }
+                    MediaPreference.Seen -> {
+                        api.restoreItemRecommendation(item.id)
+                        api.markItemWatched(item)
+                    }
+                    MediaPreference.NotInterested -> {
+                        api.unmarkItemWatched(item.id)
+                        api.excludeItemRecommendation(item.id)
+                    }
+                }
+            }.onSuccess {
+                completedItems = if (preference == MediaPreference.Seen) completedItems + item.id else completedItems - item.id
+                recommendationExclusionKeys = if (preference == MediaPreference.NotInterested) recommendationExclusionKeys + key else recommendationExclusionKeys - key
+                if (preference == MediaPreference.NotInterested) recommendations = recommendations.filterNot { it.key == key }
+                refreshProgress(activeSession)
+            }.onFailure { error = it.message ?: "Failed to update viewing preference" }
+        }
+    }
+
+    fun setShowPreference(activeSession: Session, show: ShowSummary, preference: MediaPreference) {
+        scope.launch {
+            val marker = showKey(show)
+            val key = "show:${show.libraryId.trim().lowercase()}:${show.title.trim().lowercase()}"
+            runCatching {
+                val api = Api(activeSession)
+                when (preference) {
+                    MediaPreference.Unwatched -> {
+                        api.restoreShowRecommendation(show.libraryId, show.title)
+                        api.unmarkShowWatched(show.libraryId, show.title)
+                    }
+                    MediaPreference.Seen -> {
+                        api.restoreShowRecommendation(show.libraryId, show.title)
+                        api.markShowWatched(show.libraryId, show.title)
+                    }
+                    MediaPreference.NotInterested -> {
+                        api.unmarkShowWatched(show.libraryId, show.title)
+                        api.excludeShowRecommendation(show.libraryId, show.title)
+                    }
+                }
+            }.onSuccess {
+                completedShows = if (preference == MediaPreference.Seen) completedShows + marker else completedShows - marker
+                recommendationExclusionKeys = if (preference == MediaPreference.NotInterested) recommendationExclusionKeys + key else recommendationExclusionKeys - key
+                if (preference == MediaPreference.NotInterested) recommendations = recommendations.filterNot { it.key == key }
+                refreshProgress(activeSession)
+            }.onFailure { error = it.message ?: "Failed to update viewing preference" }
         }
     }
 
@@ -566,7 +650,6 @@ fun PopcornApp() {
                         completedItems = progress.filter { it.completed }.map { it.itemId }.toSet()
                         resumeFractionById = resumeFractionMap(progress)
                         completedShows = showProgress.filter { it.completed }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
-                        heroAnchorShows = showProgress.filter { it.completed || it.completedCount >= 2 }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
                     }
 
                     val list = watchlistDeferred.await()
@@ -929,11 +1012,11 @@ fun PopcornApp() {
             shows = homeShows,
             completedItems = completedItems,
             completedShows = completedShows,
-            heroAnchorShows = heroAnchorShows,
             watchlistItems = watchlistItems,
             watchlistShows = watchlistShows,
             continueMovies = continueMovies,
             continueEpisodes = continueEpisodes,
+            recommendations = recommendations,
             recentMovies = recentMovies,
             recentShows = recentShows,
             watchlistMovies = watchlistMovies,
@@ -1170,6 +1253,7 @@ fun PopcornApp() {
             watchlistItems = watchlistItems,
             showWatched = completedShows.contains(showKey(current.show)),
             showWatchlisted = watchlistShows.contains(showKey(current.show)),
+            recommendationExcluded = recommendationExclusionKeys.contains("show:${current.show.libraryId.trim().lowercase()}:${current.show.title.trim().lowercase()}"),
             refreshToken = visibleContentRefresh,
             onHome = { screen = Screen.Home },
             onLibrary = { library -> session?.let { loadLibraryPage(library, it, 0, "") } },
@@ -1183,12 +1267,10 @@ fun PopcornApp() {
                 session = null
                 screen = Screen.Login
             },
-            onShowWatchedChange = {
-                session?.let { active -> setShowWatched(active, current.show, !completedShows.contains(showKey(current.show))) }
-            },
             onShowWatchlistChange = {
                 session?.let { active -> setShowWatchlisted(active, current.show, !watchlistShows.contains(showKey(current.show))) }
             },
+            onPreferenceChange = { preference -> session?.let { active -> setShowPreference(active, current.show, preference) } },
             onSeason = { season ->
                 showFocusSeason = season.seasonNumber
                 seasonFocusEpisode = null
@@ -1220,6 +1302,7 @@ fun PopcornApp() {
             watchlistItems = watchlistItems,
             showWatched = completedShows.contains(showKey(current.show)),
             showWatchlisted = watchlistShows.contains(showKey(current.show)),
+            recommendationExcluded = recommendationExclusionKeys.contains("show:${current.show.libraryId.trim().lowercase()}:${current.show.title.trim().lowercase()}"),
             refreshToken = visibleContentRefresh,
             onHome = { screen = Screen.Home },
             onLibrary = { library -> session?.let { loadLibraryPage(library, it, 0, "") } },
@@ -1233,12 +1316,10 @@ fun PopcornApp() {
                 session = null
                 screen = Screen.Login
             },
-            onShowWatchedChange = {
-                session?.let { active -> setShowWatched(active, current.show, !completedShows.contains(showKey(current.show))) }
-            },
             onShowWatchlistChange = {
                 session?.let { active -> setShowWatchlisted(active, current.show, !watchlistShows.contains(showKey(current.show))) }
             },
+            onPreferenceChange = { preference -> session?.let { active -> setShowPreference(active, current.show, preference) } },
             onSeason = { season ->
                 showFocusSeason = season.seasonNumber
                 seasonFocusEpisode = null
@@ -1265,6 +1346,7 @@ fun PopcornApp() {
             showUpdate = updateAvailable,
             watched = completedItems.contains(current.item.id),
             watchlisted = watchlistItems.contains(current.item.id),
+            recommendationExcluded = current.item.kind == "movie" && recommendationExclusionKeys.contains("item:${current.item.id}"),
             onPlay = { audioIndex, subtitleIndex, startPositionMs ->
                 lastDetail = current
                 lastPlayerReturnScreen = current
@@ -1278,12 +1360,11 @@ fun PopcornApp() {
                         openExternalTrailer(current.item)
                     }
             },
-            onWatchedChange = { watched ->
-                session?.let { setItemWatched(it, current.item, watched) }
-            },
             onWatchlistChange = { listed ->
                 session?.let { setItemWatchlisted(it, current.item, listed) }
             },
+            onPreferenceChange = { preference -> session?.let { setItemPreference(it, current.item, preference) } },
+            onResetProgress = { session?.let { setItemWatched(it, current.item, false) } },
             userRating = userItemRatings[current.item.id] ?: 0,
             onRate = { value -> session?.let { setItemRating(it, current.item, value) } },
             onHome = { screen = Screen.Home },

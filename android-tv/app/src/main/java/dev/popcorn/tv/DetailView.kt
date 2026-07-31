@@ -1,5 +1,6 @@
 package dev.popcorn.tv
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -33,6 +35,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Star
@@ -61,14 +64,18 @@ import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -81,10 +88,12 @@ fun DetailView(
     showUpdate: Boolean,
     watched: Boolean,
     watchlisted: Boolean,
+    recommendationExcluded: Boolean,
     onPlay: (Int?, Int?, Long) -> Unit,
     onTrailer: (Boolean) -> Unit,
-    onWatchedChange: (Boolean) -> Unit,
     onWatchlistChange: (Boolean) -> Unit,
+    onPreferenceChange: (MediaPreference) -> Unit,
+    onResetProgress: () -> Unit,
     userRating: Int = 0,
     onRate: (Int) -> Unit = {},
     onHome: () -> Unit,
@@ -179,6 +188,7 @@ fun DetailView(
     // Resume keys off the saved position, not the completed flag, so a finished
     // (still "seen") item being re-watched still offers Resume.
     val canResume = resumeProgress != null && progressResumable(resumePosition, resumeDuration)
+    val hasSavedProgress = resumeProgress?.let { it.positionMs > 0 || it.completed } == true
 
     LaunchedEffect(item.id) {
         delay(260)
@@ -285,6 +295,7 @@ fun DetailView(
                 castFocus = castFocus,
                 watched = watched,
                 watchlisted = watchlisted,
+                recommendationExcluded = recommendationExcluded,
                 userRating = userRating,
                 onRateMenu = { ratingMenuOpen = true },
                 showSimilar = similar.isNotEmpty(),
@@ -292,12 +303,17 @@ fun DetailView(
                 onSubtitle = { subtitleMenuOpen = true },
                 onFullText = { fullTextOpen = true },
                 canResume = canResume,
+                hasSavedProgress = hasSavedProgress,
                 resumePositionMs = resumePosition,
                 onResume = { onPlay(selectedAudio, selectedSubtitle, resumePosition) },
                 onPlayFromStart = { onPlay(selectedAudio, selectedSubtitle, 0L) },
                 onTrailer = { onTrailer(sidecars.trailer) },
-                onWatchedChange = { onWatchedChange(!watched) },
                 onWatchlistChange = { onWatchlistChange(!watchlisted) },
+                onPreferenceChange = onPreferenceChange,
+                onResetProgress = {
+                    resumeProgress = null
+                    onResetProgress()
+                },
                 onSimilar = { onMoreLikeThis(similar) },
             )
 
@@ -381,7 +397,9 @@ private fun DetailHeroContent(
     castFocus: FocusRequester,
     watched: Boolean,
     watchlisted: Boolean,
+    recommendationExcluded: Boolean,
     canResume: Boolean,
+    hasSavedProgress: Boolean,
     resumePositionMs: Long,
     showSimilar: Boolean,
     onAudio: () -> Unit,
@@ -390,13 +408,20 @@ private fun DetailHeroContent(
     onResume: () -> Unit,
     onPlayFromStart: () -> Unit,
     onTrailer: () -> Unit,
-    onWatchedChange: () -> Unit,
     onWatchlistChange: () -> Unit,
+    onPreferenceChange: (MediaPreference) -> Unit,
+    onResetProgress: () -> Unit,
     userRating: Int,
     onRateMenu: () -> Unit,
     onSimilar: () -> Unit,
 ) {
     var resumeMenuOpen by remember { mutableStateOf(false) }
+    var preferenceMenuOpen by remember { mutableStateOf(false) }
+    val preference = when {
+        recommendationExcluded -> MediaPreference.NotInterested
+        watched -> MediaPreference.Seen
+        else -> MediaPreference.Unwatched
+    }
     Row(
         Modifier.widthIn(max = 820.dp),
         horizontalArrangement = Arrangement.spacedBy(24.dp),
@@ -502,7 +527,7 @@ private fun DetailHeroContent(
             }
 
             FocusableDescriptionPanel(
-                item = detailItem,
+                overview = detailItem.overview,
                 focusRequester = descriptionFocus,
                 onUp = { requestDetailFocus(audioFocus) },
                 onDown = { requestDetailFocus(playFocus) },
@@ -520,7 +545,7 @@ private fun DetailHeroContent(
                     focusRequester = playFocus,
                     onUp = { requestDetailFocus(descriptionFocus) },
                     onDown = { requestDetailFocus(castFocus) },
-                    onClick = { if (canResume) resumeMenuOpen = true else onPlayFromStart() },
+                    onClick = { if (hasSavedProgress) resumeMenuOpen = true else onPlayFromStart() },
                 )
                 ActionToggle(
                     label = "Trailer",
@@ -531,13 +556,22 @@ private fun DetailHeroContent(
                     onClick = onTrailer,
                 )
                 ActionIcon(
-                    icon = Icons.Filled.CheckCircle,
-                    label = "Seen",
-                    contentDescription = if (watched) "Seen" else "Mark seen",
-                    active = watched,
+                    icon = when (preference) {
+                        MediaPreference.Unwatched -> Icons.Filled.CheckCircle
+                        MediaPreference.Seen -> Icons.Filled.CheckCircle
+                        MediaPreference.NotInterested -> Icons.Filled.Block
+                    },
+                    label = when (preference) {
+                        MediaPreference.Unwatched -> "Unwatched"
+                        MediaPreference.Seen -> "Seen"
+                        MediaPreference.NotInterested -> "Not interested"
+                    },
+                    contentDescription = "Viewing preference",
+                    active = preference != MediaPreference.Unwatched,
+                    activeTint = if (preference == MediaPreference.NotInterested) ErrorRed else Accent,
                     onUp = { requestDetailFocus(descriptionFocus) },
                     onDown = { requestDetailFocus(castFocus) },
-                    onClick = onWatchedChange,
+                    onClick = { preferenceMenuOpen = true },
                 )
                 ActionIcon(
                     icon = Icons.Filled.Bookmark,
@@ -574,36 +608,38 @@ private fun DetailHeroContent(
     }
 
     if (resumeMenuOpen) {
-        Dialog(onDismissRequest = { resumeMenuOpen = false }) {
-            Column(
-                Modifier
-                    .width(400.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(SurfaceColor)
-                    .border(1.dp, Line, RoundedCornerShape(10.dp))
-                    .padding(vertical = 12.dp),
-            ) {
-                Text("Continue watching?", color = Accent, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp))
-                Column(Modifier.padding(horizontal = 12.dp)) {
-                    TrackRow(
-                        label = "Resume from ${fmtClock(resumePositionMs)}",
-                        selected = true,
-                        onClick = {
-                            resumeMenuOpen = false
-                            onResume()
-                        },
-                    )
-                    TrackRow(
-                        label = "From the beginning",
-                        selected = false,
-                        onClick = {
-                            resumeMenuOpen = false
-                            onPlayFromStart()
-                        },
-                    )
+        TvSelectionShelf(
+            title = "PLAYBACK",
+            subtitle = "Continue watching?",
+            options = buildList {
+                if (canResume) {
+                    add(TvSelectionOption("Resume from ${fmtClock(resumePositionMs)}", selected = true) {
+                        resumeMenuOpen = false
+                        onResume()
+                    })
                 }
-            }
-        }
+                add(TvSelectionOption("Play from beginning") {
+                    resumeMenuOpen = false
+                    onPlayFromStart()
+                })
+                add(TvSelectionOption("Reset progress") {
+                    resumeMenuOpen = false
+                    onResetProgress()
+                })
+            },
+            onDismiss = { resumeMenuOpen = false },
+        )
+    }
+    if (preferenceMenuOpen) {
+        MediaPreferenceDialog(
+            current = preference,
+            allowNotInterested = detailItem.kind == "movie",
+            onDismiss = { preferenceMenuOpen = false },
+            onSelect = {
+                preferenceMenuOpen = false
+                onPreferenceChange(it)
+            },
+        )
     }
 }
 
@@ -614,7 +650,7 @@ private fun requestDetailFocus(requester: FocusRequester): Boolean {
 // ── Action buttons ──
 
 @Composable
-private fun PlayButton(
+fun PlayButton(
     label: String = "Play",
     detail: String? = null,
     primary: Boolean = true,
@@ -669,10 +705,12 @@ private fun PlayButton(
 }
 
 @Composable
-private fun ActionToggle(
+fun ActionToggle(
     label: String,
     icon: ImageVector,
     active: Boolean,
+    focusRequester: FocusRequester? = null,
+    onFocus: () -> Unit = {},
     onUp: (() -> Boolean)? = null,
     onDown: (() -> Boolean)? = null,
     onClick: () -> Unit,
@@ -700,7 +738,11 @@ private fun ActionToggle(
             .clip(RoundedCornerShape(13.dp))
             .background(bg)
             .border(1.dp, borderColor, RoundedCornerShape(13.dp))
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged {
+                focused = it.isFocused
+                if (it.isFocused) onFocus()
+            }
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .focusable()
             .onPreviewKeyEvent {
                 when {
@@ -732,12 +774,14 @@ private fun ActionToggle(
 }
 
 @Composable
-private fun ActionIcon(
+fun ActionIcon(
     icon: ImageVector,
     label: String,
     contentDescription: String,
     active: Boolean,
     activeTint: Color = Accent,
+    focusRequester: FocusRequester? = null,
+    onFocus: () -> Unit = {},
     onUp: (() -> Boolean)? = null,
     onDown: (() -> Boolean)? = null,
     onClick: () -> Unit,
@@ -765,7 +809,11 @@ private fun ActionIcon(
             .clip(RoundedCornerShape(13.dp))
             .background(bg)
             .border(1.dp, borderColor, RoundedCornerShape(13.dp))
-            .onFocusChanged { focused = it.isFocused }
+            .onFocusChanged {
+                focused = it.isFocused
+                if (it.isFocused) onFocus()
+            }
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .focusable()
             .onPreviewKeyEvent {
                 when {
@@ -791,22 +839,23 @@ private fun ActionIcon(
 }
 
 @Composable
-private fun FocusableDescriptionPanel(
-    item: PopItem,
+fun FocusableDescriptionPanel(
+    overview: String,
+    maxLines: Int = 3,
+    maxWidth: Dp = 620.dp,
     focusRequester: FocusRequester? = null,
     onFocus: () -> Unit = {},
     onUp: (() -> Boolean)? = null,
     onDown: (() -> Boolean)? = null,
     onClick: () -> Unit,
 ) {
-    val hasOverview = item.overview.isNotBlank()
-    if (!hasOverview) return
+    if (overview.isBlank()) return
     var focused by remember { mutableStateOf(false) }
 
     Spacer(Modifier.height(10.dp))
     Column(
         Modifier
-            .widthIn(max = 620.dp)
+            .widthIn(max = maxWidth)
             .clip(RoundedCornerShape(8.dp))
             .background(Color.Transparent)
             .border(1.dp, if (focused) Accent.copy(alpha = .80f) else Color.Transparent, RoundedCornerShape(8.dp))
@@ -826,16 +875,14 @@ private fun FocusableDescriptionPanel(
             .tvActivate(onClick)
             .padding(horizontal = 6.dp, vertical = 7.dp),
     ) {
-        if (hasOverview) {
-            Text(
-                item.overview,
-                color = Color.White.copy(alpha = .82f),
-                fontSize = 13.sp,
-                lineHeight = 18.sp,
-                maxLines = 3,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
+        Text(
+            overview,
+            color = Color.White.copy(alpha = .82f),
+            fontSize = 13.sp,
+            lineHeight = 18.sp,
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -1017,7 +1064,7 @@ private fun DetailFactPanel(item: PopItem) {
     }
 }
 
-private fun detailFactRows(item: PopItem): List<Pair<String, String>> {
+fun detailFactRows(item: PopItem): List<Pair<String, String>> {
     return listOfNotNull(
         item.tagline.takeIf { it.isNotBlank() }?.let { "Tagline" to it },
         item.directors.takeIf { it.isNotBlank() }?.let { "Director" to it },
@@ -1028,7 +1075,7 @@ private fun detailFactRows(item: PopItem): List<Pair<String, String>> {
 }
 
 @Composable
-private fun DetailFactRows(rows: List<Pair<String, String>>) {
+fun DetailFactRows(rows: List<Pair<String, String>>) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         rows.take(6).forEach { (label, value) ->
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
@@ -1197,35 +1244,17 @@ fun TrackChoiceDialog(
     onDismiss: () -> Unit,
     onSelect: (Int?) -> Unit,
 ) {
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
-            Modifier
-                .width(460.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(SurfaceColor)
-                .border(1.dp, Line, RoundedCornerShape(10.dp))
-                .padding(vertical = 12.dp),
-        ) {
-            Text(title, color = Accent, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp))
-            androidx.compose.foundation.lazy.LazyColumn(
-                Modifier.fillMaxWidth().heightIn(max = 380.dp).padding(horizontal = 12.dp),
-            ) {
-                if (allowNone) {
-                    item {
-                        TrackRow(label = emptyLabel, selected = selected == null, onClick = { onSelect(null) })
-                    }
-                }
-                items(tracks.size) { i ->
-                    val track = tracks[i]
-                    TrackRow(
-                        label = track.label(),
-                        selected = track.index == selected,
-                        onClick = { onSelect(track.index) },
-                    )
-                }
+    TvSelectionShelf(
+        title = title.uppercase(Locale.US),
+        subtitle = "Choose track",
+        options = buildList {
+            if (allowNone) add(TvSelectionOption(emptyLabel, selected == null) { onSelect(null) })
+            tracks.forEach { track ->
+                add(TvSelectionOption(track.label(), track.index == selected) { onSelect(track.index) })
             }
-        }
-    }
+        },
+        onDismiss = onDismiss,
+    )
 }
 
 fun selectedTrackLabel(tracks: List<StreamInfo>, selected: Int?, fallback: String): String {
@@ -1233,7 +1262,7 @@ fun selectedTrackLabel(tracks: List<StreamInfo>, selected: Int?, fallback: Strin
 }
 
 @Composable
-private fun TrackRow(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun TrackRow(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     val bg = when {
         selected && focused -> Accent.copy(alpha = .25f)
@@ -1247,7 +1276,7 @@ private fun TrackRow(label: String, selected: Boolean, onClick: () -> Unit) {
         else -> Color.Transparent
     }
     Row(
-        Modifier
+        modifier
             .fillMaxWidth()
             .padding(vertical = 1.dp)
             .clip(RoundedCornerShape(6.dp))
@@ -1269,34 +1298,95 @@ private fun TrackRow(label: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
+private data class TvSelectionOption(
+    val label: String,
+    val selected: Boolean = false,
+    val action: () -> Unit,
+)
 
 @Composable
-fun RatingDialog(current: Int, onDismiss: () -> Unit, onSelect: (Int) -> Unit) {
-    Dialog(onDismissRequest = onDismiss) {
-        Column(
+private fun TvSelectionShelf(
+    title: String,
+    subtitle: String,
+    options: List<TvSelectionOption>,
+    onDismiss: () -> Unit,
+) {
+    val firstFocus = remember { FocusRequester() }
+    BackHandler(onBack = onDismiss)
+    LaunchedEffect(title, options.size) {
+        delay(45)
+        runCatching { firstFocus.requestFocus() }
+    }
+    Popup(alignment = Alignment.Center, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
+        Box(
             Modifier
-                .width(360.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(SurfaceColor)
-                .border(1.dp, Line, RoundedCornerShape(10.dp))
-                .padding(vertical = 12.dp),
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = .32f))
+                .onKeyEvent {
+                    it.type == KeyEventType.KeyDown && (it.key == Key.DirectionLeft || it.key == Key.DirectionRight)
+                },
+            contentAlignment = Alignment.CenterEnd,
         ) {
-            Text("Your rating", color = Accent, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp))
-            androidx.compose.foundation.lazy.LazyColumn(
-                Modifier.fillMaxWidth().heightIn(max = 400.dp).padding(horizontal = 12.dp),
+            Column(
+                Modifier
+                    .fillMaxHeight()
+                    .width(356.dp)
+                    .background(Bg.copy(alpha = .98f))
+                    .border(1.dp, Color.White.copy(alpha = .10f))
+                    .padding(horizontal = 28.dp, vertical = 42.dp),
             ) {
-                if (current > 0) {
-                    item { TrackRow(label = "Remove rating", selected = false, onClick = { onSelect(0) }) }
-                }
-                items(10) { i ->
-                    val value = 10 - i
-                    TrackRow(
-                        label = "\u2605".repeat(value) + "  $value/10",
-                        selected = value == current,
-                        onClick = { onSelect(value) },
-                    )
+                Text(title, color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                Spacer(Modifier.height(7.dp))
+                Text(subtitle, color = TextColor, fontSize = 22.sp, fontWeight = FontWeight.Black)
+                Spacer(Modifier.height(18.dp))
+                LazyColumn(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    itemsIndexed(options) { index, option ->
+                        TrackRow(
+                            label = option.label,
+                            selected = option.selected,
+                            modifier = if (index == 0) Modifier.focusRequester(firstFocus) else Modifier,
+                            onClick = option.action,
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+
+@Composable
+fun RatingDialog(current: Int, onDismiss: () -> Unit, onSelect: (Int) -> Unit) {
+    TvSelectionShelf(
+        title = "RATING",
+        subtitle = "Your rating",
+        options = buildList {
+            if (current > 0) add(TvSelectionOption("Remove rating") { onSelect(0) })
+            for (value in 10 downTo 1) {
+                add(TvSelectionOption("\u2605".repeat(value) + "  $value/10", value == current) { onSelect(value) })
+            }
+        },
+        onDismiss = onDismiss,
+    )
+}
+
+@Composable
+fun MediaPreferenceDialog(
+    current: MediaPreference,
+    allowNotInterested: Boolean = true,
+    onDismiss: () -> Unit,
+    onSelect: (MediaPreference) -> Unit,
+) {
+    TvSelectionShelf(
+        title = "WATCH STATUS",
+        subtitle = "Viewing preference",
+        options = buildList {
+            add(TvSelectionOption("Unwatched", current == MediaPreference.Unwatched) { onSelect(MediaPreference.Unwatched) })
+            add(TvSelectionOption("Seen", current == MediaPreference.Seen) { onSelect(MediaPreference.Seen) })
+            if (allowNotInterested) {
+                add(TvSelectionOption("Not interested", current == MediaPreference.NotInterested) { onSelect(MediaPreference.NotInterested) })
+            }
+        },
+        onDismiss = onDismiss,
+    )
 }

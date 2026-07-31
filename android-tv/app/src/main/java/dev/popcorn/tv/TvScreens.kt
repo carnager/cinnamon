@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,8 +26,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -81,6 +82,7 @@ fun ShowView(
     watchlistItems: Set<Long>,
     showWatched: Boolean,
     showWatchlisted: Boolean,
+    recommendationExcluded: Boolean,
     refreshToken: Long,
     onHome: () -> Unit,
     onLibrary: (Library) -> Unit,
@@ -90,8 +92,8 @@ fun ShowView(
     onUpdates: () -> Unit,
     onScan: () -> Unit,
     onLogout: () -> Unit,
-    onShowWatchedChange: () -> Unit,
     onShowWatchlistChange: () -> Unit,
+    onPreferenceChange: (MediaPreference) -> Unit,
     onSeason: (SeasonSummary) -> Unit,
     onSeasonMenu: (SeasonSummary, FocusRequester) -> Unit,
     onEpisodeFocus: (PopItem) -> Unit,
@@ -111,6 +113,7 @@ fun ShowView(
     var themeAvailable by remember(show.libraryId, show.title) { mutableStateOf(false) }
     var fullTextOpen by remember(show.libraryId, show.title) { mutableStateOf(false) }
     val descriptionFocus = remember(show.libraryId, show.title) { FocusRequester() }
+    val actionFocus = remember(show.libraryId, show.title) { FocusRequester() }
     val seasonFocus = remember(show.libraryId, show.title) { FocusRequester() }
     val firstEpisodeFocus = remember(show.libraryId, show.title) { FocusRequester() }
     val navFocus = remember { FocusRequester() }
@@ -190,8 +193,10 @@ fun ShowView(
                 focusedSeason = focusedSeason,
                 focusedEpisode = focusedEpisode.takeIf { episodePreviewActive },
                 descriptionFocus = descriptionFocus,
+                actionFocus = actionFocus,
                 watched = showWatched,
                 watchlisted = showWatchlisted,
+                recommendationExcluded = recommendationExcluded,
                 nextEpisodeLabel = nextEpisodeLabel,
                 onNextEpisode = nextEpisode?.let { episode ->
                     {
@@ -200,10 +205,11 @@ fun ShowView(
                         onPlayEpisode(episode)
                     }
                 },
-                onWatchedChange = onShowWatchedChange,
                 onWatchlistChange = onShowWatchlistChange,
+                onPreferenceChange = onPreferenceChange,
                 onFullText = { fullTextOpen = true },
                 onActionFocus = { episodePreviewActive = false },
+                onActionsDown = { requestTvFocus(seasonFocus) },
             )
 
             if (error.isNotBlank()) {
@@ -234,7 +240,7 @@ fun ShowView(
                             onSeason(it)
                         },
                         onSeasonMenu = onSeasonMenu,
-                        onUp = { requestTvFocus(descriptionFocus) },
+                        onUp = { requestTvFocus(actionFocus) },
                         onDown = { requestTvFocus(firstEpisodeFocus) },
                     )
                     if (episodesLoading && episodes.isEmpty()) {
@@ -282,7 +288,7 @@ fun ShowView(
             onScan = onScan,
             onLogout = onLogout,
             firstFocusRequester = navFocus,
-            onExit = { requestTvFocus(descriptionFocus) },
+            onExit = { requestTvFocus(actionFocus) },
         )
 
         CinnamonBrand(
@@ -293,10 +299,23 @@ fun ShowView(
     }
 
     if (fullTextOpen) {
+        // The dialog mirrors whatever the header is showing: the focused episode
+        // when its preview is up, the show itself otherwise. Show-level facts come
+        // off an episode (the per-episode director/writers would be wrong there).
+        val previewEpisode = focusedEpisode.takeIf { episodePreviewActive }
         ShowFullTextDialog(
             title = show.title,
-            subtitle = focusedSeason?.let { seasonTitle(it) }.orEmpty(),
-            overview = show.overview,
+            subtitle = previewEpisode?.let { episode ->
+                listOfNotNull(
+                    "S%02dE%02d".format(episode.seasonNumber, episode.episodeNumber),
+                    episode.episodeTitle.ifBlank { episode.title }.takeIf { it.isNotBlank() },
+                ).joinToString(" · ")
+            } ?: focusedSeason?.let { seasonTitle(it) }.orEmpty(),
+            overview = previewEpisode?.overview?.takeIf { it.isNotBlank() } ?: show.overview,
+            facts = previewEpisode?.let { detailFactRows(it) }
+                ?: showEpisodes.firstOrNull()?.let { episode ->
+                    detailFactRows(episode).filter { it.first == "Studios" || it.first == "Country" }
+                }.orEmpty(),
             onDismiss = { fullTextOpen = false },
         )
     }
@@ -309,15 +328,24 @@ fun ShowHeader(
     focusedSeason: SeasonSummary?,
     focusedEpisode: PopItem?,
     descriptionFocus: FocusRequester? = null,
+    actionFocus: FocusRequester? = null,
     watched: Boolean = false,
     watchlisted: Boolean = false,
+    recommendationExcluded: Boolean = false,
     nextEpisodeLabel: String = "",
     onNextEpisode: (() -> Unit)? = null,
-    onWatchedChange: () -> Unit = {},
     onWatchlistChange: () -> Unit = {},
+    onPreferenceChange: (MediaPreference) -> Unit = {},
     onFullText: () -> Unit = {},
     onActionFocus: () -> Unit = {},
+    onActionsDown: () -> Boolean = { false },
 ) {
+    var preferenceOpen by remember(show.libraryId, show.title) { mutableStateOf(false) }
+    val preference = when {
+        recommendationExcluded -> MediaPreference.NotInterested
+        watched -> MediaPreference.Seen
+        else -> MediaPreference.Unwatched
+    }
     val episodeTitle = focusedEpisode?.episodeTitle?.ifBlank { focusedEpisode.title }.orEmpty()
     val overview = focusedEpisode?.overview?.takeIf { it.isNotBlank() } ?: show.overview
     val meta = focusedEpisode?.let { episode ->
@@ -333,7 +361,7 @@ fun ShowHeader(
         show.rating
     }
 
-    Box(Modifier.fillMaxWidth().height(286.dp)) {
+    Box(Modifier.fillMaxWidth().height(304.dp)) {
         val episodeBackdropUrl = if (focusedEpisode != null && session != null) {
             when {
                 focusedEpisode.backdropPath.isNotBlank() -> imageUrl(session, focusedEpisode.id, "backdrop", focusedEpisode.backdropMtimeUnix)
@@ -382,22 +410,6 @@ fun ShowHeader(
                 .fillMaxWidth(.70f)
                 .padding(start = 116.dp, end = 28.dp, bottom = 20.dp),
         ) {
-            val genreLine = show.genres.split(",", "/", "|")
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .take(3)
-                .joinToString("  ·  ")
-            if (genreLine.isNotBlank()) {
-                Text(
-                    genreLine.uppercase(),
-                    color = Teal,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Black,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.height(5.dp))
-            }
             Text(
                 show.title,
                 color = Color.White,
@@ -433,126 +445,86 @@ fun ShowHeader(
                     Text("${show.episodeCount} episodes", color = Muted, fontSize = 12.sp)
                 }
                 if (rating > 0) RatingBadge(rating)
+                val genreLine = show.genres.split(",", "/", "|")
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .take(3)
+                    .joinToString("  ·  ")
+                if (genreLine.isNotBlank()) {
+                    Text(
+                        genreLine.uppercase(),
+                        color = Teal,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Black,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
 
-            Spacer(Modifier.height(10.dp))
-            Text(
-                overview.ifBlank { "No description available." },
-                color = TextColor.copy(alpha = .76f),
-                fontSize = 12.sp,
-                lineHeight = 17.sp,
+            FocusableDescriptionPanel(
+                overview = overview.ifBlank { "No description available." },
                 maxLines = if (episodeTitle.isBlank()) 3 else 2,
-                overflow = TextOverflow.Ellipsis,
+                maxWidth = 700.dp,
+                focusRequester = descriptionFocus,
+                onFocus = onActionFocus,
+                onDown = { requestTvFocus(actionFocus) },
+                onClick = onFullText,
             )
 
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 val hasPrimary = onNextEpisode != null && nextEpisodeLabel.isNotBlank()
                 if (hasPrimary) {
-                    ShowPrimaryAction(label = nextEpisodeLabel, focusRequester = descriptionFocus, onFocus = onActionFocus, onClick = onNextEpisode!!)
+                    PlayButton(
+                        label = nextEpisodeLabel,
+                        focusRequester = actionFocus,
+                        onFocus = onActionFocus,
+                        onUp = { requestTvFocus(descriptionFocus) },
+                        onDown = onActionsDown,
+                        onClick = onNextEpisode!!,
+                    )
                 }
-                ShowHeaderAction(
-                    label = "Seen",
-                    icon = Icons.Filled.CheckCircle,
-                    active = watched,
-                    activeTint = Accent,
-                    focusRequester = if (!hasPrimary) descriptionFocus else null,
+                ActionIcon(
+                    icon = if (preference == MediaPreference.NotInterested) Icons.Filled.Block else Icons.Filled.CheckCircle,
+                    label = when (preference) {
+                        MediaPreference.Unwatched -> "Unwatched"
+                        MediaPreference.Seen -> "Seen"
+                        MediaPreference.NotInterested -> "Not interested"
+                    },
+                    contentDescription = "Viewing preference",
+                    active = preference != MediaPreference.Unwatched,
+                    activeTint = if (preference == MediaPreference.NotInterested) ErrorRed else Accent,
+                    focusRequester = if (!hasPrimary) actionFocus else null,
                     onFocus = onActionFocus,
-                    onClick = onWatchedChange,
+                    onUp = { requestTvFocus(descriptionFocus) },
+                    onDown = onActionsDown,
+                    onClick = { preferenceOpen = true },
                 )
-                ShowHeaderAction(
-                    label = "Watchlist",
+                ActionIcon(
                     icon = Icons.Filled.Bookmark,
+                    label = "Watchlist",
+                    contentDescription = if (watchlisted) "On watchlist" else "Add to watchlist",
                     active = watchlisted,
                     activeTint = Teal,
                     onFocus = onActionFocus,
+                    onUp = { requestTvFocus(descriptionFocus) },
+                    onDown = onActionsDown,
                     onClick = onWatchlistChange,
-                )
-                ShowHeaderAction(
-                    label = "More info",
-                    icon = Icons.Filled.Info,
-                    active = false,
-                    activeTint = Accent,
-                    onFocus = onActionFocus,
-                    onClick = onFullText,
                 )
             }
         }
     }
-}
-
-@Composable
-private fun ShowPrimaryAction(
-    label: String,
-    focusRequester: FocusRequester? = null,
-    onFocus: () -> Unit,
-    onClick: () -> Unit,
-) {
-    var focused by remember { mutableStateOf(false) }
-    Row(
-        Modifier
-            .height(40.dp)
-            .clip(RoundedCornerShape(11.dp))
-            .background(if (focused) Accent else AccentDim)
-            .border(1.dp, if (focused) Color(0xFFFFA66A) else Accent.copy(alpha = .48f), RoundedCornerShape(11.dp))
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .onFocusChanged {
-                focused = it.isFocused
-                if (it.isFocused) onFocus()
-            }
-            .focusable()
-            .tvActivate(onClick)
-            .padding(horizontal = 16.dp),
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = TextColor, modifier = Modifier.size(19.dp))
-        Text(label, color = TextColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
-@Composable
-private fun ShowHeaderAction(
-    label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    active: Boolean,
-    activeTint: Color,
-    focusRequester: FocusRequester? = null,
-    onFocus: () -> Unit,
-    onClick: () -> Unit,
-) {
-    var focused by remember { mutableStateOf(false) }
-    val tint = when {
-        focused -> TextColor
-        active -> activeTint
-        else -> Muted
-    }
-    Row(
-        Modifier
-            .height(40.dp)
-            .clip(RoundedCornerShape(11.dp))
-            .background(Color.Transparent)
-            .border(
-                1.dp,
-                when {
-                    focused -> Accent
-                    else -> Color.Transparent
-                },
-                RoundedCornerShape(11.dp),
-            )
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .onFocusChanged {
-                focused = it.isFocused
-                if (it.isFocused) onFocus()
-            }
-            .focusable()
-            .tvActivate(onClick)
-            .padding(horizontal = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(19.dp))
-        Text(label, color = tint, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    if (preferenceOpen) {
+        MediaPreferenceDialog(
+            current = preference,
+            onDismiss = { preferenceOpen = false },
+            onSelect = {
+                preferenceOpen = false
+                onPreferenceChange(it)
+            },
+        )
     }
 }
 
@@ -561,6 +533,7 @@ private fun ShowFullTextDialog(
     title: String,
     subtitle: String,
     overview: String,
+    facts: List<Pair<String, String>>,
     onDismiss: () -> Unit,
 ) {
     val scroll = rememberScrollState()
@@ -613,6 +586,10 @@ private fun ShowFullTextDialog(
                     .padding(14.dp),
             ) {
                 Text(overview.ifBlank { "No description available." }, color = TextColor.copy(alpha = .88f), fontSize = 15.sp, lineHeight = 23.sp)
+                if (facts.isNotEmpty()) {
+                    Spacer(Modifier.height(18.dp))
+                    DetailFactRows(facts)
+                }
             }
         }
     }
@@ -868,20 +845,20 @@ private fun EpisodeCarousel(
 ) {
     val targetId = initialEpisodeFocus?.takeIf { id -> episodes.any { it.id == id } } ?: episodes.firstOrNull()?.id
     if (episodes.isEmpty()) {
-        Box(Modifier.fillMaxWidth().height(184.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxWidth().height(156.dp), contentAlignment = Alignment.Center) {
             Text("No episodes found", color = Muted, fontSize = 12.sp)
         }
         return
     }
     LazyRow(
-        modifier = Modifier.fillMaxWidth().height(190.dp),
+        modifier = Modifier.fillMaxWidth().height(162.dp),
         contentPadding = PaddingValues(start = 32.dp, end = 32.dp, top = 5.dp, bottom = 7.dp),
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         rowItemsIndexed(episodes, key = { _, episode -> episode.id }) { _, episode ->
             val localRequester = remember { FocusRequester() }
             val requester = if (episode.id == targetId) firstFocusRequester else localRequester
-            Box(Modifier.width(450.dp).height(176.dp)) {
+            Box(Modifier.width(430.dp).height(148.dp)) {
                 EpisodeLandscapeCard(
                     session = session,
                     item = episode,
@@ -923,7 +900,7 @@ private fun EpisodeLandscapeCard(
         onLongClick = onLongClick,
     ) {
         Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.width(278.dp).aspectRatio(16f / 9f)) {
+            Box(Modifier.fillMaxHeight().aspectRatio(16f / 9f)) {
                 EpisodeStill(session, item, Modifier.fillMaxSize())
                 PosterCornerMarks(watched, watchlisted, item.rating)
                 val progress = LocalResumeProgress.current[item.id] ?: 0f
@@ -931,45 +908,39 @@ private fun EpisodeLandscapeCard(
                 Box(
                     Modifier
                         .align(Alignment.BottomStart)
-                        .padding(9.dp)
-                        .size(30.dp)
+                        .padding(8.dp)
+                        .size(28.dp)
                         .clip(RoundedCornerShape(99.dp))
                         .background(Color.White.copy(alpha = .92f)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Filled.PlayArrow, contentDescription = "Play episode", tint = Bg, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Filled.PlayArrow, contentDescription = "Play episode", tint = Bg, modifier = Modifier.size(17.dp))
                 }
             }
             Column(
-                Modifier.weight(1f).padding(horizontal = 14.dp, vertical = 10.dp),
+                Modifier.weight(1f).padding(horizontal = 13.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.Center,
             ) {
                 Text(
-                    "EPISODE ${item.episodeNumber} · ${fmtDuration(item.durationMs).ifBlank { "—" }}",
+                    "EPISODE ${item.episodeNumber}",
                     color = Teal,
-                    fontSize = 10.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Black,
+                    maxLines = 1,
                 )
-                Spacer(Modifier.height(5.dp))
+                Spacer(Modifier.height(4.dp))
                 Text(
                     item.episodeTitle.ifBlank { item.title },
                     color = TextColor,
-                    fontSize = 15.sp,
-                    lineHeight = 18.sp,
+                    fontSize = 18.sp,
+                    lineHeight = 21.sp,
                     fontWeight = FontWeight.Bold,
-                    maxLines = 2,
+                    maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                 )
-                if (item.overview.isNotBlank()) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        item.overview,
-                        color = TextColor.copy(alpha = .66f),
-                        fontSize = 10.sp,
-                        lineHeight = 14.sp,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                fmtDuration(item.durationMs).takeIf { it.isNotBlank() }?.let {
+                    Spacer(Modifier.height(5.dp))
+                    Text(it, color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                 }
             }
         }
@@ -1264,7 +1235,8 @@ private fun seasonTitle(season: SeasonSummary): String {
 
 fun seasonFocusKey(season: SeasonSummary): String = "${season.libraryId}:${season.showTitle}:${season.seasonNumber}"
 
-private fun requestTvFocus(requester: FocusRequester): Boolean {
+private fun requestTvFocus(requester: FocusRequester?): Boolean {
+    if (requester == null) return false
     return runCatching { requester.requestFocus() }.isSuccess
 }
 

@@ -37,6 +37,7 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.DateRange
@@ -113,11 +114,11 @@ fun HomeView(
     shows: List<ShowSummary>,
     completedItems: Set<Long>,
     completedShows: Set<String>,
-    heroAnchorShows: Set<String>,
     watchlistItems: Set<Long>,
     watchlistShows: Set<String>,
     continueMovies: List<PopItem>,
     continueEpisodes: List<PopItem>,
+    recommendations: List<Recommendation>,
     recentMovies: List<PopItem>,
     recentShows: List<ShowSummary>,
     watchlistMovies: List<PopItem>,
@@ -204,11 +205,11 @@ fun HomeView(
                 shows = shows,
                 completedItems = completedItems,
                 completedShows = completedShows,
-                heroAnchorShows = heroAnchorShows,
                 watchlistItems = watchlistItems,
                 watchlistShows = watchlistShows,
                 continueMovies = continueMovies,
                 continueEpisodes = continueEpisodes,
+                recommendations = recommendations,
                 recentMovies = recentMovies,
                 recentShows = recentShows,
                 watchlistMovies = watchlistMovies,
@@ -1275,6 +1276,12 @@ private fun toggleGenre(selected: List<String>, genre: String): List<String> {
     }
 }
 
+private fun tvExclusionSizeLabel(bytes: Long): String {
+    if (bytes <= 0) return ""
+    val gib = bytes.toDouble() / (1024.0 * 1024.0 * 1024.0)
+    return if (gib >= 1) "%.1f GB".format(gib) else "%.0f MB".format(bytes.toDouble() / (1024.0 * 1024.0))
+}
+
 @Composable
 private fun UserMenuButton(
     session: Session?,
@@ -1363,7 +1370,7 @@ private fun AvatarButton(url: String, session: Session?, selected: Boolean, focu
     }
 }
 
-private enum class UserMenuPage { Root, Audio, Subtitles, PhoneLogin }
+private enum class UserMenuPage { Root, Audio, Subtitles, PhoneLogin, NotInterested }
 
 data class UserDrawerEntry(
     val label: String,
@@ -1392,9 +1399,13 @@ private fun UserMenuDrawer(
     var phoneQrPayload by remember { mutableStateOf("") }
     var phoneQrError by remember { mutableStateOf("") }
     var phoneQrRefresh by remember { mutableIntStateOf(0) }
+    var exclusions by remember { mutableStateOf<List<RecommendationExclusion>>(emptyList()) }
+    var exclusionsLoading by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val entries = when (page) {
         UserMenuPage.Root -> buildList {
             add(UserDrawerEntry("Watch history", Icons.Filled.History, action = onHistory))
+            add(UserDrawerEntry("Not interested", Icons.Filled.Block, action = { onPage(UserMenuPage.NotInterested) }))
             add(UserDrawerEntry("Sign in a phone", Icons.Filled.QrCode2, "QR code", action = { onPage(UserMenuPage.PhoneLogin) }))
             add(UserDrawerEntry("Preferred audio", Icons.AutoMirrored.Filled.VolumeUp, audioOptions.firstOrNull { it.first == PlaybackPrefs.audioLang }?.second.orEmpty(), action = { onPage(UserMenuPage.Audio) }))
             add(UserDrawerEntry("Preferred subtitles", Icons.Filled.Subtitles, subtitleOptions.firstOrNull { it.first == PlaybackPrefs.subtitleLang }?.second.orEmpty(), action = { onPage(UserMenuPage.Subtitles) }))
@@ -1417,6 +1428,29 @@ private fun UserMenuDrawer(
                 }
             }
         UserMenuPage.PhoneLogin -> emptyList()
+        UserMenuPage.NotInterested -> listOf(
+            UserDrawerEntry("Back", Icons.AutoMirrored.Filled.ArrowBack, action = { onPage(UserMenuPage.Root) }),
+        ) + exclusions.map { entry ->
+            val title = entry.item?.title ?: entry.show?.title ?: "Unavailable title"
+            val detail = listOf(entry.path, tvExclusionSizeLabel(entry.sizeBytes)).filter { it.isNotBlank() }.joinToString(" · ")
+            UserDrawerEntry(title, Icons.Filled.Block, detail = detail) {
+                val active = session ?: return@UserDrawerEntry
+                scope.launch {
+                    runCatching {
+                        val api = Api(active)
+                        entry.item?.let { api.restoreItemRecommendation(it.id) }
+                            ?: entry.show?.let { api.restoreShowRecommendation(it.libraryId, it.title) }
+                    }.onSuccess { exclusions = exclusions.filterNot { it.key == entry.key } }
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(page, session?.token) {
+        if (page != UserMenuPage.NotInterested || session == null) return@LaunchedEffect
+        exclusionsLoading = true
+        exclusions = runCatching { Api(session).recommendationExclusions() }.getOrDefault(emptyList())
+        exclusionsLoading = false
     }
 
     LaunchedEffect(page, phoneQrRefresh, session?.token) {
@@ -1467,6 +1501,7 @@ private fun UserMenuDrawer(
                         UserMenuPage.Audio -> "PREFERRED AUDIO"
                         UserMenuPage.Subtitles -> "PREFERRED SUBTITLES"
                         UserMenuPage.PhoneLogin -> "SIGN IN A PHONE"
+                        UserMenuPage.NotInterested -> "NOT INTERESTED"
                     },
                     color = Accent,
                     fontSize = 10.sp,
@@ -1477,6 +1512,7 @@ private fun UserMenuDrawer(
                     when (page) {
                         UserMenuPage.Root -> session.userDisplayName()
                         UserMenuPage.PhoneLogin -> "Cinnamon Android"
+                        UserMenuPage.NotInterested -> if (exclusionsLoading) "Loading…" else "${exclusions.size} excluded"
                         else -> "Playback languages"
                     },
                     color = TextColor,
@@ -1621,58 +1657,6 @@ private fun heroShowPick(show: ShowSummary, kick: String): HeroPick? {
         heroGenres(show.genres).take(2).joinToString(", ").ifBlank { null },
     ).joinToString(" · ")
     return HeroPick("show:${show.libraryId}:${show.title}", kick, show.title, meta, show.overview, show.rating, show.backdropItemId, show.backdropMtimeUnix, null, show)
-}
-
-private fun heroPicks(
-    movies: List<PopItem>,
-    shows: List<ShowSummary>,
-    completedItems: Set<Long>,
-    completedShows: Set<String>,
-    heroAnchorShows: Set<String>,
-    continueMovies: List<PopItem>,
-    continueEpisodes: List<PopItem>,
-    recentMovies: List<PopItem>,
-    recentShows: List<ShowSummary>,
-    watchlistMovies: List<PopItem>,
-    watchlistTvShows: List<ShowSummary>,
-): List<HeroPick> {
-    fun itemSeen(item: PopItem) = completedItems.contains(item.id)
-    fun showSeen(show: ShowSummary) = completedShows.contains("${show.libraryId}\n${show.title.lowercase()}")
-    val picks = mutableListOf<HeroPick>()
-
-    for (item in (continueMovies + continueEpisodes).take(4)) {
-        heroItemPick(item, "Continue watching")?.let(picks::add)
-    }
-
-    // "Because you watched X": a same-genre match, anchored on titles that
-    // were actually finished — a movie started for two minutes is not
-    // "watched" and makes a poor recommendation anchor.
-    fun showAnchorable(show: ShowSummary) = heroAnchorShows.contains("${show.libraryId}\n${show.title.lowercase()}")
-    val watchedSources = movies.filter { itemSeen(it) }.map { it.title to heroGenres(it.genres) } +
-        shows.filter { showAnchorable(it) }.map { it.title to heroGenres(it.genres) }
-    for ((source, sourceGenres) in watchedSources.shuffled().take(4)) {
-        val genre = sourceGenres.firstOrNull() ?: continue
-        val matches = movies.filter { !itemSeen(it) && it.title != source && it.rating >= 6.5 && heroGenres(it.genres).any { g -> g.equals(genre, ignoreCase = true) } }
-            .mapNotNull { heroItemPick(it, "Because you watched $source") } +
-            shows.filter { !showSeen(it) && it.title != source && it.rating >= 6.5 && heroGenres(it.genres).any { g -> g.equals(genre, ignoreCase = true) } }
-                .mapNotNull { heroShowPick(it, "Because you watched $source") }
-        matches.randomOrNull()?.let(picks::add)
-    }
-
-    for (item in recentMovies.take(2)) if (!itemSeen(item)) heroItemPick(item, "New in your library")?.let(picks::add)
-    for (show in recentShows.take(2)) if (!showSeen(show)) heroShowPick(show, "New in your library")?.let(picks::add)
-    for (item in watchlistMovies.take(3)) if (!itemSeen(item)) heroItemPick(item, "On your watchlist")?.let(picks::add)
-    for (show in watchlistTvShows.take(3)) if (!showSeen(show)) heroShowPick(show, "On your watchlist")?.let(picks::add)
-
-    val gems = movies.filter { !itemSeen(it) && it.rating >= 7.5 }.mapNotNull { heroItemPick(it, "Maybe you missed this") } +
-        shows.filter { !showSeen(it) && it.rating >= 7.5 }.mapNotNull { heroShowPick(it, "Maybe you missed this") }
-    gems.randomOrNull()?.let(picks::add)
-
-    if (picks.isEmpty()) {
-        val fallback = movies.mapNotNull { heroItemPick(it, "Featured") } + shows.mapNotNull { heroShowPick(it, "Featured") }
-        fallback.randomOrNull()?.let(picks::add)
-    }
-    return picks.distinctBy { it.key }.shuffled()
 }
 
 @Composable
@@ -1893,11 +1877,11 @@ fun CuratedLanding(
     shows: List<ShowSummary>,
     completedItems: Set<Long>,
     completedShows: Set<String>,
-    heroAnchorShows: Set<String>,
     watchlistItems: Set<Long>,
     watchlistShows: Set<String>,
     continueMovies: List<PopItem>,
     continueEpisodes: List<PopItem>,
+    recommendations: List<Recommendation>,
     recentMovies: List<PopItem>,
     recentShows: List<ShowSummary>,
     watchlistMovies: List<PopItem>,
@@ -1919,8 +1903,11 @@ fun CuratedLanding(
         EmptyState("No media found")
         return
     }
-    val heroEntries = remember(movies, shows, completedItems, completedShows, heroAnchorShows, continueMovies, continueEpisodes, recentMovies, recentShows, watchlistMovies, watchlistTvShows) {
-        heroPicks(movies, shows, completedItems, completedShows, heroAnchorShows, continueMovies, continueEpisodes, recentMovies, recentShows, watchlistMovies, watchlistTvShows)
+    val heroEntries = remember(recommendations) {
+        recommendations.mapNotNull { recommendation ->
+            recommendation.item?.let { heroItemPick(it, recommendation.reason) }
+                ?: recommendation.show?.let { heroShowPick(it, recommendation.reason) }
+        }
     }
     val heroKeys = remember(heroEntries) { heroEntries.map { it.key } }
     var heroIndex by remember(heroKeys) { mutableStateOf(0) }

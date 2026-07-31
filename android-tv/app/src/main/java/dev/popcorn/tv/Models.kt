@@ -115,6 +115,16 @@ data class SeasonSummary(
 data class PlaybackProgress(val itemId: Long, val positionMs: Long, val durationMs: Long, val completed: Boolean)
 data class ShowProgress(val libraryId: String, val showTitle: String, val episodeCount: Int, val completedCount: Int, val completed: Boolean)
 data class Watchlist(val items: List<PopItem>, val shows: List<ShowSummary>)
+data class Recommendation(val key: String, val reason: String, val source: String, val item: PopItem?, val show: ShowSummary?)
+data class RecommendationExclusion(
+    val key: String,
+    val kind: String,
+    val item: PopItem?,
+    val show: ShowSummary?,
+    val path: String,
+    val sizeBytes: Long,
+)
+enum class MediaPreference { Unwatched, Seen, NotInterested }
 data class WatchHistoryEntry(
     val id: String,
     val item: PopItem?,
@@ -139,6 +149,8 @@ data class HomePayload(
     val progress: List<PlaybackProgress>,
     val showProgress: List<ShowProgress>,
     val watchlist: Watchlist,
+    val recommendations: List<Recommendation>,
+    val excludedRecommendationKeys: Set<String>,
 )
 data class RemoteCommand(val id: Long, val type: String, val payload: JSONObject)
 data class PlayerRemoteCommand(val id: Long, val type: String, val payload: JSONObject)

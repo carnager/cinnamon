@@ -309,6 +309,8 @@ class Api(private val session: Session) {
             progress = parseProgressList(json.optJSONArray("progress") ?: JSONArray()),
             showProgress = parseShowProgressList(json.optJSONArray("showProgress") ?: JSONArray()),
             watchlist = parseWatchlist(watchlistJson),
+            recommendations = parseRecommendations(json.optJSONArray("recommendations") ?: JSONArray()),
+            excludedRecommendationKeys = jsonStringSet(json.optJSONArray("excludedRecommendationKeys") ?: JSONArray()),
         )
     }
 
@@ -736,6 +738,37 @@ class Api(private val session: Session) {
         requestText("/api/watchlist/tv?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}", "DELETE", null)
     }
 
+    suspend fun recommendationExclusions(): List<RecommendationExclusion> = withContext(Dispatchers.IO) {
+        val rows = requestArray("/api/recommendations/exclusions")
+        (0 until rows.length()).map { index ->
+            val row = rows.getJSONObject(index)
+            RecommendationExclusion(
+                key = row.optString("key"),
+                kind = row.optString("kind"),
+                item = row.optJSONObject("item")?.let(::jsonToItem),
+                show = row.optJSONObject("show")?.let(::jsonToShow),
+                path = row.optString("path"),
+                sizeBytes = row.optLong("sizeBytes"),
+            )
+        }
+    }
+
+    suspend fun excludeItemRecommendation(itemId: Long) = withContext(Dispatchers.IO) {
+        request("/api/items/$itemId/recommendation-exclusion", "PUT", "{}")
+    }
+
+    suspend fun restoreItemRecommendation(itemId: Long) = withContext(Dispatchers.IO) {
+        requestText("/api/items/$itemId/recommendation-exclusion", "DELETE", null)
+    }
+
+    suspend fun excludeShowRecommendation(libraryId: String, showTitle: String) = withContext(Dispatchers.IO) {
+        request("/api/recommendations/exclusions/tv?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}", "PUT", "{}")
+    }
+
+    suspend fun restoreShowRecommendation(libraryId: String, showTitle: String) = withContext(Dispatchers.IO) {
+        requestText("/api/recommendations/exclusions/tv?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}", "DELETE", null)
+    }
+
     suspend fun registerDevice(existingId: String?, name: String): String = withContext(Dispatchers.IO) {
         val body = JSONObject()
             .put("id", existingId ?: "")
@@ -775,6 +808,20 @@ class Api(private val session: Session) {
     private fun parseItems(arr: JSONArray): List<PopItem> = (0 until arr.length()).map { i ->
         jsonToItem(arr.getJSONObject(i))
     }
+
+    private fun parseRecommendations(arr: JSONArray): List<Recommendation> = (0 until arr.length()).map { index ->
+        val row = arr.getJSONObject(index)
+        Recommendation(
+            key = row.optString("key"),
+            reason = row.optString("reason"),
+            source = row.optString("source"),
+            item = row.optJSONObject("item")?.let(::jsonToItem),
+            show = row.optJSONObject("show")?.let(::jsonToShow),
+        )
+    }
+
+    private fun jsonStringSet(arr: JSONArray): Set<String> =
+        (0 until arr.length()).mapNotNull { arr.optString(it).takeIf(String::isNotBlank) }.toSet()
 
     private fun parseProgressList(arr: JSONArray): List<PlaybackProgress> {
         return (0 until arr.length()).map { i ->

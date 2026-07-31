@@ -56,15 +56,9 @@ let lastScanSignature = "";
 let scanRefreshInFlight = false;
 let alphabetScrollFrame = 0;
 let homeData = {
-  movies: [],
-  shows: [],
-  continueMovies: [],
-  continueEpisodes: [],
-  recentMovies: [],
-  recentShows: [],
+  sections: [],
   watchlistMovies: [],
   watchlistShows: [],
-  recommendations: [],
 };
 
 async function api(path, options) {
@@ -414,6 +408,14 @@ function itemRecommendationExcluded(item) {
   return recommendationExclusionKeys.has(`item:${Number(item?.id || 0)}`);
 }
 
+/* "Not interested" hides the entry straight away; the next home refresh
+   rebuilds the shelf without it. */
+function dropRecommendation(sections, key) {
+  return (sections || [])
+    .map((section) => ({ ...section, entries: (section.entries || []).filter((entry) => entry.key !== key) }))
+    .filter((section) => section.entries?.length || section.items?.length || section.shows?.length);
+}
+
 function showRecommendationKey(show) {
   return `show:${String(show?.libraryId || "").trim().toLowerCase()}:${String(show?.title || "").trim().toLowerCase()}`;
 }
@@ -428,7 +430,7 @@ async function setItemRecommendationExcluded(item, excluded) {
   await api(`/api/items/${encodeURIComponent(String(item.id))}/recommendation-exclusion`, { method: excluded ? "PUT" : "DELETE" });
   if (excluded) recommendationExclusionKeys.add(key);
   else recommendationExclusionKeys.delete(key);
-  homeData.recommendations = (homeData.recommendations || []).filter((entry) => entry.key !== key);
+  homeData.sections = dropRecommendation(homeData.sections, key);
 }
 
 async function setShowRecommendationExcluded(show, excluded) {
@@ -440,7 +442,7 @@ async function setShowRecommendationExcluded(show, excluded) {
   await api(`/api/recommendations/exclusions/tv?${query}`, { method: excluded ? "PUT" : "DELETE" });
   if (excluded) recommendationExclusionKeys.add(key);
   else recommendationExclusionKeys.delete(key);
-  homeData.recommendations = (homeData.recommendations || []).filter((entry) => entry.key !== key);
+  homeData.sections = dropRecommendation(homeData.sections, key);
 }
 
 async function setItemPreference(item, preference) {
@@ -1069,7 +1071,8 @@ function renderHome(skipHistory) {
 /* Recommendation ranking lives on the server. The web client only presents
    the first eligible entry from the shared per-user feed. */
 function pickHeroItem(data) {
-  for (const recommendation of data.recommendations || []) {
+  const hero = (data.sections || []).find((section) => section.layout === "hero");
+  for (const recommendation of hero?.entries || []) {
     const entry = recommendation.item || recommendation.show;
     if (entry && (entry.backdropItemId || entry.backdropPath)) {
       return { item: entry, kick: recommendation.reason || "Recommended for you" };
@@ -1231,25 +1234,15 @@ function renderTVShows(root, shows) {
 
 function curatedHome(data) {
   const wrap = el("div", "home-shelves");
-  const moviePicks = pickFeatured(data.movies);
-  const showPicks = pickFeatured(data.shows);
-  const movieGenres = genreShelves(data.movies, 2);
-  const showGenres = genreShelves(data.shows, 1);
-
-  appendShelf(wrap, "Continue Watching", data.continueMovies, (items) => renderShelfGrid(items));
-  appendShelf(wrap, "Continue Watching · TV", data.continueEpisodes, (items) => renderShelfGrid(items));
-  appendShelf(wrap, "Recently Added Movies", data.recentMovies, (items) => renderShelfGrid(items));
-  appendShelf(wrap, "Recently Added TV", data.recentShows, (items) => renderShelfGrid(items.map((show) => showCard(show))));
-  appendShelf(wrap, "Your Watchlist", data.watchlistMovies, (items) => renderShelfGrid(items));
-  appendShelf(wrap, "Your Watchlist · TV", data.watchlistShows, (items) => renderShelfGrid(items.map((show) => showCard(show))));
-  appendShelf(wrap, "Top Rated Movies", moviePicks, (items) => renderShelfGrid(items));
-  appendShelf(wrap, "Top Rated TV", showPicks, (items) => renderShelfGrid(items.map((show) => showCard(show))));
-
-  for (const row of movieGenres) {
-    appendShelf(wrap, row.genre, row.items, (items) => renderShelfGrid(items));
-  }
-  for (const row of showGenres) {
-    appendShelf(wrap, `${row.genre} TV`, row.items, (items) => renderShelfGrid(items.map((show) => showCard(show))));
+  for (const section of data.sections || []) {
+    // Layouts this build can draw. Anything else is a section type from a
+    // newer server: skip it rather than render an empty shelf.
+    if (section.layout !== "poster" && section.layout !== "progress") continue;
+    if (section.shows?.length) {
+      appendShelf(wrap, section.title, section.shows, (shows) => renderShelfGrid(shows.map((show) => showCard(show))));
+    } else {
+      appendShelf(wrap, section.title, section.items, (items) => renderShelfGrid(items));
+    }
   }
   return wrap;
 }
@@ -1301,32 +1294,6 @@ function renderShelfGrid(itemsOrNodes) {
   return row;
 }
 
-function splitGenres(value) {
-  return String(value || "").split(/[,/]/).map((genre) => genre.trim()).filter(Boolean);
-}
-
-function pickFeatured(items) {
-  const rated = [...items]
-    .filter((item) => Number(item.rating || 0) >= 7)
-    .sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0))
-    .slice(0, 18);
-  return rated.length ? rated : items.slice(0, 18);
-}
-
-function genreShelves(items, maxRows) {
-  const byGenre = new Map();
-  for (const item of items) {
-    for (const genre of splitGenres(item.genres).slice(0, 3)) {
-      const key = genre.toLowerCase();
-      if (!byGenre.has(key)) byGenre.set(key, { genre, items: [] });
-      byGenre.get(key).items.push(item);
-    }
-  }
-  return [...byGenre.values()]
-    .filter((row) => row.items.length >= 4)
-    .sort((a, b) => b.items.length - a.items.length || a.genre.localeCompare(b.genre))
-    .slice(0, maxRows);
-}
 
 function libraryGenresBar(library) {
   const bar = el("div", "genre-filter-bar");
@@ -1396,28 +1363,8 @@ async function loadHome(skipHistory) {
   renderNav();
   setLoading();
 
-  const payload = await api("/api/home").catch(() => null);
-  if (payload) {
-    applyHomePayload(payload);
-  } else {
-    // Fallback to per-endpoint assembly if /api/home is unavailable.
-    await refreshMediaState();
-    const movieLibrary = libraries.find((library) => library.type === "movies");
-    const tvLibrary = libraries.find((library) => library.type === "tv");
-    const [recentMovies, movies, recentShows, shows] = await Promise.all([
-      movieLibrary ? fetchItemsPage(movieLibrary.id, { limit: 24, sort: "mtime" }) : [],
-      movieLibrary ? fetchItemsPage(movieLibrary.id, { limit: 220 }) : [],
-      tvLibrary ? fetchShowsPage(tvLibrary.id, { limit: 24, sort: "mtime" }) : [],
-      tvLibrary ? fetchShowsPage(tvLibrary.id, { limit: 220 }) : [],
-      fetchWatchlist(),
-    ]);
-    homeData.continueMovies = [];
-    homeData.continueEpisodes = [];
-    homeData.recentMovies = recentMovies || [];
-    homeData.movies = movies || [];
-    homeData.recentShows = recentShows || [];
-    homeData.shows = shows || [];
-  }
+  const payload = await api("/api/home?profile=web").catch(() => null);
+  if (payload) applyHomePayload(payload);
   renderHome(skipHistory);
 }
 
@@ -1472,15 +1419,9 @@ function applyHomePayload(payload) {
   const watchlist = payload.watchlist || { items: [], shows: [] };
   watchlistItemIds = new Set((watchlist.items || []).map((i) => Number(i.id)).filter(Boolean));
   watchlistShowKeys = new Set((watchlist.shows || []).map((s) => showKey(s.libraryId, s.title)));
-  homeData.continueMovies = payload.continueMovies || [];
-  homeData.continueEpisodes = payload.continueEpisodes || [];
-  homeData.recentMovies = payload.recentMovies || [];
-  homeData.recentShows = payload.recentShows || [];
-  homeData.movies = payload.homeMovies || [];
-  homeData.shows = payload.homeShows || [];
+  homeData.sections = payload.sections || [];
   homeData.watchlistMovies = (watchlist.items || []).filter((i) => i.kind === "movie");
   homeData.watchlistShows = watchlist.shows || [];
-  homeData.recommendations = payload.recommendations || [];
   recommendationExclusionKeys = new Set(payload.excludedRecommendationKeys || []);
 }
 

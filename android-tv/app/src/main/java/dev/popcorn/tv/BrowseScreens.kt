@@ -1856,7 +1856,7 @@ fun CuratedLanding(
 ) {
     // Layouts this build can draw. Anything else is a section type from a newer
     // server: skip it rather than render a blank row.
-    val drawable = remember(sections) { sections.filter { it.layout == "hero" || it.layout == "poster" } }
+    val drawable = remember(sections) { sections.filter { it.layout in setOf("hero", "poster", "progress") } }
     if (drawable.isEmpty()) {
         EmptyState("No media found")
         return

@@ -12,21 +12,24 @@ import (
 	"popcorn/internal/media"
 )
 
+// Everything a client needs to draw home: the shelves themselves, plus the
+// user-wide state (progress, watchlist, exclusions) that decorates cards
+// anywhere in the app. The shelf sources are only inputs to section building
+// and never reach the wire — clients read them out of Sections instead.
 type homePayload struct {
 	User                       auth.User                `json:"user"`
 	Libraries                  []config.Library         `json:"libraries"`
-	HomeMovies                 []media.Item             `json:"homeMovies"`
-	HomeShows                  []media.ShowSummary      `json:"homeShows"`
-	RecentMovies               []media.Item             `json:"recentMovies"`
-	RecentShows                []media.ShowSummary      `json:"recentShows"`
-	ContinueMovies             []media.Item             `json:"continueMovies"`
-	ContinueEpisodes           []media.Item             `json:"continueEpisodes"`
 	Progress                   []media.PlaybackProgress `json:"progress"`
 	ShowProgress               []media.ShowProgress     `json:"showProgress"`
 	Watchlist                  media.Watchlist          `json:"watchlist"`
-	Recommendations            []media.Recommendation   `json:"recommendations"`
 	ExcludedRecommendationKeys []string                 `json:"excludedRecommendationKeys"`
 	Sections                   []media.HomeSection      `json:"sections"`
+
+	RecentMovies     []media.Item           `json:"-"`
+	RecentShows      []media.ShowSummary    `json:"-"`
+	ContinueMovies   []media.Item           `json:"-"`
+	ContinueEpisodes []media.Item           `json:"-"`
+	Recommendations  []media.Recommendation `json:"-"`
 }
 
 func (a *App) home(w http.ResponseWriter, r *http.Request) {
@@ -34,14 +37,13 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	compact := r.URL.Query().Get("compact") == "1"
 	profile := r.URL.Query().Get("profile")
 	a.writeCachedJSON(w, r, cacheKey(r, "home", user.ID), 15*time.Second, func() (any, error) {
-		return a.buildHomePayload(r.Context(), user, compact, profile)
+		return a.buildHomePayload(r.Context(), user, profile)
 	})
 }
 
-func (a *App) buildHomePayload(ctx context.Context, user auth.User, compact bool, profile string) (homePayload, error) {
+func (a *App) buildHomePayload(ctx context.Context, user auth.User, profile string) (homePayload, error) {
 	payload := homePayload{
 		User:      user,
 		Libraries: a.cfg.Libraries,
@@ -69,20 +71,8 @@ func (a *App) buildHomePayload(ctx context.Context, user auth.User, compact bool
 		return payload, err
 	}
 
-	if movieLib != nil && !compact {
-		payload.HomeMovies, err = a.store.ListItemsForUser(ctx, movieLib.ID, "", "", "", "", "", user.ID, 0, 150, 0)
-		if err != nil {
-			return payload, err
-		}
-	}
 	if movieLib != nil {
 		payload.RecentMovies, err = a.store.ListItemsForUser(ctx, movieLib.ID, "", "", "", "mtime", "", user.ID, 0, 24, 0)
-		if err != nil {
-			return payload, err
-		}
-	}
-	if tvLib != nil && !compact {
-		payload.HomeShows, err = a.store.ListShowsForUser(ctx, tvLib.ID, "", "", "", "", "", user.ID, 0, 150, 0)
 		if err != nil {
 			return payload, err
 		}

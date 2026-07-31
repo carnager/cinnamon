@@ -63,7 +63,7 @@ func homeSectionDefs() map[string]homeSectionDef {
 		},
 		{
 			HomeSectionType: media.HomeSectionType{
-				Type: "continue_movies", Label: "Continue Movies", Layout: "poster", Kind: "movie",
+				Type: "continue_movies", Label: "Continue Movies", Layout: "progress", Kind: "movie",
 				Params: []media.HomeSectionParam{limitParam},
 			},
 			title: "Continue Movies",
@@ -78,7 +78,7 @@ func homeSectionDefs() map[string]homeSectionDef {
 		},
 		{
 			HomeSectionType: media.HomeSectionType{
-				Type: "continue_tv", Label: "Continue TV", Layout: "poster", Kind: "episode",
+				Type: "continue_tv", Label: "Continue TV", Layout: "progress", Kind: "episode",
 				Params: []media.HomeSectionParam{limitParam},
 			},
 			title: "Continue TV",

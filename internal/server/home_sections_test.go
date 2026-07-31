@@ -52,7 +52,7 @@ func newHomeSectionsApp(t *testing.T) (*App, *media.Store, int64) {
 
 func homeSectionsFor(t *testing.T, app *App, userID int64, profile string) []media.HomeSection {
 	t.Helper()
-	payload, err := app.buildHomePayload(context.Background(), auth.User{ID: userID, Username: "alice"}, false, profile)
+	payload, err := app.buildHomePayload(context.Background(), auth.User{ID: userID, Username: "alice"}, profile)
 	if err != nil {
 		t.Fatalf("build home payload: %v", err)
 	}

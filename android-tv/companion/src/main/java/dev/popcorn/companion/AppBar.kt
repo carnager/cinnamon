@@ -20,6 +20,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.History
@@ -64,6 +65,7 @@ fun CompanionTopAppBar(
     onSelectDevice: (Device) -> Unit,
     onHistory: () -> Unit,
     onWatchlist: () -> Unit,
+    onNotInterested: () -> Unit,
     onScan: () -> Unit,
     showUpdate: Boolean,
     onUpdate: () -> Unit,
@@ -127,6 +129,7 @@ fun CompanionTopAppBar(
             onDismiss = { userMenuOpen = false; userMenuPage = UserMenuPage.Root },
             onHistory = { userMenuOpen = false; userMenuPage = UserMenuPage.Root; onHistory() },
             onWatchlist = { userMenuOpen = false; userMenuPage = UserMenuPage.Root; onWatchlist() },
+            onNotInterested = { userMenuOpen = false; userMenuPage = UserMenuPage.Root; onNotInterested() },
             onScan = { userMenuOpen = false; onScan() },
             onRefreshDevices = { userMenuOpen = false; onRefreshDevices() },
             onUpdate = { userMenuOpen = false; onUpdate() },
@@ -147,6 +150,7 @@ private fun UserMenuSheet(
     onDismiss: () -> Unit,
     onHistory: () -> Unit,
     onWatchlist: () -> Unit,
+    onNotInterested: () -> Unit,
     onScan: () -> Unit,
     onRefreshDevices: () -> Unit,
     onUpdate: () -> Unit,
@@ -158,16 +162,7 @@ private fun UserMenuSheet(
         PlaybackPrefs.SUBS_OFF to "Off",
         PlaybackPrefs.TRACK_DEFAULT to "Track default",
     ) + prefLanguageChoices
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = Bg,
-        contentColor = TextColor,
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-        tonalElevation = 0.dp,
-        dragHandle = {
-            Box(Modifier.padding(top = 11.dp, bottom = 5.dp).size(width = 38.dp, height = 4.dp).clip(RoundedCornerShape(99.dp)).background(Line))
-        },
-    ) {
+    PopcornBottomSheet(onDismiss) {
         Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 24.dp)) {
             Text(
                 when (page) {
@@ -194,6 +189,7 @@ private fun UserMenuSheet(
                 UserMenuPage.Root -> {
                     UserMenuAction("Watchlist", Icons.Default.Bookmark, onClick = onWatchlist)
                     UserMenuAction("Watch history", Icons.Default.History, onClick = onHistory)
+                    UserMenuAction("Not interested", Icons.Default.Block, onClick = onNotInterested)
                     UserMenuAction(
                         "Preferred audio",
                         Icons.AutoMirrored.Filled.VolumeUp,

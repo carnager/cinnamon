@@ -22,6 +22,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -530,6 +531,24 @@ fun PlaybackTargetButton(label: String, icon: ImageVector, modifier: Modifier = 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+fun PopcornBottomSheet(
+    onDismiss: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = Bg,
+        contentColor = TextColor,
+        tonalElevation = 0.dp,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        dragHandle = {
+            Box(Modifier.padding(top = 11.dp, bottom = 5.dp).size(width = 38.dp, height = 4.dp).clip(RoundedCornerShape(99.dp)).background(Line))
+        },
+        content = content,
+    )
+}
+
+@Composable
 fun PlaybackTargetSheet(
     devices: List<Device>,
     selectedDevice: Device?,
@@ -540,13 +559,7 @@ fun PlaybackTargetSheet(
     onSelectPhone: () -> Unit,
     onSelectDevice: (Device) -> Unit,
 ) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = Bg,
-        contentColor = TextColor,
-        tonalElevation = 0.dp,
-        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-    ) {
+    PopcornBottomSheet(onDismiss) {
         Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text("PLAYBACK DESTINATION", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.2.sp)
             Spacer(Modifier.height(8.dp))
@@ -576,19 +589,9 @@ private fun PlaybackTargetRow(title: String, subtitle: String, icon: ImageVector
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BandwidthDialog(selectedBandwidth: Int?, onDismiss: () -> Unit, onBandwidth: (Int?) -> Unit) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = Bg,
-        contentColor = TextColor,
-        tonalElevation = 0.dp,
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-        dragHandle = {
-            Box(Modifier.padding(top = 11.dp, bottom = 5.dp).size(width = 38.dp, height = 4.dp).clip(RoundedCornerShape(99.dp)).background(Line))
-        },
-    ) {
+    PopcornBottomSheet(onDismiss) {
         Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("NOW PLAYING", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.3.sp)
             Spacer(Modifier.height(5.dp))
@@ -609,19 +612,9 @@ fun BandwidthDialog(selectedBandwidth: Int?, onDismiss: () -> Unit, onBandwidth:
 // picker in the app (bandwidth, playback target, user menu) is a sheet, and
 // real track labels like "German 5.1 DTS-HD MA" clip badly in a dropdown
 // anchored under a full-width button.
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TrackDialog(title: String, tracks: List<StreamInfo>, selected: Int?, emptyLabel: String, onDismiss: () -> Unit, onSelect: (Int?) -> Unit) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = Bg,
-        contentColor = TextColor,
-        tonalElevation = 0.dp,
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-        dragHandle = {
-            Box(Modifier.padding(top = 11.dp, bottom = 5.dp).size(width = 38.dp, height = 4.dp).clip(RoundedCornerShape(99.dp)).background(Line))
-        },
-    ) {
+    PopcornBottomSheet(onDismiss) {
         Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(title.uppercase(java.util.Locale.US), color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.3.sp)
             Spacer(Modifier.height(8.dp))

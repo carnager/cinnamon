@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
@@ -38,7 +39,9 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -73,8 +76,10 @@ fun DetailPage(
     playbackTarget: PlaybackTarget,
     watched: Boolean,
     watchlisted: Boolean,
-    onSetWatched: (Boolean) -> Unit,
+    recommendationExcluded: Boolean,
     onSetWatchlisted: (Boolean) -> Unit,
+    onSetPreference: (MediaPreference) -> Unit,
+    onResetProgress: () -> Unit,
     onBack: () -> Unit,
     onPlay: (PopItem, Int?, Int?, Long) -> Unit,
     onPlayLocal: (PopItem, Int?, Int?, Long) -> Unit,
@@ -94,6 +99,8 @@ fun DetailPage(
     var ratingOpen by remember(item.id) { mutableStateOf(false) }
     var audioOpen by remember(item.id) { mutableStateOf(false) }
     var subtitleOpen by remember(item.id) { mutableStateOf(false) }
+    var playOptionsOpen by remember(item.id) { mutableStateOf(false) }
+    var preferenceOpen by remember(item.id) { mutableStateOf(false) }
     val ratingScope = rememberCoroutineScope()
     val audioTracks = streams.filter { it.type == "audio" }
     val subtitleTracks = streams.filter { it.type == "subtitle" }
@@ -114,6 +121,11 @@ fun DetailPage(
     }
 
     val resumeMs = progress?.takeIf { progressResumable(it.positionMs, it.durationMs) }?.positionMs ?: 0L
+    val preference = when {
+        recommendationExcluded -> MediaPreference.NotInterested
+        watched -> MediaPreference.Seen
+        else -> MediaPreference.Unwatched
+    }
 
     fun start(positionMs: Long) {
         if (playbackTarget == PlaybackTarget.Phone) {
@@ -130,23 +142,16 @@ fun DetailPage(
             Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
-                        onClick = { start(resumeMs) },
+                        onClick = {
+                            val hasSavedProgress = progress?.let { it.positionMs > 0 || it.completed } == true
+                            if (hasSavedProgress) playOptionsOpen = true else start(0)
+                        },
                         colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
                         modifier = Modifier.weight(1f).height(52.dp),
                         shape = RoundedCornerShape(8.dp),
                     ) {
                         Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(22.dp))
-                        Text(if (resumeMs > 0) "  Resume" else "  Play", fontWeight = FontWeight.Black, fontSize = 16.sp)
-                    }
-                    if (resumeMs > 0) {
-                        OutlinedButton(
-                            onClick = { start(0) },
-                            modifier = Modifier.height(52.dp),
-                            shape = RoundedCornerShape(8.dp),
-                        ) {
-                            Icon(Icons.Default.Replay, contentDescription = null, tint = TextColor, modifier = Modifier.size(19.dp))
-                            Text("  Start over", color = TextColor, fontWeight = FontWeight.Bold, fontSize = 13.sp, maxLines = 1)
-                        }
+                        Text("  Play", fontWeight = FontWeight.Black, fontSize = 16.sp)
                     }
                 }
                 // Timing only. Where playback lands, and changing it, is the
@@ -179,11 +184,20 @@ fun DetailPage(
                         ) { subtitleOpen = true }
                     }
                 }
-                Spacer(Modifier.height(2.dp))
                 // Secondary to Play: no borders unless active, so the primary
                 // action keeps the visual weight it deserves.
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DetailAction("Seen", Icons.Filled.CheckCircle, Modifier.weight(1f), watched, Accent) { onSetWatched(!watched) }
+                    DetailAction(
+                        label = when (preference) {
+                            MediaPreference.Unwatched -> "Watch"
+                            MediaPreference.Seen -> "Seen"
+                            MediaPreference.NotInterested -> "Not interested"
+                        },
+                        icon = if (preference == MediaPreference.NotInterested) Icons.Filled.Block else Icons.Filled.CheckCircle,
+                        modifier = Modifier.weight(1f),
+                        active = preference != MediaPreference.Unwatched,
+                        activeColor = if (preference == MediaPreference.NotInterested) ErrorRed else Accent,
+                    ) { preferenceOpen = true }
                     DetailAction("Watchlist", Icons.Filled.Bookmark, Modifier.weight(1f), watchlisted, Teal) { onSetWatchlisted(!watchlisted) }
                     DetailAction(if (userRating > 0) "$userRating/10" else "Rate", Icons.Filled.Star, Modifier.weight(1f), userRating > 0, Gold) { ratingOpen = !ratingOpen }
                     DetailAction(
@@ -195,33 +209,6 @@ fun DetailPage(
                             runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query=$query"))) }
                         },
                     )
-                }
-            }
-        }
-        if (ratingOpen) {
-            item {
-                Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(if (userRating > 0) "Your rating · $userRating/10" else "Rate this", color = Gold, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        for (star in 1..10) {
-                            // The glyph is 23sp but the target is 40dp: picking
-                            // 7 versus 8 was otherwise a guess.
-                            Box(
-                                Modifier.size(40.dp).clip(RoundedCornerShape(6.dp)).clickable {
-                                    val value = if (star == userRating) 0 else star
-                                    ratingScope.launch {
-                                        runCatching {
-                                            if (value > 0) api.setItemRating(item.id, value) else api.deleteItemRating(item.id)
-                                        }.onSuccess { userRating = value }
-                                            .onFailure { error = it.message ?: "Failed to save rating" }
-                                    }
-                                },
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text("★", color = if (star <= userRating) Gold else Muted.copy(alpha = .38f), fontSize = 23.sp)
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -239,6 +226,105 @@ fun DetailPage(
         TrackDialog("Subtitles", subtitleTracks, selectedSubtitle, "Off", { subtitleOpen = false }) {
             selectedSubtitle = it
             subtitleOpen = false
+        }
+    }
+    if (playOptionsOpen) {
+        PlaybackChoiceSheet(
+            canResume = resumeMs > 0,
+            onDismiss = { playOptionsOpen = false },
+            onResume = { playOptionsOpen = false; start(resumeMs) },
+            onFromBeginning = { playOptionsOpen = false; start(0) },
+            onReset = {
+                playOptionsOpen = false
+                progress = null
+                onResetProgress()
+            },
+        )
+    }
+    if (preferenceOpen) {
+        MediaPreferenceSheet(
+            selected = preference,
+            allowNotInterested = detailItem.kind == "movie",
+            onDismiss = { preferenceOpen = false },
+            onSelect = {
+                preferenceOpen = false
+                onSetPreference(it)
+            },
+        )
+    }
+    if (ratingOpen) {
+        RatingSheet(
+            selected = userRating,
+            onDismiss = { ratingOpen = false },
+            onSelect = { value ->
+                ratingScope.launch {
+                    runCatching {
+                        if (value > 0) api.setItemRating(item.id, value) else api.deleteItemRating(item.id)
+                    }.onSuccess {
+                        userRating = value
+                        ratingOpen = false
+                    }.onFailure { error = it.message ?: "Failed to save rating" }
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun PlaybackChoiceSheet(
+    canResume: Boolean,
+    onDismiss: () -> Unit,
+    onResume: () -> Unit,
+    onFromBeginning: () -> Unit,
+    onReset: () -> Unit,
+) {
+    PopcornBottomSheet(onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("PLAYBACK", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.3.sp)
+            Spacer(Modifier.height(8.dp))
+            if (canResume) TrackChoice("Resume", false, onResume)
+            TrackChoice("Play from beginning", false, onFromBeginning)
+            TrackChoice("Reset progress", false, onReset)
+        }
+    }
+}
+
+@Composable
+fun MediaPreferenceSheet(
+    selected: MediaPreference,
+    allowNotInterested: Boolean,
+    onDismiss: () -> Unit,
+    onSelect: (MediaPreference) -> Unit,
+) {
+    PopcornBottomSheet(onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("WATCH STATUS", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.3.sp)
+            Spacer(Modifier.height(8.dp))
+            buildList {
+                add(MediaPreference.Unwatched to "Unwatched")
+                add(MediaPreference.Seen to "Seen")
+                if (allowNotInterested) add(MediaPreference.NotInterested to "Not interested")
+            }.forEach { (preference, label) ->
+                TrackChoice(label, selected == preference) { onSelect(preference) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RatingSheet(
+    selected: Int,
+    onDismiss: () -> Unit,
+    onSelect: (Int) -> Unit,
+) {
+    PopcornBottomSheet(onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("RATING", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.3.sp)
+            Spacer(Modifier.height(8.dp))
+            if (selected > 0) TrackChoice("Remove rating", false) { onSelect(0) }
+            for (value in 10 downTo 1) {
+                TrackChoice("★".repeat(value) + "  $value/10", selected == value) { onSelect(value) }
+            }
         }
     }
 }

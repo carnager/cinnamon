@@ -1,7 +1,12 @@
 package dev.popcorn.companion
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.Crossfade
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -11,6 +16,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,6 +49,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -90,6 +97,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import kotlinx.coroutines.delay
+import java.util.Locale
 import kotlin.math.abs
 
 // Minimum poster column width, shared by every poster grid so they all break
@@ -147,6 +155,7 @@ fun BottomNavigation(page: Page, onHome: () -> Unit, onMovies: () -> Unit, onSho
 @Composable
 fun HomePage(
     session: Session,
+    recommendations: List<Recommendation>,
     continueMovies: List<PopItem>,
     continueEpisodes: List<PopItem>,
     resume: Map<Long, Float>,
@@ -164,16 +173,11 @@ fun HomePage(
     onShow: (ShowSummary) -> Unit,
     onEpisode: (PopItem) -> Unit,
 ) {
-    val heroPicks = remember(continueMovies, continueEpisodes, recentMovies, recentShows, topMovies, topShows, watchlistMovies, watchlistTvShows) {
-        buildList {
-            (continueMovies + continueEpisodes).take(4).forEach { add(HomeHeroPick.fromItem(it, "Continue watching")) }
-            watchlistMovies.take(2).forEach { add(HomeHeroPick.fromItem(it, "On your watchlist")) }
-            watchlistTvShows.take(2).forEach { add(HomeHeroPick.fromShow(it, "On your watchlist")) }
-            recentMovies.take(2).forEach { add(HomeHeroPick.fromItem(it, "New in your library")) }
-            recentShows.take(2).forEach { add(HomeHeroPick.fromShow(it, "New in your library")) }
-            topMovies.firstOrNull()?.let { add(HomeHeroPick.fromItem(it, "Maybe you missed this")) }
-            topShows.firstOrNull()?.let { add(HomeHeroPick.fromShow(it, "Maybe you missed this")) }
-        }.filter { it.backdropId > 0 && it.backdropVersion > 0 }.distinctBy { it.key }
+    val heroPicks = remember(recommendations) {
+        recommendations.mapNotNull { recommendation ->
+            recommendation.item?.let { HomeHeroPick.fromItem(it, recommendation.reason) }
+                ?: recommendation.show?.let { HomeHeroPick.fromShow(it, recommendation.reason) }
+        }.filter { it.backdropId > 0 && it.backdropVersion > 0 }
     }
     LazyColumn(contentPadding = PaddingValues(top = 8.dp, bottom = 22.dp), verticalArrangement = Arrangement.spacedBy(22.dp)) {
         if (heroPicks.isNotEmpty()) item { MobileHomeHero(session, heroPicks, onMovie, onShow, onEpisode) }
@@ -230,37 +234,76 @@ private fun MobileHomeHero(
     onShow: (ShowSummary) -> Unit,
     onEpisode: (PopItem) -> Unit,
 ) {
-    var index by remember(picks.map { it.key }) { mutableStateOf(0) }
-    LaunchedEffect(picks, index) {
+    var selectedKey by remember { mutableStateOf<String?>(null) }
+    var transitionDirection by remember { mutableStateOf(1) }
+    val index = picks.indexOfFirst { it.key == selectedKey }.coerceAtLeast(0)
+    val pick = picks[index]
+    LaunchedEffect(picks.map { it.key }, pick.key) {
+        if (selectedKey != pick.key) selectedKey = pick.key
         if (picks.size > 1) {
             delay(12_000)
-            index = (index + 1) % picks.size
+            transitionDirection = 1
+            selectedKey = picks[(index + 1) % picks.size].key
         }
     }
-    val pick = picks[index.coerceIn(0, picks.lastIndex)]
-    Crossfade(targetState = pick, animationSpec = tween(650), label = "homeHero") { current ->
-        Box(
-            Modifier.padding(horizontal = 12.dp).fillMaxWidth().height(320.dp).clip(RoundedCornerShape(12.dp)).background(Surface2)
-                .clickable {
-                    current.show?.let(onShow) ?: current.item?.let { if (it.kind == "episode") onEpisode(it) else onMovie(it) }
-                },
-        ) {
-            AuthAsyncImage(session, imageUrl(session, current.backdropId, current.backdropVersion, "backdrop", ArtworkFull), null, Modifier.fillMaxSize(), ContentScale.Crop)
-            Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Bg.copy(alpha = .96f), Bg.copy(alpha = .74f), Color.Transparent))))
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Bg.copy(alpha = .12f), Bg.copy(alpha = .72f)))))
-            Column(Modifier.align(Alignment.BottomStart).fillMaxWidth(.78f).padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Text(current.kick, color = Teal, fontSize = 12.sp, fontWeight = FontWeight.Black, modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Teal.copy(alpha = .10f)).border(1.dp, Teal.copy(alpha = .34f), RoundedCornerShape(4.dp)).padding(horizontal = 7.dp, vertical = 3.dp))
-                Text(current.title, color = TextColor, fontSize = 30.sp, lineHeight = 34.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (current.rating > 0) Text("★ %.1f".format(current.rating), color = Gold, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                    if (current.meta.isNotBlank()) Text(current.meta, color = Muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Box(
+        Modifier.padding(horizontal = 12.dp).fillMaxWidth().height(320.dp).clip(RoundedCornerShape(12.dp)).background(Surface2)
+            .pointerInput(picks.map { it.key }, index) {
+                var dragDistance = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { dragDistance = 0f },
+                    onHorizontalDrag = { change, amount ->
+                        change.consume()
+                        dragDistance += amount
+                    },
+                    onDragCancel = { dragDistance = 0f },
+                    onDragEnd = {
+                        if (picks.size > 1 && abs(dragDistance) >= 56.dp.toPx()) {
+                            transitionDirection = if (dragDistance < 0) 1 else -1
+                            val nextIndex = if (transitionDirection > 0) {
+                                (index + 1) % picks.size
+                            } else {
+                                (index - 1 + picks.size) % picks.size
+                            }
+                            selectedKey = picks[nextIndex].key
+                        }
+                    },
+                )
+            }
+            .clickable {
+                pick.show?.let(onShow) ?: pick.item?.let { if (it.kind == "episode") onEpisode(it) else onMovie(it) }
+            },
+    ) {
+        AnimatedContent(
+            targetState = pick,
+            transitionSpec = {
+                val enterOffset: (Int) -> Int = { width -> if (transitionDirection > 0) width else -width }
+                val exitOffset: (Int) -> Int = { width -> if (transitionDirection > 0) -width else width }
+                (slideInHorizontally(tween(420), enterOffset) + fadeIn(tween(220))) togetherWith
+                    (slideOutHorizontally(tween(420), exitOffset) + fadeOut(tween(180)))
+            },
+            contentKey = { it.key },
+            modifier = Modifier.fillMaxSize(),
+            label = "homeHero",
+        ) { current ->
+            Box(Modifier.fillMaxSize()) {
+                AuthAsyncImage(session, imageUrl(session, current.backdropId, current.backdropVersion, "backdrop", ArtworkFull), null, Modifier.fillMaxSize(), ContentScale.Crop)
+                Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Bg.copy(alpha = .96f), Bg.copy(alpha = .74f), Color.Transparent))))
+                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color.Transparent, Bg.copy(alpha = .12f), Bg.copy(alpha = .72f)))))
+                Column(Modifier.align(Alignment.BottomStart).fillMaxWidth(.78f).padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Text(current.kick, color = Teal, fontSize = 12.sp, fontWeight = FontWeight.Black, modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Teal.copy(alpha = .10f)).border(1.dp, Teal.copy(alpha = .34f), RoundedCornerShape(4.dp)).padding(horizontal = 7.dp, vertical = 3.dp))
+                    Text(current.title, color = TextColor, fontSize = 30.sp, lineHeight = 34.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (current.rating > 0) Text("★ %.1f".format(current.rating), color = Gold, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                        if (current.meta.isNotBlank()) Text(current.meta, color = Muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (current.overview.isNotBlank()) Text(current.overview, color = TextColor.copy(alpha = .78f), fontSize = 14.sp, lineHeight = 19.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    Text("More info  ›", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.clip(RoundedCornerShape(7.dp)).background(Accent).padding(horizontal = 13.dp, vertical = 8.dp))
                 }
-                if (current.overview.isNotBlank()) Text(current.overview, color = TextColor.copy(alpha = .78f), fontSize = 14.sp, lineHeight = 19.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                Text("More info  ›", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.clip(RoundedCornerShape(7.dp)).background(Accent).padding(horizontal = 13.dp, vertical = 8.dp))
             }
-            Row(Modifier.align(Alignment.BottomEnd).padding(14.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                picks.take(6).forEachIndexed { dot, _ -> Box(Modifier.size(if (dot == index) 7.dp else 5.dp).clip(CircleShape).background(if (dot == index) Accent else Color.White.copy(alpha = .55f))) }
-            }
+        }
+        Row(Modifier.align(Alignment.BottomEnd).padding(14.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            picks.forEachIndexed { dot, _ -> Box(Modifier.size(if (dot == index) 7.dp else 5.dp).clip(CircleShape).background(if (dot == index) Accent else Color.White.copy(alpha = .55f))) }
         }
     }
 }
@@ -548,14 +591,16 @@ fun SeasonList(
     seasons: List<SeasonSummary>,
     completedItems: Set<Long>,
     showWatched: Boolean,
+    recommendationExcluded: Boolean,
     onBack: () -> Unit,
     onSeason: (SeasonSummary) -> Unit,
-    onSetShowWatched: (Boolean) -> Unit,
+    onSetPreference: (MediaPreference) -> Unit,
     onSetSeasonWatched: (SeasonSummary, Boolean) -> Unit,
     onActor: (Actor) -> Unit,
 ) {
     var actors by remember(show.libraryId, show.title) { mutableStateOf<List<Actor>>(emptyList()) }
     var allEpisodes by remember(show.libraryId, show.title) { mutableStateOf<List<PopItem>>(emptyList()) }
+    var preferenceOpen by remember(show.libraryId, show.title) { mutableStateOf(false) }
     LaunchedEffect(show.libraryId, show.title) {
         actors = runCatching { Api(session).showActors(show.libraryId, show.title) }.getOrDefault(emptyList())
         allEpisodes = runCatching { Api(session).episodes(show.libraryId, show.title, -1) }.getOrDefault(emptyList())
@@ -564,6 +609,11 @@ fun SeasonList(
         allEpisodes.groupBy { it.seasonNumber }
             .filterValues { eps -> eps.all { completedItems.contains(it.id) } }
             .keys
+    }
+    val preference = when {
+        recommendationExcluded -> MediaPreference.NotInterested
+        showWatched -> MediaPreference.Seen
+        else -> MediaPreference.Unwatched
     }
     LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { ShowHero(session, show, onBack) }
@@ -583,13 +633,17 @@ fun SeasonList(
         }
         item {
             OutlinedButton(
-                onClick = { onSetShowWatched(!showWatched) },
+                onClick = { preferenceOpen = true },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
                 shape = RoundedCornerShape(14.dp),
             ) {
                 Text(
-                    if (showWatched) "✓  Seen — tap to unmark" else "Mark show as seen",
-                    color = if (showWatched) Accent else TextColor,
+                    when (preference) {
+                        MediaPreference.Unwatched -> "Watch status · Unwatched"
+                        MediaPreference.Seen -> "✓  Watch status · Seen"
+                        MediaPreference.NotInterested -> "Watch status · Not interested"
+                    },
+                    color = if (preference == MediaPreference.NotInterested) ErrorRed else if (preference == MediaPreference.Seen) Accent else TextColor,
                     fontWeight = FontWeight.Bold,
                 )
             }
@@ -608,6 +662,70 @@ fun SeasonList(
             }
         }
     }
+    if (preferenceOpen) {
+        MediaPreferenceSheet(
+            selected = preference,
+            allowNotInterested = true,
+            onDismiss = { preferenceOpen = false },
+            onSelect = {
+                preferenceOpen = false
+                onSetPreference(it)
+            },
+        )
+    }
+}
+
+@Composable
+fun NotInterestedPage(
+    session: Session,
+    exclusions: List<RecommendationExclusion>,
+    loading: Boolean,
+    onBack: () -> Unit,
+    onRestore: (RecommendationExclusion) -> Unit,
+) {
+    LazyColumn(contentPadding = PaddingValues(12.dp, 8.dp, 12.dp, 28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                    Text("  Back")
+                }
+                Text("Not interested", color = TextColor, fontSize = 22.sp, fontWeight = FontWeight.Black, modifier = Modifier.padding(start = 14.dp))
+            }
+            Text(
+                "Excluded from all recommendations. Paths are shown for manual cleanup; media is never deleted here.",
+                color = Muted,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(top = 10.dp),
+            )
+        }
+        if (loading) item { CircularProgressIndicator(color = Accent) }
+        if (!loading && exclusions.isEmpty()) item { Text("No excluded titles", color = Muted) }
+        items(exclusions, key = { it.key }) { entry ->
+            val item = entry.item
+            val show = entry.show
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Surface1).padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                val artworkId = item?.id ?: show?.posterItemId ?: 0
+                val artworkVersion = item?.posterMtimeUnix ?: show?.posterMtimeUnix ?: 0
+                PosterImage(session, imageUrl(session, artworkId, artworkVersion, width = ArtworkCard), Modifier.width(54.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(item?.title ?: show?.title ?: "Unavailable title", color = TextColor, fontWeight = FontWeight.Bold)
+                    if (entry.path.isNotBlank()) Text(entry.path, color = Muted, fontSize = 11.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    if (entry.sizeBytes > 0) Text(exclusionSizeLabel(entry.sizeBytes), color = Muted, fontSize = 11.sp)
+                }
+                OutlinedButton(onClick = { onRestore(entry) }) { Text("Restore") }
+            }
+        }
+    }
+}
+
+private fun exclusionSizeLabel(bytes: Long): String {
+    val gib = bytes.toDouble() / (1024.0 * 1024.0 * 1024.0)
+    return if (gib >= 1) String.format(Locale.US, "%.1f GB", gib) else String.format(Locale.US, "%.0f MB", bytes.toDouble() / (1024.0 * 1024.0))
 }
 
 // Small round check button used to mark seasons/episodes seen without opening them.
@@ -1024,16 +1142,7 @@ private fun LibraryFilterSheet(
         LibraryFilterPage.Genre -> "Genres"
         LibraryFilterPage.Decade -> "Decades"
     }
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        containerColor = Bg,
-        contentColor = TextColor,
-        tonalElevation = 0.dp,
-        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
-        dragHandle = {
-            Box(Modifier.padding(top = 11.dp, bottom = 5.dp).size(width = 38.dp, height = 4.dp).clip(RoundedCornerShape(99.dp)).background(Line))
-        },
-    ) {
+    PopcornBottomSheet(onDismiss) {
         Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, bottom = 26.dp)) {
             Text("FILTERS", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.4.sp)
             Spacer(Modifier.height(7.dp))

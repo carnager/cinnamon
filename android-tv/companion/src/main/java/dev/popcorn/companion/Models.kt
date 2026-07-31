@@ -15,6 +15,15 @@ data class PlayerState(val itemId: Long, val title: String, val state: String, v
 data class PlaybackProgress(val itemId: Long, val positionMs: Long, val durationMs: Long, val completed: Boolean)
 data class ShowProgress(val libraryId: String, val showTitle: String, val episodeCount: Int, val completedCount: Int, val completed: Boolean)
 data class Watchlist(val items: List<PopItem>, val shows: List<ShowSummary>)
+data class Recommendation(val key: String, val reason: String, val source: String, val item: PopItem?, val show: ShowSummary?)
+data class RecommendationExclusion(
+    val key: String,
+    val kind: String,
+    val item: PopItem?,
+    val show: ShowSummary?,
+    val path: String,
+    val sizeBytes: Long,
+)
 data class WatchHistoryEntry(
     val id: String,
     val item: PopItem?,
@@ -26,7 +35,23 @@ data class WatchHistoryEntry(
     val source: String,
 )
 data class WatchHistory(val items: List<WatchHistoryEntry>, val source: String, val traktLinked: Boolean)
-data class HomeContinue(val movies: List<PopItem>, val episodes: List<PopItem>, val resume: Map<Long, Float>)
+data class HomeContent(
+    val libraries: List<Library>,
+    val recentMovies: List<PopItem>,
+    val recentShows: List<ShowSummary>,
+    val continueMovies: List<PopItem>,
+    val continueEpisodes: List<PopItem>,
+    val progress: List<PlaybackProgress>,
+    val showProgress: List<ShowProgress>,
+    val watchlist: Watchlist,
+    val recommendations: List<Recommendation>,
+    val excludedRecommendationKeys: Set<String>,
+) {
+    val resume: Map<Long, Float>
+        get() = progress
+            .filter { !it.completed && it.durationMs > 0 && it.positionMs > 0 }
+            .associate { it.itemId to resumeFraction(it.positionMs, it.durationMs) }
+}
 data class AppUpdateInfo(
     val configured: Boolean,
     val available: Boolean,
@@ -40,6 +65,7 @@ data class AppUpdateInfo(
 )
 
 enum class PlaybackTarget { Shield, Phone }
+enum class MediaPreference { Unwatched, Seen, NotInterested }
 
 data class PhonePlaybackState(
     val item: PopItem? = null,
@@ -252,6 +278,7 @@ sealed interface Page {
     data object Remote : Page
     data object History : Page
     data object Watchlist : Page
+    data object NotInterested : Page
     data class Person(val actor: Actor) : Page
     data class Show(val show: ShowSummary) : Page
     data class Season(val show: ShowSummary, val season: SeasonSummary) : Page

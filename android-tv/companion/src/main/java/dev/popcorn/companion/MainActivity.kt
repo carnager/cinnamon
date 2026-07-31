@@ -353,6 +353,10 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     var shows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
     var continueMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var continueEpisodes by remember { mutableStateOf<List<PopItem>>(emptyList()) }
+    var recommendations by remember { mutableStateOf<List<Recommendation>>(emptyList()) }
+    var recommendationExclusionKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var recommendationExclusions by remember { mutableStateOf<List<RecommendationExclusion>>(emptyList()) }
+    var exclusionsLoading by remember { mutableStateOf(false) }
     var resumeProgress by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
     var recentMovies by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var recentShows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
@@ -496,6 +500,106 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                 watchlistItems = if (watchlisted) watchlistItems + item.id else watchlistItems - item.id
                 refreshMarkers()
             }.onFailure { reportError(it, "Could not update watchlist") }
+        }
+    }
+
+    fun setItemRecommendationExcluded(item: PopItem, excluded: Boolean) {
+        scope.launch {
+            val key = "item:${item.id}"
+            runCatching {
+                if (excluded) api.excludeItemRecommendation(item.id) else api.restoreItemRecommendation(item.id)
+            }.onSuccess {
+                recommendationExclusionKeys = if (excluded) recommendationExclusionKeys + key else recommendationExclusionKeys - key
+                recommendations = recommendations.filterNot { it.key == key }
+            }.onFailure { reportError(it, "Could not update recommendations") }
+        }
+    }
+
+    fun setShowRecommendationExcluded(show: ShowSummary, excluded: Boolean) {
+        scope.launch {
+            val key = "show:${show.libraryId.trim().lowercase()}:${show.title.trim().lowercase()}"
+            runCatching {
+                if (excluded) api.excludeShowRecommendation(show.libraryId, show.title) else api.restoreShowRecommendation(show.libraryId, show.title)
+            }.onSuccess {
+                recommendationExclusionKeys = if (excluded) recommendationExclusionKeys + key else recommendationExclusionKeys - key
+                recommendations = recommendations.filterNot { it.key == key }
+            }.onFailure { reportError(it, "Could not update recommendations") }
+        }
+    }
+
+    fun setItemPreference(item: PopItem, preference: MediaPreference) {
+        scope.launch {
+            val key = "item:${item.id}"
+            runCatching {
+                when (preference) {
+                    MediaPreference.Unwatched -> {
+                        api.restoreItemRecommendation(item.id)
+                        api.unmarkItemWatched(item.id)
+                    }
+                    MediaPreference.Seen -> {
+                        api.restoreItemRecommendation(item.id)
+                        api.markItemWatched(item)
+                    }
+                    MediaPreference.NotInterested -> {
+                        api.unmarkItemWatched(item.id)
+                        api.excludeItemRecommendation(item.id)
+                    }
+                }
+            }.onSuccess {
+                completedItems = if (preference == MediaPreference.Seen) completedItems + item.id else completedItems - item.id
+                recommendationExclusionKeys = if (preference == MediaPreference.NotInterested) recommendationExclusionKeys + key else recommendationExclusionKeys - key
+                if (preference == MediaPreference.NotInterested) recommendations = recommendations.filterNot { it.key == key }
+            }.onFailure { reportError(it, "Could not update viewing preference") }
+        }
+    }
+
+    fun resetItemProgress(item: PopItem) {
+        scope.launch {
+            runCatching { api.unmarkItemWatched(item.id) }
+                .onSuccess {
+                    completedItems = completedItems - item.id
+                    resumeProgress = resumeProgress - item.id
+                }
+                .onFailure { reportError(it, "Could not reset playback progress") }
+        }
+    }
+
+    fun setShowPreference(show: ShowSummary, preference: MediaPreference) {
+        scope.launch {
+            val marker = showKey(show)
+            val key = "show:${show.libraryId.trim().lowercase()}:${show.title.trim().lowercase()}"
+            runCatching {
+                when (preference) {
+                    MediaPreference.Unwatched -> {
+                        api.restoreShowRecommendation(show.libraryId, show.title)
+                        api.unmarkShowWatched(show.libraryId, show.title)
+                    }
+                    MediaPreference.Seen -> {
+                        api.restoreShowRecommendation(show.libraryId, show.title)
+                        api.markShowWatched(show.libraryId, show.title)
+                    }
+                    MediaPreference.NotInterested -> {
+                        api.unmarkShowWatched(show.libraryId, show.title)
+                        api.excludeShowRecommendation(show.libraryId, show.title)
+                    }
+                }
+            }.onSuccess {
+                completedShows = if (preference == MediaPreference.Seen) completedShows + marker else completedShows - marker
+                recommendationExclusionKeys = if (preference == MediaPreference.NotInterested) recommendationExclusionKeys + key else recommendationExclusionKeys - key
+                if (preference == MediaPreference.NotInterested) recommendations = recommendations.filterNot { it.key == key }
+            }.onFailure { reportError(it, "Could not update viewing preference") }
+        }
+    }
+
+    fun openNotInterested() {
+        backStack = backStack + page
+        page = Page.NotInterested
+        exclusionsLoading = true
+        scope.launch {
+            runCatching { api.recommendationExclusions() }
+                .onSuccess { recommendationExclusions = it }
+                .onFailure { reportError(it, "Could not load excluded titles") }
+            exclusionsLoading = false
         }
     }
 
@@ -1037,9 +1141,36 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         }
     }
 
-    // Pull libraries + home shelves from the server. On the initial load we show
-    // the spinner and seed from cache; background refreshes (foreground return /
-    // periodic) update in place so newly added media appears without restarting.
+    fun applyHomeContent(content: HomeContent) {
+        libraries = content.libraries
+        recentMovies = content.recentMovies
+        recentShows = content.recentShows
+        continueMovies = content.continueMovies
+        continueEpisodes = content.continueEpisodes
+        recommendations = content.recommendations
+        recommendationExclusionKeys = content.excludedRecommendationKeys
+        resumeProgress = content.resume
+        completedItems = content.progress.filter { it.completed }.map { it.itemId }.toSet()
+        completedShows = content.showProgress.filter { it.completed }.map { showKey(it.libraryId, it.showTitle) }.toSet()
+        watchlistItems = content.watchlist.items.map { it.id }.toSet()
+        watchlistShows = content.watchlist.shows.map { showKey(it) }.toSet()
+        watchlistMovies = content.watchlist.items
+        watchlistTvShows = content.watchlist.shows
+    }
+
+    fun cacheHomeContent(content: HomeContent) {
+        CompanionCache.writeLibraries(context, session, content.libraries)
+        CompanionCache.writeItems(context, session, "home_recent_movies", content.recentMovies)
+        CompanionCache.writeShows(context, session, "home_recent_shows", content.recentShows)
+        CompanionCache.writeItems(context, session, "home_continue_movies", content.continueMovies)
+        CompanionCache.writeItems(context, session, "home_continue_episodes", content.continueEpisodes)
+        CompanionCache.writeItems(context, session, "home_watchlist_movies", content.watchlist.items)
+        CompanionCache.writeShows(context, session, "home_watchlist_shows", content.watchlist.shows)
+    }
+
+    // Seed the complete home screen from one cache snapshot, then replace it
+    // with one compact aggregate response. Top-rated shelves are non-critical
+    // and refresh after the home screen is already usable.
     suspend fun loadContent(initial: Boolean) {
         if (initial) {
             loading = true
@@ -1049,46 +1180,60 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                 val cachedMovieLib = cachedLibraries.firstOrNull { it.type == "movies" }
                 val cachedTvLib = cachedLibraries.firstOrNull { it.type == "tv" }
                 if (cachedMovieLib != null) {
-                    recentMovies = CompanionCache.readItems(context, session, "recent_movies_${cachedMovieLib.id}")
                     topMovies = CompanionCache.readItems(context, session, "top_movies_${cachedMovieLib.id}")
                 }
                 if (cachedTvLib != null) {
-                    recentShows = CompanionCache.readShows(context, session, "recent_shows_${cachedTvLib.id}")
                     topShows = CompanionCache.readShows(context, session, "top_shows_${cachedTvLib.id}")
                 }
             }
+            recentMovies = CompanionCache.readItems(context, session, "home_recent_movies")
+            recentShows = CompanionCache.readShows(context, session, "home_recent_shows")
+            continueMovies = CompanionCache.readItems(context, session, "home_continue_movies")
+            continueEpisodes = CompanionCache.readItems(context, session, "home_continue_episodes")
+            watchlistMovies = CompanionCache.readItems(context, session, "home_watchlist_movies")
+            watchlistTvShows = CompanionCache.readShows(context, session, "home_watchlist_shows")
+            watchlistItems = watchlistMovies.map { it.id }.toSet()
+            watchlistShows = watchlistTvShows.map { showKey(it) }.toSet()
         }
-        runCatching {
-            publishCompanionUpdate(runCatching { api.companionUpdate(BuildConfig.VERSION_CODE) }.getOrNull())
-            refreshMarkers()
-            libraries = api.libraries()
-            CompanionCache.writeLibraries(context, session, libraries)
-            refreshDevices()
-            val ml = libraries.firstOrNull { it.type == "movies" }
-            val tl = libraries.firstOrNull { it.type == "tv" }
-            if (ml != null) {
-                movieGenres = api.genres(ml.id)
-                movieDecades = api.decades(ml.id, "movie")
-                recentMovies = api.recentItems(ml.id, 24)
-                topMovies = api.itemsPage(ml.id, 24, 0, LibraryFilters(sort = "rating", minRating = 7.0))
-                CompanionCache.writeItems(context, session, "recent_movies_${ml.id}", recentMovies)
-                CompanionCache.writeItems(context, session, "top_movies_${ml.id}", topMovies)
+
+        val home = runCatching { api.home() }
+            .onSuccess {
+                applyHomeContent(it)
+                scope.launch(Dispatchers.IO) { cacheHomeContent(it) }
             }
-            if (tl != null) {
-                showGenres = api.genres(tl.id)
-                showDecades = api.decades(tl.id, "tv")
-                recentShows = api.recentShows(tl.id, 24)
-                topShows = api.showsPage(tl.id, 24, 0, LibraryFilters(sort = "rating", minRating = 7.0))
-                CompanionCache.writeShows(context, session, "recent_shows_${tl.id}", recentShows)
-                CompanionCache.writeShows(context, session, "top_shows_${tl.id}", topShows)
-            }
-        }.onFailure { reportError(it, "Load failed") }
-        runCatching { api.home() }.onSuccess {
-            continueMovies = it.movies
-            continueEpisodes = it.episodes
-            resumeProgress = it.resume
-        }
+            .onFailure { reportError(it, "Load failed") }
         if (initial) loading = false
+
+        val activeLibraries = home.getOrNull()?.libraries ?: libraries
+        val ml = activeLibraries.firstOrNull { it.type == "movies" }
+        val tl = activeLibraries.firstOrNull { it.type == "tv" }
+
+        // Optional startup work does not gate the recommendation or shelves.
+        scope.launch {
+            publishCompanionUpdate(runCatching { api.companionUpdate(BuildConfig.VERSION_CODE) }.getOrNull())
+        }
+        if (ml != null) {
+            scope.launch {
+                runCatching { api.itemsPage(ml.id, 24, 0, LibraryFilters(sort = "rating", minRating = 7.0)) }
+                    .onSuccess {
+                        topMovies = it
+                        withContext(Dispatchers.IO) {
+                            CompanionCache.writeItems(context, session, "top_movies_${ml.id}", it)
+                        }
+                    }
+            }
+        }
+        if (tl != null) {
+            scope.launch {
+                runCatching { api.showsPage(tl.id, 24, 0, LibraryFilters(sort = "rating", minRating = 7.0)) }
+                    .onSuccess {
+                        topShows = it
+                        withContext(Dispatchers.IO) {
+                            CompanionCache.writeShows(context, session, "top_shows_${tl.id}", it)
+                        }
+                    }
+            }
+        }
     }
 
     // Bumped on every foreground return to force the polling loops to restart.
@@ -1109,13 +1254,13 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     // current backoff delay.
     OnNetworkAvailable { if (!connected) reconnect() }
 
-    LaunchedEffect(session) { loadContent(initial = true) }
+    LaunchedEffect(session.server, session.token) { loadContent(initial = true) }
 
     // On every foreground return: restart the polling loops (resumeTick) and
     // refresh content. The first ON_START is the cold start already handled by
     // the initial load above, so skip it.
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, session) {
+    DisposableEffect(lifecycleOwner, session.server, session.token) {
         var first = true
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_START) {
@@ -1135,14 +1280,14 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     // While the app stays open, keep the home shelves current so content added
     // server-side appears without any user action. Keyed on resumeTick as well
     // so a loop frozen by the app cache is replaced on the next foreground.
-    LaunchedEffect(session, resumeTick) {
+    LaunchedEffect(session.server, session.token, resumeTick) {
         while (true) {
             delay(60_000)
             loadContent(initial = false)
         }
     }
 
-    LaunchedEffect(session, resumeTick) {
+    LaunchedEffect(session.server, session.token, resumeTick) {
         while (true) {
             delay(5 * 60 * 1000)
             publishCompanionUpdate(runCatching { api.companionUpdate(BuildConfig.VERSION_CODE) }.getOrNull())
@@ -1166,7 +1311,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     // The device poll doubles as the connection heartbeat. Failures back off
     // (1s → 30s) instead of hammering a dead server, and the first success after
     // an outage reloads content so the UI isn't left stale.
-    LaunchedEffect(session, playbackTarget, resumeTick) {
+    LaunchedEffect(session.server, session.token, playbackTarget, resumeTick) {
         var failures = 0
         while (true) {
             val ok = runCatching { refreshDevices() }
@@ -1270,6 +1415,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     onSelectDevice = ::selectTvTarget,
                     onHistory = { navigate(Page.History) },
                     onWatchlist = { navigate(Page.Watchlist) },
+                    onNotInterested = ::openNotInterested,
                     onScan = onScan,
                     showUpdate = companionUpdate?.available == true,
                     onUpdate = { showUpdateDialog = true },
@@ -1353,6 +1499,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                         when (current) {
                             Page.Home -> HomePage(
                                 session,
+                                recommendations,
                                 continueMovies,
                                 continueEpisodes,
                                 resumeProgress,
@@ -1432,9 +1579,10 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 seasons,
                                 completedItems,
                                 showWatched = completedShows.contains(showKey(current.show)),
+                                recommendationExcluded = recommendationExclusionKeys.contains("show:${current.show.libraryId.trim().lowercase()}:${current.show.title.trim().lowercase()}"),
                                 onBack = ::goBack,
                                 onSeason = { openSeason(current.show, it) },
-                                onSetShowWatched = { setShowWatched(current.show, it) },
+                                onSetPreference = { setShowPreference(current.show, it) },
                                 onSetSeasonWatched = { season, watched -> setSeasonWatched(current.show, season.seasonNumber, watched) },
                                 onActor = ::openActor,
                             )
@@ -1446,8 +1594,10 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 playbackTarget = playbackTarget,
                                 watched = completedItems.contains(current.item.id),
                                 watchlisted = watchlistItems.contains(current.item.id),
-                                onSetWatched = { setItemWatched(current.item, it) },
+                                recommendationExcluded = current.item.kind == "movie" && recommendationExclusionKeys.contains("item:${current.item.id}"),
                                 onSetWatchlisted = { setItemWatchlisted(current.item, it) },
+                                onSetPreference = { setItemPreference(current.item, it) },
+                                onResetProgress = { resetItemProgress(current.item) },
                                 onBack = ::goBack,
                                 onPlay = { target, audio, subtitle, position -> play(target.id, audio, subtitle, position) },
                                 onPlayLocal = { target, audio, subtitle, position -> playLocally(target, audio, subtitle, position) },
@@ -1485,6 +1635,17 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 onBack = ::goBack,
                                 onMovie = ::openDetail,
                                 onShow = ::openShow,
+                            )
+                            Page.NotInterested -> NotInterestedPage(
+                                session = session,
+                                exclusions = recommendationExclusions,
+                                loading = exclusionsLoading,
+                                onBack = ::goBack,
+                                onRestore = { entry ->
+                                    entry.item?.let { setItemRecommendationExcluded(it, false) }
+                                        ?: entry.show?.let { setShowRecommendationExcluded(it, false) }
+                                    recommendationExclusions = recommendationExclusions.filterNot { it.key == entry.key }
+                                },
                             )
                             is Page.Person -> PersonPage(
                                 session,

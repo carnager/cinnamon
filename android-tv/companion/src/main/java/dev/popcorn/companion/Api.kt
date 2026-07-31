@@ -297,23 +297,46 @@ class Api(private val session: Session) {
         )
     }
 
-    // Aggregated home payload: the continue-watching rows plus a resume map
-    // (itemId -> watched fraction) derived from in-progress playback.
-    suspend fun home(): HomeContinue = withContext(Dispatchers.IO) {
-        val o = request("/api/home")
-        val movies = parseItems(o.optJSONArray("continueMovies") ?: JSONArray())
-        val episodes = parseItems(o.optJSONArray("continueEpisodes") ?: JSONArray())
-        val resume = mutableMapOf<Long, Float>()
-        val prog = o.optJSONArray("progress") ?: JSONArray()
-        for (i in 0 until prog.length()) {
-            val p = prog.getJSONObject(i)
-            val dur = p.optLong("durationMs")
-            val pos = p.optLong("positionMs")
-            if (!p.optBoolean("completed") && dur > 0 && pos > 0) {
-                resume[p.optLong("itemId")] = (pos.toFloat() / dur.toFloat()).coerceIn(0f, 1f)
-            }
-        }
-        HomeContinue(movies, episodes, resume)
+    // The compact response contains every user-specific home row and marker,
+    // but skips the 300-item library samples used only by the TV client.
+    suspend fun home(): HomeContent = withContext(Dispatchers.IO) {
+        val o = request("/api/home?compact=1")
+        val libraries = o.optJSONArray("libraries") ?: JSONArray()
+        val progress = o.optJSONArray("progress") ?: JSONArray()
+        val showProgress = o.optJSONArray("showProgress") ?: JSONArray()
+        val watchlist = o.optJSONObject("watchlist") ?: JSONObject()
+        HomeContent(
+            libraries = (0 until libraries.length()).map { jsonToLibrary(libraries.getJSONObject(it)) },
+            recentMovies = parseItems(o.optJSONArray("recentMovies") ?: JSONArray()),
+            recentShows = parseShows(o.optJSONArray("recentShows") ?: JSONArray()),
+            continueMovies = parseItems(o.optJSONArray("continueMovies") ?: JSONArray()),
+            continueEpisodes = parseItems(o.optJSONArray("continueEpisodes") ?: JSONArray()),
+            progress = (0 until progress.length()).map {
+                val item = progress.getJSONObject(it)
+                PlaybackProgress(
+                    itemId = item.optLong("itemId"),
+                    positionMs = item.optLong("positionMs"),
+                    durationMs = item.optLong("durationMs"),
+                    completed = item.optBoolean("completed"),
+                )
+            },
+            showProgress = (0 until showProgress.length()).map {
+                val show = showProgress.getJSONObject(it)
+                ShowProgress(
+                    libraryId = show.optString("libraryId"),
+                    showTitle = show.optString("showTitle"),
+                    episodeCount = show.optInt("episodeCount"),
+                    completedCount = show.optInt("completedCount"),
+                    completed = show.optBoolean("completed"),
+                )
+            },
+            watchlist = Watchlist(
+                items = parseItems(watchlist.optJSONArray("items") ?: JSONArray()),
+                shows = parseShows(watchlist.optJSONArray("shows") ?: JSONArray()),
+            ),
+            recommendations = parseRecommendations(o.optJSONArray("recommendations") ?: JSONArray()),
+            excludedRecommendationKeys = jsonStringSet(o.optJSONArray("excludedRecommendationKeys") ?: JSONArray()),
+        )
     }
 
     suspend fun progress(itemId: Long): PlaybackProgress = withContext(Dispatchers.IO) {
@@ -381,6 +404,37 @@ class Api(private val session: Session) {
 
     suspend fun removeItemWatchlist(itemId: Long) = withContext(Dispatchers.IO) {
         requestText("/api/items/$itemId/watchlist", "DELETE", null)
+    }
+
+    suspend fun recommendationExclusions(): List<RecommendationExclusion> = withContext(Dispatchers.IO) {
+        val rows = requestArray("/api/recommendations/exclusions")
+        (0 until rows.length()).map { index ->
+            val row = rows.getJSONObject(index)
+            RecommendationExclusion(
+                key = row.optString("key"),
+                kind = row.optString("kind"),
+                item = row.optJSONObject("item")?.let(::jsonToItem),
+                show = row.optJSONObject("show")?.let(::jsonToShow),
+                path = row.optString("path"),
+                sizeBytes = row.optLong("sizeBytes"),
+            )
+        }
+    }
+
+    suspend fun excludeItemRecommendation(itemId: Long) = withContext(Dispatchers.IO) {
+        request("/api/items/$itemId/recommendation-exclusion", "PUT", "{}")
+    }
+
+    suspend fun restoreItemRecommendation(itemId: Long) = withContext(Dispatchers.IO) {
+        requestText("/api/items/$itemId/recommendation-exclusion", "DELETE", null)
+    }
+
+    suspend fun excludeShowRecommendation(libraryId: String, showTitle: String) = withContext(Dispatchers.IO) {
+        request("/api/recommendations/exclusions/tv?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}", "PUT", "{}")
+    }
+
+    suspend fun restoreShowRecommendation(libraryId: String, showTitle: String) = withContext(Dispatchers.IO) {
+        requestText("/api/recommendations/exclusions/tv?libraryId=${enc(libraryId)}&showTitle=${enc(showTitle)}", "DELETE", null)
     }
 
     suspend fun watchHistory(limit: Int = 120): WatchHistory = withContext(Dispatchers.IO) {
@@ -547,6 +601,20 @@ class Api(private val session: Session) {
     }
 
     private fun parseItems(arr: JSONArray): List<PopItem> = (0 until arr.length()).map { jsonToItem(arr.getJSONObject(it)) }
+
+    private fun parseRecommendations(arr: JSONArray): List<Recommendation> = (0 until arr.length()).map { index ->
+        val row = arr.getJSONObject(index)
+        Recommendation(
+            key = row.optString("key"),
+            reason = row.optString("reason"),
+            source = row.optString("source"),
+            item = row.optJSONObject("item")?.let(::jsonToItem),
+            show = row.optJSONObject("show")?.let(::jsonToShow),
+        )
+    }
+
+    private fun jsonStringSet(arr: JSONArray): Set<String> =
+        (0 until arr.length()).mapNotNull { arr.optString(it).takeIf(String::isNotBlank) }.toSet()
 
     private fun parseActors(arr: JSONArray?): List<Actor> {
         if (arr == null) return emptyList()

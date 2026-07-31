@@ -50,6 +50,9 @@ type App struct {
 	cacheGen    atomic.Uint64
 	historyMu   sync.Mutex
 	history     map[int64]historyCacheEntry
+	similarMu   sync.Mutex
+	similar     map[int64]similarCacheEntry
+	similarWork map[int64]bool
 
 	scopedMu      sync.Mutex
 	scopedPending map[string]map[string]bool
@@ -93,6 +96,8 @@ func New(opts Options) *App {
 		loginFails:  map[string]loginAttempt{},
 		cache:       responseCache{entries: map[string]cachedResponse{}},
 		history:     map[int64]historyCacheEntry{},
+		similar:     map[int64]similarCacheEntry{},
+		similarWork: map[int64]bool{},
 
 		scopedPending: map[string]map[string]bool{},
 		scopedRunning: map[string]bool{},
@@ -100,6 +105,7 @@ func New(opts Options) *App {
 	app.cleanHLSScratch()
 	app.cleanThumbCache()
 	go app.reapIdleHLSSessions()
+	go app.recommendationPrebuildWorker()
 	return app
 }
 
@@ -177,6 +183,12 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/items/{id}/watchlist", a.watchlistItemDelete)
 	mux.HandleFunc("PUT /api/watchlist/tv", a.watchlistShowSave)
 	mux.HandleFunc("DELETE /api/watchlist/tv", a.watchlistShowDelete)
+	mux.HandleFunc("GET /api/recommendations/exclusions", a.recommendationExclusionsGet)
+	mux.HandleFunc("PUT /api/items/{id}/recommendation-exclusion", a.recommendationItemSave)
+	mux.HandleFunc("DELETE /api/items/{id}/recommendation-exclusion", a.recommendationItemDelete)
+	mux.HandleFunc("PUT /api/recommendations/exclusions/tv", a.recommendationShowSave)
+	mux.HandleFunc("DELETE /api/recommendations/exclusions/tv", a.recommendationShowDelete)
+	mux.HandleFunc("POST /api/trakt/import-recommendation-exclusions", a.traktImportRecommendationExclusions)
 	mux.HandleFunc("GET /api/trakt/status", a.traktStatus)
 	mux.HandleFunc("POST /api/trakt/device", a.traktDeviceCode)
 	mux.HandleFunc("POST /api/trakt/device/token", a.traktDeviceToken)

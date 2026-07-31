@@ -11,6 +11,11 @@ import (
 	"popcorn/internal/media"
 )
 
+type similarCacheEntry struct {
+	items     []media.Item
+	expiresAt time.Time
+}
+
 // itemSimilar returns library movies related to the given item, ranked by
 // TMDb's recommendations/similar lists and intersected with what is actually in
 // the library. Empty when nothing matches (the client hides the row).
@@ -20,8 +25,77 @@ func (a *App) itemSimilar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.writeCachedJSON(w, r, cacheKey(r, "similar", item.ID), 12*time.Hour, func() (any, error) {
-		return a.similarItems(r.Context(), item), nil
+		return a.cachedSimilarItems(r.Context(), item), nil
 	})
+}
+
+func (a *App) cachedSimilarItems(ctx context.Context, item media.Item) []media.Item {
+	if items, ok := a.readySimilarItems(item.ID); ok {
+		return items
+	}
+	items := a.similarItems(ctx, item)
+	a.storeSimilarItems(item.ID, items)
+	return items
+}
+
+func (a *App) readySimilarItems(itemID int64) ([]media.Item, bool) {
+	now := time.Now()
+	a.similarMu.Lock()
+	defer a.similarMu.Unlock()
+	cached, ok := a.similar[itemID]
+	if !ok || !now.Before(cached.expiresAt) {
+		if ok {
+			delete(a.similar, itemID)
+		}
+		return nil, false
+	}
+	return append([]media.Item(nil), cached.items...), true
+}
+
+func (a *App) storeSimilarItems(itemID int64, items []media.Item) {
+	a.similarMu.Lock()
+	defer a.similarMu.Unlock()
+	if a.similar == nil {
+		a.similar = map[int64]similarCacheEntry{}
+	}
+	a.similar[itemID] = similarCacheEntry{
+		items:     append([]media.Item(nil), items...),
+		expiresAt: time.Now().Add(12 * time.Hour),
+	}
+}
+
+func (a *App) queueSimilarItems(item media.Item) {
+	if item.ID <= 0 || item.Kind != "movie" || !a.tmdbConfigured() {
+		return
+	}
+	if _, ok := a.readySimilarItems(item.ID); ok {
+		return
+	}
+	a.similarMu.Lock()
+	if a.similarWork == nil {
+		a.similarWork = map[int64]bool{}
+	}
+	if a.similarWork[item.ID] {
+		a.similarMu.Unlock()
+		return
+	}
+	a.similarWork[item.ID] = true
+	a.similarMu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(a.ctx, 2*time.Minute)
+		defer cancel()
+		items := a.similarItems(ctx, item)
+		if ctx.Err() == nil {
+			a.storeSimilarItems(item.ID, items)
+			// A compact home response may have been cached while this work ran.
+			// Expire it so the next refresh can include the warmed TMDb entries.
+			a.invalidateResponseCache()
+		}
+		a.similarMu.Lock()
+		delete(a.similarWork, item.ID)
+		a.similarMu.Unlock()
+	}()
 }
 
 func (a *App) similarItems(ctx context.Context, item media.Item) []media.Item {

@@ -147,6 +147,29 @@ type ShowSummary struct {
 	Actors            []Actor `json:"actors,omitempty"`
 }
 
+// Recommendation is a server-ranked home suggestion. Exactly one of Item or
+// Show is populated.
+type Recommendation struct {
+	Key    string       `json:"key"`
+	Reason string       `json:"reason"`
+	Source string       `json:"source"`
+	Item   *Item        `json:"item,omitempty"`
+	Show   *ShowSummary `json:"show,omitempty"`
+}
+
+// RecommendationExclusion is a reversible, per-user "Not interested" entry.
+// Path and SizeBytes are informational only; media deletion is intentionally
+// not exposed by the server.
+type RecommendationExclusion struct {
+	Key       string       `json:"key"`
+	Kind      string       `json:"kind"`
+	Item      *Item        `json:"item,omitempty"`
+	Show      *ShowSummary `json:"show,omitempty"`
+	Path      string       `json:"path,omitempty"`
+	SizeBytes int64        `json:"sizeBytes"`
+	CreatedAt string       `json:"createdAt"`
+}
+
 type SeasonSummary struct {
 	LibraryID       string  `json:"libraryId"`
 	ShowTitle       string  `json:"showTitle"`

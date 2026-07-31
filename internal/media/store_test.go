@@ -798,6 +798,75 @@ func TestStoreWatchlistReturnsMoviesAndShows(t *testing.T) {
 	}
 }
 
+func TestRecommendationExclusionsArePerUserReversibleAndReportMedia(t *testing.T) {
+	store, ctx := newTestStore(t)
+	alice := insertTestUser(t, store, "alice")
+	bob := insertTestUser(t, store, "bob")
+	movie := upsertTestItem(t, ctx, store, Item{
+		LibraryID: "movies",
+		Kind:      "movie",
+		Title:     "Quiet Harbor",
+		SortTitle: "quiet harbor",
+		Path:      "/media/movies/Quiet Harbor/movie.mkv",
+		SizeBytes: 3_000,
+	})
+	episode := episodeItem("Night Watch", 1, 1)
+	episode.LibraryID = "tv"
+	episode.Path = "/media/tv/Night Watch/Season 1/episode.mkv"
+	episode.SizeBytes = 7_000
+	upsertTestItem(t, ctx, store, episode)
+
+	if err := store.SaveItemRecommendationExclusion(ctx, alice, movie); err != nil {
+		t.Fatalf("exclude movie: %v", err)
+	}
+	if err := store.SaveShowRecommendationExclusion(ctx, alice, "tv", "Night Watch"); err != nil {
+		t.Fatalf("exclude show: %v", err)
+	}
+	keys, err := store.ListRecommendationExclusionKeys(ctx, alice)
+	if err != nil {
+		t.Fatalf("list keys: %v", err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("keys = %#v, want two", keys)
+	}
+	bobKeys, err := store.ListRecommendationExclusionKeys(ctx, bob)
+	if err != nil {
+		t.Fatalf("list Bob keys: %v", err)
+	}
+	if len(bobKeys) != 0 {
+		t.Fatalf("Bob keys = %#v, want none", bobKeys)
+	}
+	entries, err := store.ListRecommendationExclusions(ctx, alice)
+	if err != nil {
+		t.Fatalf("list exclusions: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("entries = %#v, want two", entries)
+	}
+	byKey := map[string]RecommendationExclusion{}
+	for _, entry := range entries {
+		byKey[entry.Key] = entry
+	}
+	if got := byKey[itemWatchKey(movie.ID)]; got.Item == nil || got.Path != movie.Path || got.SizeBytes != movie.SizeBytes {
+		t.Fatalf("movie exclusion = %#v", got)
+	}
+	show := byKey[showWatchKey("tv", "Night Watch")]
+	if show.Show == nil || show.Path != "/media/tv/Night Watch/Season 1" || show.SizeBytes != 7_000 {
+		t.Fatalf("show exclusion = %#v", show)
+	}
+
+	if err := store.DeleteItemRecommendationExclusion(ctx, alice, movie.ID); err != nil {
+		t.Fatalf("restore movie: %v", err)
+	}
+	if err := store.DeleteShowRecommendationExclusion(ctx, alice, "tv", "Night Watch"); err != nil {
+		t.Fatalf("restore show: %v", err)
+	}
+	keys, err = store.ListRecommendationExclusionKeys(ctx, alice)
+	if err != nil || len(keys) != 0 {
+		t.Fatalf("keys after restore = %#v, err %v", keys, err)
+	}
+}
+
 func TestPruneOrphanShowRowsKeepsLiveShows(t *testing.T) {
 	store, ctx := newTestStore(t)
 	if err := store.UpsertItems(ctx, []Item{{

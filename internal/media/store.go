@@ -364,6 +364,19 @@ AND NOT EXISTS (
 )`, keepID, duplicateID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE recommendation_exclusions
+SET item_id = ?, exclusion_key = ?
+WHERE item_id = ?
+AND NOT EXISTS (
+	SELECT 1 FROM recommendation_exclusions keep
+	WHERE keep.user_id = recommendation_exclusions.user_id AND keep.exclusion_key = ?
+)`, keepID, itemWatchKey(keepID), duplicateID, itemWatchKey(keepID)); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM recommendation_exclusions WHERE item_id = ?`, duplicateID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM external_ratings_cache WHERE item_id = ? AND EXISTS(SELECT 1 FROM external_ratings_cache WHERE item_id = ?)`, duplicateID, keepID); err != nil {
 		return err
 	}
@@ -2260,6 +2273,136 @@ ON CONFLICT(user_id, rate_key) DO UPDATE SET
 func (s *Store) DeleteShowRating(ctx context.Context, userID int64, libraryID, showTitle string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM user_ratings WHERE user_id = ? AND rate_key = ?`, userID, showWatchKey(libraryID, showTitle))
 	return err
+}
+
+func (s *Store) SaveItemRecommendationExclusion(ctx context.Context, userID int64, item Item) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO recommendation_exclusions(user_id, exclusion_key, kind, item_id, library_id, show_title, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(user_id, exclusion_key) DO UPDATE SET
+	kind=excluded.kind,
+	item_id=excluded.item_id,
+	library_id=excluded.library_id,
+	show_title=excluded.show_title,
+	updated_at=CURRENT_TIMESTAMP`,
+		userID, itemWatchKey(item.ID), item.Kind, item.ID, item.LibraryID, nullString(item.ShowTitle))
+	return err
+}
+
+func (s *Store) DeleteItemRecommendationExclusion(ctx context.Context, userID, itemID int64) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM recommendation_exclusions WHERE user_id = ? AND exclusion_key = ?`, userID, itemWatchKey(itemID))
+	return err
+}
+
+func (s *Store) SaveShowRecommendationExclusion(ctx context.Context, userID int64, libraryID, showTitle string) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO recommendation_exclusions(user_id, exclusion_key, kind, library_id, show_title, updated_at)
+VALUES (?, ?, 'show', ?, ?, CURRENT_TIMESTAMP)
+ON CONFLICT(user_id, exclusion_key) DO UPDATE SET
+	kind=excluded.kind,
+	library_id=excluded.library_id,
+	show_title=excluded.show_title,
+	updated_at=CURRENT_TIMESTAMP`, userID, showWatchKey(libraryID, showTitle), libraryID, showTitle)
+	return err
+}
+
+func (s *Store) DeleteShowRecommendationExclusion(ctx context.Context, userID int64, libraryID, showTitle string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM recommendation_exclusions WHERE user_id = ? AND exclusion_key = ?`, userID, showWatchKey(libraryID, showTitle))
+	return err
+}
+
+func (s *Store) ListRecommendationExclusionKeys(ctx context.Context, userID int64) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT exclusion_key
+FROM recommendation_exclusions
+WHERE user_id = ?
+ORDER BY updated_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		out = append(out, key)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListRecommendationExclusions(ctx context.Context, userID int64) ([]RecommendationExclusion, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT exclusion_key, kind, COALESCE(item_id, 0), COALESCE(library_id, ''),
+	COALESCE(show_title, ''), created_at
+FROM recommendation_exclusions
+WHERE user_id = ?
+ORDER BY updated_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	type storedExclusion struct {
+		key, kind, libraryID, showTitle, createdAt string
+		itemID                                     int64
+	}
+	stored := []storedExclusion{}
+	for rows.Next() {
+		var entry storedExclusion
+		if err := rows.Scan(&entry.key, &entry.kind, &entry.itemID, &entry.libraryID, &entry.showTitle, &entry.createdAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		stored = append(stored, entry)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	out := make([]RecommendationExclusion, 0, len(stored))
+	for _, saved := range stored {
+		entry := RecommendationExclusion{
+			Key:       saved.key,
+			Kind:      saved.kind,
+			CreatedAt: saved.createdAt,
+		}
+		if saved.itemID > 0 {
+			item, err := s.GetItem(ctx, saved.itemID)
+			if err != nil {
+				return nil, err
+			}
+			entry.Item = &item
+			entry.Path = item.Path
+			entry.SizeBytes = item.SizeBytes
+		} else {
+			shows, err := s.ListShows(ctx, saved.libraryID, saved.showTitle, "", "", 0, 20, 0)
+			if err != nil {
+				return nil, err
+			}
+			for i := range shows {
+				if shows[i].LibraryID == saved.libraryID && shows[i].Title == saved.showTitle {
+					show := shows[i]
+					entry.Show = &show
+					break
+				}
+			}
+			var samplePath string
+			if err := s.db.QueryRowContext(ctx, `
+SELECT COALESCE(MIN(path), ''), COALESCE(SUM(size_bytes), 0)
+FROM media_items
+WHERE library_id = ? AND show_title = ? AND kind = 'episode'`,
+				saved.libraryID, saved.showTitle).Scan(&samplePath, &entry.SizeBytes); err != nil {
+				return nil, err
+			}
+			if samplePath != "" {
+				entry.Path = filepath.Dir(samplePath)
+			}
+		}
+		out = append(out, entry)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) ListUserRatings(ctx context.Context, userID int64) ([]UserRating, error) {

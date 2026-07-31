@@ -97,6 +97,7 @@ func (a *App) traktDeviceToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	go a.traktSyncAllRecommendationExclusions(user.ID)
 	writeJSON(w, http.StatusOK, map[string]any{"connected": true})
 }
 
@@ -110,6 +111,117 @@ func (a *App) traktDisconnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *App) traktImportRecommendationExclusions(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
+	account, err := a.traktAccountForRequest(r.Context(), user.ID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "trakt account is not linked", http.StatusConflict)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	localItems, err := a.store.AllItems(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	index := newTraktImportIndex(localItems)
+	type localShow struct {
+		libraryID string
+		title     string
+	}
+	localShows := map[string]localShow{}
+	for _, item := range localItems {
+		if item.Kind != "episode" || strings.TrimSpace(item.ShowTitle) == "" {
+			continue
+		}
+		key := normalizeMatch(item.ShowTitle)
+		if _, exists := localShows[key]; !exists {
+			localShows[key] = localShow{libraryID: item.LibraryID, title: item.ShowTitle}
+		}
+	}
+
+	type hiddenRow struct {
+		Type  string `json:"type"`
+		Movie struct {
+			Title string          `json:"title"`
+			Year  int             `json:"year"`
+			IDs   traktIDsPayload `json:"ids"`
+		} `json:"movie"`
+		Show struct {
+			Title string          `json:"title"`
+			Year  int             `json:"year"`
+			IDs   traktIDsPayload `json:"ids"`
+		} `json:"show"`
+	}
+	rows := []hiddenRow{}
+	const pageSize = 100
+	for page := 1; page <= 100; page++ {
+		resp, err := a.traktRequest(r.Context(), account.AccessToken, http.MethodGet, fmt.Sprintf("/users/hidden/recommendations?limit=%d&page=%d", pageSize, page), nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		var pageRows []hiddenRow
+		decodeErr := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&pageRows)
+		resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
+			http.Error(w, "trakt hidden recommendations request failed", http.StatusBadGateway)
+			return
+		}
+		if decodeErr != nil {
+			http.Error(w, decodeErr.Error(), http.StatusBadGateway)
+			return
+		}
+		rows = append(rows, pageRows...)
+		if len(pageRows) < pageSize {
+			break
+		}
+	}
+
+	moviesImported := 0
+	showsImported := 0
+	unmatched := 0
+	for _, row := range rows {
+		switch row.Type {
+		case "movie":
+			item, _ := index.matchMovie(row.Movie.Title, row.Movie.Year, row.Movie.IDs)
+			if item == nil {
+				unmatched++
+				continue
+			}
+			if err := a.store.SaveItemRecommendationExclusion(r.Context(), user.ID, *item); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			moviesImported++
+		case "show":
+			show, found := localShows[normalizeMatch(row.Show.Title)]
+			if !found {
+				unmatched++
+				continue
+			}
+			if err := a.store.SaveShowRecommendationExclusion(r.Context(), user.ID, show.libraryID, show.title); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			showsImported++
+		}
+	}
+	a.invalidateResponseCache()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"moviesImported": moviesImported,
+		"showsImported":  showsImported,
+		"unmatched":      unmatched,
+		"traktItems":     len(rows),
+	})
 }
 
 func (a *App) traktImportWatched(w http.ResponseWriter, r *http.Request) {

@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"popcorn/internal/config"
 	"popcorn/internal/database"
@@ -85,5 +87,103 @@ func TestSimilarItemsIntersectsLibraryInRankedOrder(t *testing.T) {
 		if gotTMDb[i] != want[i] {
 			t.Fatalf("similar = %v, want %v", gotTMDb, want)
 		}
+	}
+}
+
+func TestHomeRecommendationsDoNotWaitForTMDb(t *testing.T) {
+	db, err := database.Open(filepath.Join(t.TempDir(), "popcorn.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := media.NewStore(db)
+	ctx := context.Background()
+	if err := store.UpsertItem(ctx, media.Item{
+		LibraryID: "movies",
+		Path:      "/m/source.mkv",
+		Kind:      "movie",
+		Title:     "Source",
+		SortTitle: "Source",
+		TMDbID:    "603",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpsertItem(ctx, media.Item{
+		LibraryID: "movies",
+		Path:      "/m/related.mkv",
+		Kind:      "movie",
+		Title:     "Related",
+		SortTitle: "Related",
+		TMDbID:    "604",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := store.AllItems(ctx)
+	if err != nil {
+		t.Fatalf("items = %v, error = %v", items, err)
+	}
+	var source media.Item
+	for _, item := range items {
+		if item.TMDbID == "603" {
+			source = item
+		}
+	}
+	if source.ID == 0 {
+		t.Fatal("source item not found")
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startedOnce.Do(func() { close(started) })
+		select {
+		case <-release:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"page":        1,
+				"total_pages": 1,
+				"results":     []map[string]any{{"id": 604}},
+			})
+		case <-r.Context().Done():
+		}
+	}))
+	defer ts.Close()
+	withTMDbBaseURL(t, ts.URL)
+
+	app := New(Options{Config: config.Config{TMDbReadToken: "test"}, Store: store})
+	defer app.Close()
+	start := time.Now()
+	_, err = app.homeRecommendations(ctx, 1, nil, nil, homePayload{
+		Progress: []media.PlaybackProgress{{
+			ItemID:     source.ID,
+			PositionMS: 7_200_000,
+			DurationMS: 7_200_000,
+			Completed:  true,
+		}},
+	})
+	if err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
+		close(release)
+		t.Fatalf("home recommendations waited %s for TMDb", elapsed)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("TMDb refresh was not queued")
+	}
+	close(release)
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, ready := app.readySimilarItems(source.ID); ready {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("queued TMDb result was not stored")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

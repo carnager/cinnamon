@@ -208,6 +208,90 @@ func (a *App) traktSyncWatchlistBody(ctx context.Context, bearer string, body ma
 	a.log.Debug("trakt watchlist sync sent", "action", action)
 }
 
+func (a *App) traktSyncRecommendationExclusionItems(userID int64, items []media.Item, remove bool) {
+	movies := []map[string]any{}
+	for _, item := range items {
+		if item.Kind != "movie" {
+			continue // Trakt recommendation hiding supports movies and shows, not episodes.
+		}
+		if entry := traktHistoryEntry(item, false, ""); entry != nil {
+			movies = append(movies, entry)
+		}
+	}
+	if len(movies) > 0 {
+		a.traktSyncRecommendationExclusions(userID, map[string]any{"movies": movies}, remove)
+	}
+}
+
+func (a *App) traktSyncAllRecommendationExclusions(userID int64) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	entries, err := a.store.ListRecommendationExclusions(ctx, userID)
+	if err != nil {
+		a.log.Debug("trakt recommendation exclusion backup load failed", "user", userID, "error", err)
+		return
+	}
+	items := []media.Item{}
+	shows := []media.ShowSummary{}
+	for _, entry := range entries {
+		if entry.Item != nil {
+			items = append(items, *entry.Item)
+		}
+		if entry.Show != nil {
+			shows = append(shows, *entry.Show)
+		}
+	}
+	a.traktSyncRecommendationExclusionItems(userID, items, false)
+	a.traktSyncRecommendationExclusionShows(userID, shows, false)
+}
+
+func (a *App) traktSyncRecommendationExclusionShows(userID int64, shows []media.ShowSummary, remove bool) {
+	entries := make([]map[string]any, 0, len(shows))
+	for _, show := range shows {
+		entry := map[string]any{"title": show.Title}
+		if show.Year > 0 {
+			entry["year"] = show.Year
+		}
+		entries = append(entries, entry)
+	}
+	if len(entries) > 0 {
+		a.traktSyncRecommendationExclusions(userID, map[string]any{"shows": entries}, remove)
+	}
+}
+
+func (a *App) traktSyncRecommendationExclusions(userID int64, body map[string]any, remove bool) {
+	if !a.traktConfigured() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	account, err := a.traktAccountForRequest(ctx, userID)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			a.log.Debug("trakt recommendation exclusion account unavailable", "user", userID, "error", err)
+		}
+		return
+	}
+	path := "/users/hidden/recommendations"
+	action := "hide"
+	if remove {
+		path += "/remove"
+		action = "restore"
+	}
+	resp, err := a.traktRequest(ctx, account.AccessToken, http.MethodPost, path, body)
+	if err != nil {
+		a.log.Debug("trakt recommendation exclusion sync failed", "action", action, "error", err)
+		return
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		a.log.Debug("trakt recommendation exclusion sync failed", "action", action, "status", resp.StatusCode, "body", string(respBody))
+		return
+	}
+	a.log.Debug("trakt recommendation exclusion synced", "action", action)
+}
+
 func traktScrobbleBody(item media.Item, progress float64) map[string]any {
 	body := map[string]any{"progress": progress}
 	if item.Kind == "episode" {

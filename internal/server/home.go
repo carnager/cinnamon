@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -12,17 +13,19 @@ import (
 )
 
 type homePayload struct {
-	User             auth.User                `json:"user"`
-	Libraries        []config.Library         `json:"libraries"`
-	HomeMovies       []media.Item             `json:"homeMovies"`
-	HomeShows        []media.ShowSummary      `json:"homeShows"`
-	RecentMovies     []media.Item             `json:"recentMovies"`
-	RecentShows      []media.ShowSummary      `json:"recentShows"`
-	ContinueMovies   []media.Item             `json:"continueMovies"`
-	ContinueEpisodes []media.Item             `json:"continueEpisodes"`
-	Progress         []media.PlaybackProgress `json:"progress"`
-	ShowProgress     []media.ShowProgress     `json:"showProgress"`
-	Watchlist        media.Watchlist          `json:"watchlist"`
+	User                       auth.User                `json:"user"`
+	Libraries                  []config.Library         `json:"libraries"`
+	HomeMovies                 []media.Item             `json:"homeMovies"`
+	HomeShows                  []media.ShowSummary      `json:"homeShows"`
+	RecentMovies               []media.Item             `json:"recentMovies"`
+	RecentShows                []media.ShowSummary      `json:"recentShows"`
+	ContinueMovies             []media.Item             `json:"continueMovies"`
+	ContinueEpisodes           []media.Item             `json:"continueEpisodes"`
+	Progress                   []media.PlaybackProgress `json:"progress"`
+	ShowProgress               []media.ShowProgress     `json:"showProgress"`
+	Watchlist                  media.Watchlist          `json:"watchlist"`
+	Recommendations            []media.Recommendation   `json:"recommendations"`
+	ExcludedRecommendationKeys []string                 `json:"excludedRecommendationKeys"`
 }
 
 func (a *App) home(w http.ResponseWriter, r *http.Request) {
@@ -30,12 +33,13 @@ func (a *App) home(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	compact := r.URL.Query().Get("compact") == "1"
 	a.writeCachedJSON(w, r, cacheKey(r, "home", user.ID), 15*time.Second, func() (any, error) {
-		return a.buildHomePayload(r.Context(), user)
+		return a.buildHomePayload(r.Context(), user, compact)
 	})
 }
 
-func (a *App) buildHomePayload(ctx context.Context, user auth.User) (homePayload, error) {
+func (a *App) buildHomePayload(ctx context.Context, user auth.User, compact bool) (homePayload, error) {
 	payload := homePayload{
 		User:      user,
 		Libraries: a.cfg.Libraries,
@@ -58,22 +62,30 @@ func (a *App) buildHomePayload(ctx context.Context, user auth.User) (homePayload
 		return payload, err
 	}
 	payload.Watchlist = watchlist
+	payload.ExcludedRecommendationKeys, err = a.store.ListRecommendationExclusionKeys(ctx, user.ID)
+	if err != nil {
+		return payload, err
+	}
 
-	if movieLib != nil {
+	if movieLib != nil && !compact {
 		payload.HomeMovies, err = a.store.ListItemsForUser(ctx, movieLib.ID, "", "", "", "", "", user.ID, 0, 150, 0)
 		if err != nil {
 			return payload, err
 		}
+	}
+	if movieLib != nil {
 		payload.RecentMovies, err = a.store.ListItemsForUser(ctx, movieLib.ID, "", "", "", "mtime", "", user.ID, 0, 24, 0)
 		if err != nil {
 			return payload, err
 		}
 	}
-	if tvLib != nil {
+	if tvLib != nil && !compact {
 		payload.HomeShows, err = a.store.ListShowsForUser(ctx, tvLib.ID, "", "", "", "", "", user.ID, 0, 150, 0)
 		if err != nil {
 			return payload, err
 		}
+	}
+	if tvLib != nil {
 		payload.RecentShows, err = a.store.ListShowsForUser(ctx, tvLib.ID, "", "", "", "mtime", "", user.ID, 0, 24, 0)
 		if err != nil {
 			return payload, err
@@ -84,7 +96,173 @@ func (a *App) buildHomePayload(ctx context.Context, user auth.User) (homePayload
 	if err != nil {
 		return payload, err
 	}
+	payload.Recommendations, err = a.homeRecommendations(ctx, user.ID, movieLib, tvLib, payload)
+	if err != nil {
+		return payload, err
+	}
 	return payload, nil
+}
+
+func (a *App) homeRecommendations(ctx context.Context, userID int64, movieLib, tvLib *config.Library, home homePayload) ([]media.Recommendation, error) {
+	excluded := make(map[string]bool, len(home.ExcludedRecommendationKeys))
+	for _, key := range home.ExcludedRecommendationKeys {
+		excluded[key] = true
+	}
+	completedItems := map[int64]bool{}
+	for _, progress := range home.Progress {
+		if progress.Completed || isFinished(progress.PositionMS, progress.DurationMS) {
+			completedItems[progress.ItemID] = true
+		}
+	}
+	completedShows := map[string]bool{}
+	for _, progress := range home.ShowProgress {
+		if progress.Completed {
+			completedShows[recommendationShowKey(progress.LibraryID, progress.ShowTitle)] = true
+		}
+	}
+
+	var topMovies []media.Item
+	var topShows []media.ShowSummary
+	var err error
+	if movieLib != nil {
+		topMovies, err = a.store.ListItemsForUser(ctx, movieLib.ID, "", "", "", "rating", "unseen", userID, 0, 48, 0)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if tvLib != nil {
+		topShows, err = a.store.ListShowsForUser(ctx, tvLib.ID, "", "", "", "rating", "unseen", userID, 0, 48, 0)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	recommendations := make([]media.Recommendation, 0, 16)
+	added := map[string]bool{}
+	addItem := func(item media.Item, reason, source string) {
+		key := recommendationItemKey(item.ID)
+		if item.ID <= 0 || added[key] || recommendationItemExcluded(item, excluded) || completedItems[item.ID] {
+			return
+		}
+		copy := item
+		recommendations = append(recommendations, media.Recommendation{Key: key, Reason: reason, Source: source, Item: &copy})
+		added[key] = true
+	}
+	addShow := func(show media.ShowSummary, reason, source string) {
+		key := recommendationShowKey(show.LibraryID, show.Title)
+		if show.Title == "" || added[key] || excluded[key] || completedShows[key] {
+			return
+		}
+		copy := show
+		recommendations = append(recommendations, media.Recommendation{Key: key, Reason: reason, Source: source, Show: &copy})
+		added[key] = true
+	}
+
+	for _, item := range append(home.ContinueMovies, home.ContinueEpisodes...) {
+		addItem(item, "Continue watching", "progress")
+		if len(recommendations) >= 3 {
+			break
+		}
+	}
+
+	var watched []media.Item
+	watchedIDs := make([]int64, 0, len(completedItems))
+	for _, progress := range home.Progress {
+		if completedItems[progress.ItemID] {
+			watchedIDs = append(watchedIDs, progress.ItemID)
+			if len(watchedIDs) >= 12 {
+				break
+			}
+		}
+	}
+	if len(watchedIDs) > 0 {
+		loaded, loadErr := a.store.ItemsByIDs(ctx, watchedIDs)
+		err = loadErr
+		if err != nil {
+			return nil, err
+		}
+		byID := make(map[int64]media.Item, len(loaded))
+		for _, item := range loaded {
+			byID[item.ID] = item
+		}
+		for _, id := range watchedIDs {
+			if item, ok := byID[id]; ok && item.Kind == "movie" {
+				watched = append(watched, item)
+			}
+		}
+	}
+	// "Because you watched" is reserved for TMDb's ranked recommendations (or
+	// its similar endpoint fallback), intersected with the local library. A
+	// shared genre alone is too weak to justify that wording.
+	if len(watched) > 0 {
+		anchor := watched[0]
+		if candidates, ready := a.readySimilarItems(anchor.ID); ready {
+			for _, candidate := range candidates {
+				addItem(candidate, fmt.Sprintf("Because you watched %s", anchor.Title), "tmdb")
+				if len(recommendations) >= 7 {
+					break
+				}
+			}
+		} else {
+			// Home must never wait on an external API. The current request gets
+			// the local-library portion of the feed immediately; a later request
+			// can use the asynchronously warmed TMDb result.
+			a.queueSimilarItems(anchor)
+		}
+	}
+
+	for _, item := range home.RecentMovies {
+		addItem(item, "New in your library", "library")
+		if len(recommendations) >= 10 {
+			break
+		}
+	}
+	for _, show := range home.RecentShows {
+		addShow(show, "New in your library", "library")
+		if len(recommendations) >= 12 {
+			break
+		}
+	}
+	for _, item := range home.Watchlist.Items {
+		addItem(item, "From your watchlist", "watchlist")
+		if len(recommendations) >= 14 {
+			break
+		}
+	}
+	for _, show := range home.Watchlist.Shows {
+		addShow(show, "From your watchlist", "watchlist")
+		if len(recommendations) >= 16 {
+			break
+		}
+	}
+	for _, item := range topMovies {
+		addItem(item, "Recommended for you", "library")
+		if len(recommendations) >= 20 {
+			break
+		}
+	}
+	for _, show := range topShows {
+		addShow(show, "Recommended for you", "library")
+		if len(recommendations) >= 24 {
+			break
+		}
+	}
+	return recommendations, nil
+}
+
+func recommendationItemExcluded(item media.Item, excluded map[string]bool) bool {
+	if item.Kind != "episode" && excluded[recommendationItemKey(item.ID)] {
+		return true
+	}
+	return item.Kind == "episode" && excluded[recommendationShowKey(item.LibraryID, item.ShowTitle)]
+}
+
+func recommendationItemKey(itemID int64) string {
+	return fmt.Sprintf("item:%d", itemID)
+}
+
+func recommendationShowKey(libraryID, showTitle string) string {
+	return "show:" + strings.ToLower(strings.TrimSpace(libraryID)) + ":" + strings.ToLower(strings.TrimSpace(showTitle))
 }
 
 func (a *App) allProgress(ctx context.Context, userID int64) ([]media.PlaybackProgress, error) {

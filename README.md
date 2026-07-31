@@ -97,8 +97,11 @@ Create a full versioned release bundle with:
 For a server/desktop-only bundle that does not require Android tooling:
 
 ```sh
-./scripts/release --server-only
+./scripts/release --server
 ```
+
+Use `--phone` or `--androidtv` to build just one Android app. Component flags
+can be combined.
 
 Full Android releases require release signing credentials. By default the build
 reads `~/.local/android/release-keys/popcorn.properties`; see

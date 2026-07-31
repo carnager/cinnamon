@@ -8,11 +8,16 @@ Usage: scripts/release [options]
 Build a release bundle under dist/<version>.
 
 Options:
-  --server-only       Build only popcornd, popcorn-mpv, packaging files, and checksums.
-  --skip-android      Build server/desktop binaries but skip Android APKs.
+  --server            Build the server/desktop component.
+  --phone             Build the phone companion component.
+  --androidtv         Build the Android TV component.
+                      Component flags can be combined; without them, build all.
+  --server-only       Legacy alias for --server.
+  --skip-android      Legacy alias for --server.
   --skip-tests        Skip go test ./...
-  --upload            Upload Android APKs after a full Android build.
+  --upload            Upload the selected Android APKs after building.
   --no-upload         Do not upload Android APKs.
+  --quiet             Reduce successful build output.
   --version VERSION   Override release version name.
   --output DIR        Override output directory.
   -h, --help          Show this help.
@@ -28,28 +33,61 @@ Environment:
 
 Examples:
   scripts/release
-  scripts/release --server-only
-  scripts/release --skip-android --output dist/server-dev
+  scripts/release --server
+  scripts/release --phone
+  scripts/release --phone --androidtv
 USAGE
 }
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 run_tests=1
-build_android=1
-server_only=0
+build_server=1
+build_phone=1
+build_androidtv=1
+component_selection=0
+quiet=0
 release_upload="${POPCORN_RELEASE_UPLOAD:-}"
 version="${POPCORN_RELEASE_VERSION:-}"
 out_dir="${POPCORN_RELEASE_DIR:-}"
 
+select_component() {
+  local component="$1"
+  if [[ "$component_selection" == 0 ]]; then
+    build_server=0
+    build_phone=0
+    build_androidtv=0
+    component_selection=1
+  fi
+  case "$component" in
+    server) build_server=1 ;;
+    phone) build_phone=1 ;;
+    androidtv) build_androidtv=1 ;;
+  esac
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --server)
+      select_component server
+      ;;
+    --phone)
+      select_component phone
+      ;;
+    --androidtv)
+      select_component androidtv
+      ;;
     --server-only)
-      server_only=1
-      build_android=0
+      build_server=1
+      build_phone=0
+      build_androidtv=0
+      component_selection=1
       release_upload=0
       ;;
     --skip-android)
-      build_android=0
+      build_server=1
+      build_phone=0
+      build_androidtv=0
+      component_selection=1
       ;;
     --skip-tests)
       run_tests=0
@@ -59,6 +97,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --no-upload)
       release_upload=0
+      ;;
+    --quiet)
+      quiet=1
       ;;
     --version)
       [[ $# -ge 2 ]] || { echo "--version requires a value" >&2; exit 2; }
@@ -82,6 +123,11 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+build_android=0
+if [[ "$build_phone" == 1 || "$build_androidtv" == 1 ]]; then
+  build_android=1
+fi
 
 version="${version:-$(cd "$repo_root" && git describe --tags --always --dirty)}"
 out_dir="${out_dir:-$repo_root/dist/$version}"
@@ -199,7 +245,9 @@ verify_release_signature() {
     echo "Check $android_signing_properties and android-tv/*/build.gradle.kts signingConfig." >&2
     exit 1
   fi
-  echo "  $label signed with release key ($got)"
+  if [[ "$quiet" == 0 ]]; then
+    echo "  $label signed with release key ($got)"
+  fi
 }
 
 copy_release_files() {
@@ -220,10 +268,10 @@ rm -f "$out_dir/app-update.toml" "$out_dir/SHA256SUMS"
 echo "==> release $version"
 echo "==> output $out_dir"
 
-if [[ "$run_tests" == 1 ]]; then
+if [[ "$build_server" == 1 && "$run_tests" == 1 ]]; then
   echo "==> go test ./..."
   (cd "$repo_root" && go test ./...)
-else
+elif [[ "$build_server" == 1 ]]; then
   echo "==> skip go tests"
 fi
 
@@ -242,59 +290,61 @@ if [[ "$build_android" == 1 ]]; then
   fi
 fi
 
-echo "==> build popcornd"
-(cd "$repo_root" && go build -trimpath -ldflags "-s -w -X popcorn/internal/version.Version=$version -X popcorn/internal/version.Commit=$commit -X popcorn/internal/version.BuildTime=$build_time" -o "$out_dir/popcornd" ./cmd/popcornd)
+release_files=()
 
-echo "==> build popcorn-mpv"
-(cd "$repo_root" && go build -trimpath -ldflags "-s -w" -o "$out_dir/popcorn-mpv" ./cmd/popcorn-mpv)
-
-echo "==> build popcorn-watch"
-# Static (CGO disabled) so it runs on any Linux host/container regardless of
-# libc — important for TrueNAS SCALE (read-only root) where it runs from a
-# dataset or a minimal container image.
-(cd "$repo_root" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$out_dir/popcorn-watch" ./cmd/popcorn-watch)
-
-copy_release_files
-
-release_files=(
-  popcornd
-  popcorn-mpv
-  popcorn-watch
-  config.example.toml
-  config.package.toml
-  popcornd.service
-  popcorn.sysusers
-  popcorn.tmpfiles
-  PKGBUILD
-  ARCH.md
-  README.md
-)
+if [[ "$build_server" == 1 ]]; then
+  echo "==> build server"
+  (cd "$repo_root" && go build -trimpath -ldflags "-s -w -X popcorn/internal/version.Version=$version -X popcorn/internal/version.Commit=$commit -X popcorn/internal/version.BuildTime=$build_time" -o "$out_dir/popcornd" ./cmd/popcornd)
+  (cd "$repo_root" && go build -trimpath -ldflags "-s -w" -o "$out_dir/popcorn-mpv" ./cmd/popcorn-mpv)
+  # Static so popcorn-watch runs in minimal containers regardless of libc.
+  (cd "$repo_root" && CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$out_dir/popcorn-watch" ./cmd/popcorn-watch)
+  copy_release_files
+  release_files+=(
+    popcornd
+    popcorn-mpv
+    popcorn-watch
+    config.example.toml
+    config.package.toml
+    popcornd.service
+    popcorn.sysusers
+    popcorn.tmpfiles
+    PKGBUILD
+    ARCH.md
+    README.md
+  )
+fi
 
 if [[ "$build_android" == 1 ]]; then
-  echo "==> build Android APKs"
-  (cd "$repo_root/android-tv" && POPCORN_ANDROID_VERSION_CODE="$android_version_code" POPCORN_ANDROID_VERSION_NAME="$android_version_name" ./gradlew :app:assembleRelease :companion:assembleRelease)
+  gradle_tasks=()
+  [[ "$build_androidtv" == 1 ]] && gradle_tasks+=(":app:assembleRelease")
+  [[ "$build_phone" == 1 ]] && gradle_tasks+=(":companion:assembleRelease")
+  gradle_args=()
+  [[ "$quiet" == 1 ]] && gradle_args+=("--quiet")
 
-  tv_apk="$out_dir/popcorn-tv-$version.apk"
-  companion_apk="$out_dir/popcorn-companion-$version.apk"
-
-  cp "$repo_root/android-tv/app/build/outputs/apk/release/app-release.apk" "$tv_apk"
-  cp "$repo_root/android-tv/companion/build/outputs/apk/release/companion-release.apk" "$companion_apk"
-
-  tv_abis="$(apk_abis "$tv_apk")"
-  expected_tv_abis="arm64-v8a,armeabi-v7a"
-  if [[ "$tv_abis" != "$expected_tv_abis" ]]; then
-    echo "Android TV APK contains unexpected native ABIs: ${tv_abis:-none}" >&2
-    echo "Expected $expected_tv_abis. Check android-tv/app/build.gradle.kts ndk.abiFilters." >&2
-    exit 1
-  fi
+  echo "==> build Android"
+  (cd "$repo_root/android-tv" && POPCORN_ANDROID_VERSION_CODE="$android_version_code" POPCORN_ANDROID_VERSION_NAME="$android_version_name" ./gradlew "${gradle_args[@]}" "${gradle_tasks[@]}")
 
   echo "==> verify APK signatures"
-  verify_release_signature "$tv_apk" "Android TV APK"
-  verify_release_signature "$companion_apk" "Companion APK"
+  if [[ "$build_androidtv" == 1 ]]; then
+    tv_apk="$out_dir/popcorn-tv-$version.apk"
+    cp "$repo_root/android-tv/app/build/outputs/apk/release/app-release.apk" "$tv_apk"
+    tv_abis="$(apk_abis "$tv_apk")"
+    expected_tv_abis="arm64-v8a,armeabi-v7a"
+    if [[ "$tv_abis" != "$expected_tv_abis" ]]; then
+      echo "Android TV APK contains unexpected native ABIs: ${tv_abis:-none}" >&2
+      echo "Expected $expected_tv_abis. Check android-tv/app/build.gradle.kts ndk.abiFilters." >&2
+      exit 1
+    fi
+    verify_release_signature "$tv_apk" "Android TV APK"
+    release_files+=("popcorn-tv-$version.apk")
+  fi
 
-  release_files+=("popcorn-tv-$version.apk" "popcorn-companion-$version.apk")
-else
-  echo "==> skip Android APKs"
+  if [[ "$build_phone" == 1 ]]; then
+    companion_apk="$out_dir/popcorn-companion-$version.apk"
+    cp "$repo_root/android-tv/companion/build/outputs/apk/release/companion-release.apk" "$companion_apk"
+    verify_release_signature "$companion_apk" "Companion APK"
+    release_files+=("popcorn-companion-$version.apk")
+  fi
 fi
 
 (
@@ -302,22 +352,26 @@ fi
   sha256sum "${release_files[@]}" > SHA256SUMS
 )
 
-echo "==> wrote:"
-find "$out_dir" -maxdepth 1 -type f -printf '  %f\n' | sort
+if [[ "$quiet" == 0 ]]; then
+  echo "==> wrote:"
+  printf '  %s\n' "${release_files[@]}" SHA256SUMS | sort
 
-echo
-echo "==> server binaries:"
-echo "  popcornd:          $(file_size "$out_dir/popcornd")"
-echo "  popcorn-mpv:       $(file_size "$out_dir/popcorn-mpv")"
-echo "  popcorn-watch:     $(file_size "$out_dir/popcorn-watch")"
+  if [[ "$build_server" == 1 ]]; then
+    echo
+    echo "==> server binaries:"
+    echo "  popcornd:          $(file_size "$out_dir/popcornd")"
+    echo "  popcorn-mpv:       $(file_size "$out_dir/popcorn-mpv")"
+    echo "  popcorn-watch:     $(file_size "$out_dir/popcorn-watch")"
+  fi
 
-if [[ "$build_android" == 1 ]]; then
-  echo
-  echo "==> APK version metadata:"
-  echo "  versionCode:      $android_version_code"
-  echo "  versionName:      $android_version_name"
-  echo "  Android TV APK:   $(file_size "$tv_apk") ($tv_abis, release/R8)"
-  echo "  Companion APK:    $(file_size "$companion_apk")"
+  if [[ "$build_android" == 1 ]]; then
+    echo
+    echo "==> APK version metadata:"
+    echo "  versionCode:      $android_version_code"
+    echo "  versionName:      $android_version_name"
+    [[ "$build_androidtv" == 1 ]] && echo "  Android TV APK:   $(file_size "$tv_apk") ($tv_abis, release/R8)"
+    [[ "$build_phone" == 1 ]] && echo "  Companion APK:    $(file_size "$companion_apk")"
+  fi
 fi
 
 if [[ "$build_android" != 1 ]]; then
@@ -342,23 +396,21 @@ case "${release_upload,,}" in
 esac
 
 if [[ "$upload_updates" == 1 ]]; then
-  echo
-  echo "==> upload Android TV update"
-  POPCORN_UPLOAD_VERSION_CODE="$android_version_code" \
-    POPCORN_UPLOAD_VERSION_NAME="$android_version_name" \
-    POPCORN_UPDATE_NOTES="${POPCORN_TV_RELEASE_NOTES:-${POPCORN_RELEASE_NOTES:-}}" \
-    "$repo_root/scripts/upload-app-update" tv "$out_dir/popcorn-tv-$version.apk"
+  if [[ "$build_androidtv" == 1 ]]; then
+    echo "==> upload Android TV"
+    POPCORN_UPLOAD_VERSION_CODE="$android_version_code" \
+      POPCORN_UPLOAD_VERSION_NAME="$android_version_name" \
+      POPCORN_UPDATE_NOTES="${POPCORN_TV_RELEASE_NOTES:-${POPCORN_RELEASE_NOTES:-}}" \
+      "$repo_root/scripts/upload-app-update" tv "$tv_apk"
+  fi
 
-  echo
-  echo "==> upload Phone Companion update"
-  POPCORN_UPLOAD_VERSION_CODE="$android_version_code" \
-    POPCORN_UPLOAD_VERSION_NAME="$android_version_name" \
-    POPCORN_UPDATE_NOTES="${POPCORN_COMPANION_RELEASE_NOTES:-${POPCORN_RELEASE_NOTES:-}}" \
-    "$repo_root/scripts/upload-app-update" companion "$out_dir/popcorn-companion-$version.apk"
+  if [[ "$build_phone" == 1 ]]; then
+    echo "==> upload phone"
+    POPCORN_UPLOAD_VERSION_CODE="$android_version_code" \
+      POPCORN_UPLOAD_VERSION_NAME="$android_version_name" \
+      POPCORN_UPDATE_NOTES="${POPCORN_COMPANION_RELEASE_NOTES:-${POPCORN_RELEASE_NOTES:-}}" \
+      "$repo_root/scripts/upload-app-update" companion "$companion_apk"
+  fi
 else
-  echo
-  echo "==> upload these APKs in the web admin App Updates screen,"
-  echo "==> or publish them with scripts/upload-app-update:"
-  echo "  Android TV:       $out_dir/popcorn-tv-$version.apk"
-  echo "  Phone Companion:  $out_dir/popcorn-companion-$version.apk"
+  echo "==> APKs ready in $out_dir"
 fi

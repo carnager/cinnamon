@@ -11,8 +11,11 @@ scripts/release
 For a server/desktop-only bundle that does not require Android tooling:
 
 ```sh
-scripts/release --server-only
+scripts/release --server
 ```
+
+Use `--phone` or `--androidtv` to build just one Android app. Component flags
+can be combined; without any component flags the script builds everything.
 
 Use `scripts/release --help` for all build flags.
 

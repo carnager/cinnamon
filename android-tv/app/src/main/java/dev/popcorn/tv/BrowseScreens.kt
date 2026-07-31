@@ -111,15 +111,7 @@ fun HomeView(
     session: Session?,
     libraries: List<Library>,
     sections: List<HomeSection>,
-    editing: Boolean,
-    editDraft: List<HomeLayoutSection>,
-    editCatalog: List<HomeSectionType>,
-    editSelection: Int?,
-    onEdit: () -> Unit,
-    onEditDone: () -> Unit,
-    onEditShelves: () -> Unit,
-    onEditSelect: (Int?) -> Unit,
-    onEditMove: (Int, Int) -> Unit,
+    onArrange: () -> Unit,
     completedItems: Set<Long>,
     completedShows: Set<String>,
     watchlistItems: Set<Long>,
@@ -160,21 +152,12 @@ fun HomeView(
         onLogout = onLogout,
         navFocusRequester = sideNavigationFocus,
         onSideNavigationExit = {
-            val target = restoreContentFocus
-            if (target != null) {
-                target.requestFocus()
-                true
-            } else {
-                false
-            }
+            // The requester belongs to a card that may have left the
+            // composition; asking an unattached one for focus throws.
+            restoreContentFocus?.let { target -> runCatching { target.requestFocus() }.isSuccess } ?: false
         },
         headerActions = {
-            if (editing) {
-                Pill(text = "Shelves", selected = false, onClick = onEditShelves)
-                Pill(text = "Done", selected = true, onClick = onEditDone)
-            } else {
-                Pill(text = "Edit", selected = false, onClick = onEdit)
-            }
+            Pill(text = "Arrange", selected = false, onClick = onArrange)
         },
     ) {
         if (error.isNotBlank()) {
@@ -184,17 +167,6 @@ fun HomeView(
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
             }
-        } else if (editing) {
-            EditableHome(
-                session = session,
-                draft = editDraft,
-                catalog = editCatalog,
-                rendered = sections,
-                selectedIndex = editSelection,
-                onSelect = onEditSelect,
-                onMove = onEditMove,
-                onLeftEdge = { runCatching { sideNavigationFocus.requestFocus() }.isSuccess },
-            )
         } else {
             CuratedLanding(
                 session = session,
@@ -483,13 +455,7 @@ fun WatchlistView(
         onScan = onScan,
         onLogout = onLogout,
         onSideNavigationExit = {
-            val target = restoreContentFocus
-            if (target != null) {
-                target.requestFocus()
-                true
-            } else {
-                false
-            }
+            restoreContentFocus?.let { target -> runCatching { target.requestFocus() }.isSuccess } ?: false
         },
     ) {
         if (error.isNotBlank()) {
@@ -616,10 +582,7 @@ fun HistoryView(
         onScan = onScan,
         onLogout = onLogout,
         onSideNavigationExit = {
-            restoreContentFocus?.let {
-                it.requestFocus()
-                true
-            } ?: false
+            restoreContentFocus?.let { target -> runCatching { target.requestFocus() }.isSuccess } ?: false
         },
     ) {
         when {

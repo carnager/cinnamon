@@ -96,12 +96,16 @@ fun PopcornApp() {
     var items by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var shows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
     var homeSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
-    var homeEditing by remember { mutableStateOf(false) }
     var homeEditDraft by remember { mutableStateOf<List<HomeLayoutSection>>(emptyList()) }
     var homeCatalog by remember { mutableStateOf<List<HomeSectionType>>(emptyList()) }
-    var homeEditSelection by remember { mutableStateOf<Int?>(null) }
+    var homeEditIndex by remember { mutableStateOf(0) }
+    var homeEditGrabbed by remember { mutableStateOf(false) }
     var homeShelvesOpen by remember { mutableStateOf(false) }
     var homeGenrePicker by remember { mutableStateOf(false) }
+    // Set when the picker was opened from a shelf's options: it then changes
+    // that shelf's genre instead of adding and removing shelves.
+    var homeGenreTarget by remember { mutableStateOf<Int?>(null) }
+    var homeOptionsIndex by remember { mutableStateOf<Int?>(null) }
     var homeGenres by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var recommendationExclusionKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
     var completedItems by remember { mutableStateOf<Set<Long>>(emptySet()) }
@@ -789,9 +793,10 @@ fun PopcornApp() {
         }
     }
 
-    // Edit mode works on the layout document, not on the rendered shelves: the
-    // server owns what a shelf contains, the user owns which ones there are.
-    fun startHomeEdit(activeSession: Session) {
+    // The arrange screen works on the layout document, not on the rendered
+    // shelves: the server owns what a shelf contains, the account owns which
+    // shelves there are and in what order.
+    fun startHomeArrange(activeSession: Session) {
         scope.launch {
             val api = Api(activeSession)
             val catalog = runCatching { api.homeCatalog() }.getOrNull()
@@ -801,18 +806,24 @@ fun PopcornApp() {
                 return@launch
             }
             homeCatalog = catalog
-            homeEditDraft = layout.sections
-            homeEditSelection = null
-            homeEditing = true
+            homeEditDraft = withUniqueIds(layout.sections)
+            homeEditIndex = 0
+            homeEditGrabbed = false
+            homeShelvesOpen = false
+            homeGenrePicker = false
+            homeOptionsIndex = null
+            screen = Screen.ArrangeHome
         }
     }
 
-    fun finishHomeEdit(activeSession: Session) {
+    fun finishHomeArrange(activeSession: Session) {
         val draft = homeEditDraft
-        homeEditing = false
-        homeEditSelection = null
+        homeEditGrabbed = false
         homeShelvesOpen = false
         homeGenrePicker = false
+        homeGenreTarget = null
+        homeOptionsIndex = null
+        screen = Screen.Home
         scope.launch {
             runCatching { Api(activeSession).saveHomeLayout(draft) }
                 .onSuccess { loadHome(activeSession, libraries) }
@@ -916,13 +927,18 @@ fun PopcornApp() {
         }
     }
 
-    // Leaving edit mode saves, so Back and Done do the same thing.
-    BackHandler(enabled = screen is Screen.Home && homeEditing) {
+    // Back unwinds the arrange screen one step at a time — picker, checklist,
+    // a held shelf — and only then saves and returns home.
+    BackHandler(enabled = screen is Screen.ArrangeHome) {
         when {
-            homeGenrePicker -> homeGenrePicker = false
+            homeGenrePicker -> {
+                homeGenrePicker = false
+                homeGenreTarget = null
+            }
+            homeOptionsIndex != null -> homeOptionsIndex = null
             homeShelvesOpen -> homeShelvesOpen = false
-            homeEditSelection != null -> homeEditSelection = null
-            else -> session?.let { finishHomeEdit(it) }
+            homeEditGrabbed -> homeEditGrabbed = false
+            else -> session?.let { finishHomeArrange(it) }
         }
     }
 
@@ -976,18 +992,7 @@ fun PopcornApp() {
             session = session,
             libraries = libraries,
             sections = homeSections,
-            editing = homeEditing,
-            editDraft = homeEditDraft,
-            editCatalog = homeCatalog,
-            editSelection = homeEditSelection,
-            onEdit = { session?.let { startHomeEdit(it) } },
-            onEditDone = { session?.let { finishHomeEdit(it) } },
-            onEditShelves = { homeShelvesOpen = true },
-            onEditSelect = { homeEditSelection = it },
-            onEditMove = { from, to ->
-                homeEditDraft = moveSection(homeEditDraft, from, to)
-                homeEditSelection = to
-            },
+            onArrange = { session?.let { startHomeArrange(it) } },
             completedItems = completedItems,
             completedShows = completedShows,
             watchlistItems = watchlistItems,
@@ -1052,6 +1057,28 @@ fun PopcornApp() {
             },
             onItemMenu = { item, requester -> openItemWatchMenu(item, requester) },
             onShowMenu = { show, requester -> openShowWatchMenu(show, requester) },
+        )
+        Screen.ArrangeHome -> ArrangeHomeView(
+            session = session,
+            draft = homeEditDraft,
+            catalog = homeCatalog,
+            rendered = homeSections,
+            focusedIndex = homeEditIndex.coerceIn(0, maxOf(homeEditDraft.lastIndex, 0)),
+            grabbed = homeEditGrabbed,
+            onFocusIndex = { index -> if (!homeEditGrabbed) homeEditIndex = index },
+            onToggleGrab = { homeEditGrabbed = !homeEditGrabbed },
+            onMove = { from, to ->
+                homeEditDraft = moveSection(homeEditDraft, from, to)
+                homeEditIndex = to
+            },
+            onRemove = { index ->
+                homeEditDraft = homeEditDraft.filterIndexed { position, _ -> position != index }
+                homeEditIndex = index.coerceAtMost(maxOf(homeEditDraft.lastIndex, 0))
+                homeEditGrabbed = false
+            },
+            onAdd = { homeShelvesOpen = true },
+            onOptions = { index -> homeOptionsIndex = index },
+            onDone = { session?.let { finishHomeArrange(it) } },
         )
         Screen.Watchlist -> WatchlistView(
             session = session,
@@ -1444,10 +1471,7 @@ fun PopcornApp() {
                         label = type.label,
                         description = type.description,
                         checked = homeEditDraft.any { it.type == type.type },
-                        onToggle = {
-                            homeEditDraft = toggleSectionType(homeEditDraft, type)
-                            homeEditSelection = null
-                        },
+                        onToggle = { homeEditDraft = withUniqueIds(toggleSectionType(homeEditDraft, type)) },
                     )
                 }
             },
@@ -1455,25 +1479,76 @@ fun PopcornApp() {
         )
     }
 
+    homeOptionsIndex?.let { optionsIndex ->
+        val section = homeEditDraft.getOrNull(optionsIndex)
+        val definition = section?.let { current -> homeCatalog.firstOrNull { it.type == current.type } }
+        if (section == null || definition == null) {
+            homeOptionsIndex = null
+        } else {
+            TvOptionsShelf(
+                title = "SHELF OPTIONS",
+                subtitle = sectionLabel(section, definition),
+                rows = definition.params.map { param ->
+                    val value = section.params[param.name]?.ifBlank { null } ?: param.default
+                    TvOptionRow(
+                        key = param.name,
+                        label = param.label.ifBlank { param.name },
+                        value = when {
+                            param.name == "genre" -> value.ifBlank { "Choose…" }
+                            param.type == "int" -> "$value items"
+                            else -> value.ifBlank { "—" }
+                        },
+                        onCycle = {
+                            if (param.name == "genre") {
+                                session?.let { loadHomeGenres(it) }
+                                homeGenreTarget = optionsIndex
+                                homeGenrePicker = true
+                            } else {
+                                homeEditDraft = updateSection(homeEditDraft, optionsIndex) { cycleParam(it, param) }
+                            }
+                        },
+                    )
+                },
+                onDismiss = { homeOptionsIndex = null },
+            )
+        }
+    }
+
     if (homeGenrePicker) {
         val genreType = homeCatalog.firstOrNull { it.repeatable && it.params.any { param -> param.name == "genre" } }
+        val target = homeGenreTarget
         TvCheckListShelf(
-            title = "GENRE SHELVES",
-            subtitle = "One shelf per genre",
+            title = if (target != null) "GENRE" else "GENRE SHELVES",
+            subtitle = if (target != null) "Which genre" else "One shelf per genre",
             rows = homeGenres.map { (genre, kind) ->
+                val current = target?.let { homeEditDraft.getOrNull(it) }
                 TvCheckRow(
                     key = "$kind:$genre",
                     label = genre,
                     description = if (kind == "tv") "TV shows" else "Movies",
-                    checked = homeEditDraft.any { it.type == genreType?.type && it.params["genre"] == genre && genreKind(it) == kind },
+                    checked = if (current != null) {
+                        current.params["genre"] == genre && genreKind(current) == kind
+                    } else {
+                        homeEditDraft.any { it.type == genreType?.type && it.params["genre"] == genre && genreKind(it) == kind }
+                    },
                     onToggle = {
-                        val type = genreType ?: return@TvCheckRow
-                        homeEditDraft = toggleGenreSection(homeEditDraft, type, genre, kind)
-                        homeEditSelection = null
+                        if (target != null) {
+                            homeEditDraft = updateSection(homeEditDraft, target) { section ->
+                                section.copy(params = section.params + mapOf("genre" to genre, "kind" to kind))
+                            }
+                            homeGenrePicker = false
+                            homeGenreTarget = null
+                        } else {
+                            val type = genreType ?: return@TvCheckRow
+                            homeEditDraft = withUniqueIds(toggleGenreSection(homeEditDraft, type, genre, kind))
+                        }
                     },
                 )
             },
-            onDismiss = { homeGenrePicker = false },
+            onDismiss = {
+                homeGenrePicker = false
+                homeGenreTarget = null
+            },
         )
     }
 

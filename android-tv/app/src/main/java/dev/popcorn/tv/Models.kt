@@ -299,6 +299,7 @@ sealed interface Screen {
     data object Watchlist : Screen
     data object History : Screen
     data object Updates : Screen
+    data object ArrangeHome : Screen
     data class LibraryPage(val library: Library) : Screen
     data class ItemShelf(val title: String, val items: List<PopItem>, val returnTo: Screen? = null) : Screen
     data object Search : Screen

@@ -30,14 +30,12 @@ let resumeFractionDirty = false;
 let watchedItemIds = new Set();
 let mediaProgressRows = [];
 let watchedShowKeys = new Set();
-// Shows that can anchor "Because you watched X": fully seen, or at least two
-// episodes finished. A show sampled once is not "watched".
-let anchorShowKeys = new Set();
 // Personal 1-10 ratings, synced with Trakt: item id -> rating, show key -> rating.
 let userItemRatings = new Map();
 let userShowRatings = new Map();
 let watchlistItemIds = new Set();
 let watchlistShowKeys = new Set();
+let recommendationExclusionKeys = new Set();
 let currentGenre = "";
 let currentSort = "";
 let currentSeenStatus = "";
@@ -66,6 +64,7 @@ let homeData = {
   recentShows: [],
   watchlistMovies: [],
   watchlistShows: [],
+  recommendations: [],
 };
 
 async function api(path, options) {
@@ -411,6 +410,65 @@ function showWatchlisted(show) {
   return watchlistShowKeys.has(showKey(show?.libraryId, show?.title));
 }
 
+function itemRecommendationExcluded(item) {
+  return recommendationExclusionKeys.has(`item:${Number(item?.id || 0)}`);
+}
+
+function showRecommendationKey(show) {
+  return `show:${String(show?.libraryId || "").trim().toLowerCase()}:${String(show?.title || "").trim().toLowerCase()}`;
+}
+
+function showRecommendationExcluded(show) {
+  return recommendationExclusionKeys.has(showRecommendationKey(show));
+}
+
+async function setItemRecommendationExcluded(item, excluded) {
+  if (!item?.id) return;
+  const key = `item:${Number(item.id)}`;
+  await api(`/api/items/${encodeURIComponent(String(item.id))}/recommendation-exclusion`, { method: excluded ? "PUT" : "DELETE" });
+  if (excluded) recommendationExclusionKeys.add(key);
+  else recommendationExclusionKeys.delete(key);
+  homeData.recommendations = (homeData.recommendations || []).filter((entry) => entry.key !== key);
+}
+
+async function setShowRecommendationExcluded(show, excluded) {
+  const libraryId = show?.libraryId || activeLibraryId;
+  const title = show?.title || "";
+  if (!libraryId || !title) return;
+  const key = showRecommendationKey({ libraryId, title });
+  const query = new URLSearchParams({ libraryId, showTitle: title });
+  await api(`/api/recommendations/exclusions/tv?${query}`, { method: excluded ? "PUT" : "DELETE" });
+  if (excluded) recommendationExclusionKeys.add(key);
+  else recommendationExclusionKeys.delete(key);
+  homeData.recommendations = (homeData.recommendations || []).filter((entry) => entry.key !== key);
+}
+
+async function setItemPreference(item, preference) {
+  if (preference === "unwatched") {
+    await setItemRecommendationExcluded(item, false);
+    await setItemSeen(item, false);
+  } else if (preference === "seen") {
+    await setItemRecommendationExcluded(item, false);
+    await setItemSeen(item, true);
+  } else if (preference === "not_interested") {
+    await setItemSeen(item, false);
+    await setItemRecommendationExcluded(item, true);
+  }
+}
+
+async function setShowPreference(show, preference) {
+  if (preference === "unwatched") {
+    await setShowRecommendationExcluded(show, false);
+    await setShowSeen(show, false);
+  } else if (preference === "seen") {
+    await setShowRecommendationExcluded(show, false);
+    await setShowSeen(show, true);
+  } else if (preference === "not_interested") {
+    await setShowSeen(show, false);
+    await setShowRecommendationExcluded(show, true);
+  }
+}
+
 async function refreshMediaState() {
   if (!authToken) return;
   const [progress, showProgress, watchlist, ratings] = await Promise.all([
@@ -429,9 +487,6 @@ async function refreshMediaState() {
     .filter(Boolean));
   watchedShowKeys = new Set((showProgress || [])
     .filter((row) => row?.completed)
-    .map((row) => showKey(row.libraryId, row.showTitle)));
-  anchorShowKeys = new Set((showProgress || [])
-    .filter((row) => row?.completed || Number(row?.completedCount || 0) >= 2)
     .map((row) => showKey(row.libraryId, row.showTitle)));
   watchlistItemIds = new Set((watchlist?.items || [])
     .map((item) => Number(item.id))
@@ -1011,60 +1066,16 @@ function renderHome(skipHistory) {
   setView(frag);
 }
 
-/* The hero rotates through *suggestions with a reason* rather than pinning the
-   first continue-watching item forever: resume prompts, "because you watched
-   X" genre matches, fresh arrivals, watchlist reminders and hidden gems. */
+/* Recommendation ranking lives on the server. The web client only presents
+   the first eligible entry from the shared per-user feed. */
 function pickHeroItem(data) {
-  const withArt = (entry) => entry && (entry.backdropItemId || entry.backdropPath);
-  const isShow = (entry) => !entry.kind && (entry.episodeCount != null || entry.seasonCount != null);
-  const entrySeen = (entry) => (isShow(entry) ? showSeen(entry) : itemSeen(entry));
-  const entryTitle = (entry) => (entry.kind === "episode" ? (entry.showTitle || entry.title) : entry.title);
-  const pick = (list) => list[Math.floor(Math.random() * list.length)];
-  const candidates = [];
-
-  for (const item of [...(data.continueMovies || []), ...(data.continueEpisodes || [])].slice(0, 4)) {
-    if (withArt(item)) candidates.push({ item, kick: "Continue watching" });
-  }
-
-  // "Because you watched X": prefer TMDb-backed picks (same source as the
-  // detail page's "More like this"), fall back to a same-genre match.
-  const pool = [...(data.movies || []), ...(data.shows || [])];
-  if (data.similarSource && (data.similarPicks || []).length) {
-    const fresh = data.similarPicks.filter((entry) => withArt(entry) && !entrySeen(entry));
-    if (fresh.length) candidates.push({ item: pick(fresh), kick: `Because you watched ${entryTitle(data.similarSource)}` });
-  } else {
-    // Anchor on finished movies and shows with at least two watched episodes —
-    // not on barely-started continue entries.
-    const anchors = pool.filter((entry) =>
-      isShow(entry) ? anchorShowKeys.has(showKey(entry.libraryId, entry.title)) : itemSeen(entry));
-    for (const played of anchors.sort(() => Math.random() - 0.5).slice(0, 4)) {
-      const genre = splitGenres(played.genres)[0];
-      if (!genre) continue;
-      const source = entryTitle(played);
-      const matches = pool.filter((entry) =>
-        withArt(entry) && !entrySeen(entry) && entryTitle(entry) !== source &&
-        Number(entry.rating || 0) >= 6.5 && splitGenres(entry.genres).includes(genre));
-      if (matches.length) candidates.push({ item: pick(matches), kick: `Because you watched ${source}` });
+  for (const recommendation of data.recommendations || []) {
+    const entry = recommendation.item || recommendation.show;
+    if (entry && (entry.backdropItemId || entry.backdropPath)) {
+      return { item: entry, kick: recommendation.reason || "Recommended for you" };
     }
   }
-
-  for (const entry of [...(data.recentMovies || []).slice(0, 2), ...(data.recentShows || []).slice(0, 2)]) {
-    if (withArt(entry) && !entrySeen(entry)) candidates.push({ item: entry, kick: "New in your library" });
-  }
-
-  for (const entry of [...(data.watchlistMovies || []), ...(data.watchlistShows || [])].slice(0, 3)) {
-    if (withArt(entry) && !entrySeen(entry)) candidates.push({ item: entry, kick: "On your watchlist" });
-  }
-
-  const gems = pool.filter((entry) => withArt(entry) && !entrySeen(entry) && Number(entry.rating || 0) >= 7.5);
-  if (gems.length) candidates.push({ item: pick(gems), kick: "Maybe you missed this" });
-
-  if (!candidates.length) {
-    const anyArt = pool.filter(withArt);
-    if (!anyArt.length) return null;
-    return { item: pick(anyArt), kick: "Featured" };
-  }
-  return pick(candidates);
+  return null;
 }
 
 async function renderWatchlist(skipHistory) {
@@ -1407,27 +1418,7 @@ async function loadHome(skipHistory) {
     homeData.recentShows = recentShows || [];
     homeData.shows = shows || [];
   }
-  await loadHeroSimilar();
   renderHome(skipHistory);
-}
-
-/* loadHeroSimilar picks one movie the user has watched (or is watching) and
-   fetches its TMDb-backed similar titles for the hero's "Because you watched
-   X" suggestion. The endpoint is cached server-side, so this stays cheap. */
-async function loadHeroSimilar() {
-  homeData.similarSource = null;
-  homeData.similarPicks = [];
-  // Only movies actually finished anchor the similar-titles hero; a movie
-  // started for two minutes is not "watched".
-  const sources = (homeData.movies || []).filter((m) => watchedItemIds.has(Number(m.id)));
-  if (!sources.length) return;
-  const source = sources[Math.floor(Math.random() * sources.length)];
-  const similar = await api(`/api/items/${source.id}/similar`).catch(() => []);
-  const picks = (similar || []).filter((s) => !itemSeen(s));
-  if (picks.length) {
-    homeData.similarSource = source;
-    homeData.similarPicks = picks;
-  }
 }
 
 function applyUserRatings(rows) {
@@ -1478,7 +1469,6 @@ function applyHomePayload(payload) {
   rebuildResumeFractions(mediaProgressRows);
   watchedItemIds = new Set(mediaProgressRows.filter((r) => r?.completed).map((r) => Number(r.itemId)).filter(Boolean));
   watchedShowKeys = new Set((payload.showProgress || []).filter((r) => r?.completed).map((r) => showKey(r.libraryId, r.showTitle)));
-  anchorShowKeys = new Set((payload.showProgress || []).filter((r) => r?.completed || Number(r?.completedCount || 0) >= 2).map((r) => showKey(r.libraryId, r.showTitle)));
   const watchlist = payload.watchlist || { items: [], shows: [] };
   watchlistItemIds = new Set((watchlist.items || []).map((i) => Number(i.id)).filter(Boolean));
   watchlistShowKeys = new Set((watchlist.shows || []).map((s) => showKey(s.libraryId, s.title)));
@@ -1490,6 +1480,8 @@ function applyHomePayload(payload) {
   homeData.shows = payload.homeShows || [];
   homeData.watchlistMovies = (watchlist.items || []).filter((i) => i.kind === "movie");
   homeData.watchlistShows = watchlist.shows || [];
+  homeData.recommendations = payload.recommendations || [];
+  recommendationExclusionKeys = new Set(payload.excludedRecommendationKeys || []);
 }
 
 async function loadLibraryPage(skipHistory) {

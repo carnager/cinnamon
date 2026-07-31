@@ -3354,6 +3354,42 @@ img.user-menu-avatar {
 .setting-upload[open] summary { margin-bottom: 12px; }
 .setting-upload .app-upload-form { display: flex; flex-direction: column; gap: 12px; }
 .settings-output:empty { display: none; }
+
+.media-preference {
+  margin-top: 12px;
+  display: grid;
+  gap: 7px;
+}
+
+.media-preference-label {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.media-preference-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.media-preference-options .secondary.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.media-preference-options [data-preference="not_interested"].active {
+  color: #fb7185;
+  border-color: rgba(251, 113, 133, .55);
+  background: rgba(251, 113, 133, .12);
+}
+
+.playback-choice-list {
+  display: grid;
+  gap: 9px;
+  min-width: min(360px, 80vw);
+}
 .settings-output { margin-top: 10px; }
 
 /* ── Modal ── */

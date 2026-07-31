@@ -554,9 +554,10 @@ async function renderSettings(skipHistory) {
   renderNav();
   if (!skipHistory) pushState({ view: "settings" });
 
-  const [traktStatus, appUpdates] = await Promise.all([
+  const [traktStatus, appUpdates, recommendationExclusions] = await Promise.all([
     api("/api/trakt/status").catch((err) => ({ configured: false, connected: false, error: cleanError(err) })),
     currentUser?.isAdmin ? api("/api/app/updates").catch((err) => ({ error: cleanError(err) })) : Promise.resolve(null),
+    api("/api/recommendations/exclusions").catch(() => []),
   ]);
 
   const header = el("div", "view-header settings-hero");
@@ -578,6 +579,37 @@ async function renderSettings(skipHistory) {
     control: logout,
   }));
   content.append(account);
+
+  const hidden = settingsSection("Not interested", "Excluded from every recommendation surface");
+  if (!recommendationExclusions.length) {
+    hidden.append(settingRow({
+      title: "Nothing hidden",
+      description: "Titles marked Not interested will appear here with their media path.",
+      control: el("span", "settings-copy", ""),
+    }));
+  }
+  for (const entry of recommendationExclusions) {
+    const subject = entry.item || entry.show || {};
+    const restore = el("button", "secondary", "Restore");
+    restore.type = "button";
+    restore.addEventListener("click", async () => {
+      restore.disabled = true;
+      try {
+        if (entry.item) await setItemRecommendationExcluded(entry.item, false);
+        else if (entry.show) await setShowRecommendationExcluded(entry.show, false);
+        await renderSettings(true);
+      } catch (err) {
+        restore.disabled = false;
+        restore.textContent = cleanError(err);
+      }
+    });
+    hidden.append(settingRow({
+      title: subject.title || "Unavailable title",
+      description: [entry.path, entry.sizeBytes ? formatBytes(entry.sizeBytes) : ""].filter(Boolean).join(" · "),
+      control: restore,
+    }));
+  }
+  content.append(hidden);
 
   content.append(traktSection(traktStatus));
 
@@ -681,10 +713,16 @@ function traktSection(status) {
       await refreshUserRatings();
       return renderTraktWatchlistSummary(summary);
     }));
+    const importHidden = el("button", "secondary", "Import Not interested");
+    importHidden.type = "button";
+    importHidden.addEventListener("click", () => runSettingsAction(importHidden, output, async () => {
+      const summary = await api("/api/trakt/import-recommendation-exclusions", { method: "POST" });
+      return `Imported ${summary.moviesImported || 0} movies and ${summary.showsImported || 0} shows${summary.unmatched ? ` · ${summary.unmatched} not in this library` : ""}.`;
+    }));
     section.append(settingRow({
       title: "Import from Trakt",
-      description: "Pull your watched history, watchlist or ratings into Cinnamon.",
-      control: [importSeen, importWatchlist, importRatings],
+      description: "Pull watched history, watchlist, ratings, or hidden recommendations into Cinnamon.",
+      control: [importSeen, importWatchlist, importRatings, importHidden],
     }));
   }
 
@@ -1013,6 +1051,42 @@ function toggleActionButton({ active, activeLabel, inactiveLabel, onToggle, clas
   return button;
 }
 
+function mediaPreferenceSelector(selected, onChange, allowNotInterested = true) {
+  const wrap = el("div", "media-preference");
+  wrap.append(el("span", "media-preference-label", "Viewing preference"));
+  const choices = el("div", "media-preference-options");
+  for (const [value, label] of [["unwatched", "Unwatched"], ["seen", "Seen"], ["not_interested", "Not interested"]]) {
+    if (value === "not_interested" && !allowNotInterested) continue;
+    const button = el("button", value === selected ? "secondary active" : "secondary", label);
+    button.type = "button";
+    button.setAttribute("aria-pressed", value === selected ? "true" : "false");
+    button.addEventListener("click", async () => {
+      if (button.getAttribute("aria-pressed") === "true") return;
+      const old = button.textContent;
+      choices.querySelectorAll("button").forEach((entry) => { entry.disabled = true; });
+      button.textContent = "Working…";
+      try {
+        await onChange(value);
+        choices.querySelectorAll("button").forEach((entry) => {
+          const active = entry.dataset.preference === value;
+          entry.classList.toggle("active", active);
+          entry.setAttribute("aria-pressed", active ? "true" : "false");
+        });
+      } catch (err) {
+        button.textContent = cleanError(err) || old;
+        setTimeout(() => { button.textContent = old; }, 2200);
+      } finally {
+        choices.querySelectorAll("button").forEach((entry) => { entry.disabled = false; });
+        if (button.textContent === "Working…") button.textContent = label;
+      }
+    });
+    button.dataset.preference = value;
+    choices.append(button);
+  }
+  wrap.append(choices);
+  return wrap;
+}
+
 /* ── Episode Row ── */
 function episodeRow(episode) {
   const row = el("button", "episode-row");
@@ -1192,20 +1266,41 @@ async function openDetail(item, skipHistory, parent = {}) {
 
   const actions = el("div", "detail-actions");
   const playOpts = () => ({ audioIndex: chosenAudioIdx, subtitleIndex: chosenSubIdx });
-  if (resumeMs) {
-    const resumeBtn = el("button", "primary detail-play", `Resume · ${fmtClock(resumeMs / 1000)}`);
-    resumeBtn.type = "button";
-    resumeBtn.addEventListener("click", () => play(d, Object.assign({ startMs: resumeMs }, playOpts())));
-    const fromStart = el("button", "secondary detail-play-secondary", "Play from start");
-    fromStart.type = "button";
-    fromStart.addEventListener("click", () => play(d, Object.assign({ startMs: 0 }, playOpts())));
-    actions.append(resumeBtn, fromStart);
-  } else {
-    const playBtn = el("button", "primary detail-play", "Play");
-    playBtn.type = "button";
-    playBtn.addEventListener("click", () => play(d, Object.assign({ startMs: 0 }, playOpts())));
-    actions.append(playBtn);
-  }
+  const playBtn = el("button", "primary detail-play", "Play");
+  playBtn.type = "button";
+  playBtn.addEventListener("click", () => {
+    const hasSavedProgress = Boolean(progress && (Number(progress.positionMs || 0) > 0 || progress.completed));
+    if (!hasSavedProgress) {
+      play(d, Object.assign({ startMs: 0 }, playOpts()));
+      return;
+    }
+    const choices = el("div", "playback-choice-list");
+    let close = () => {};
+    if (resumeMs) {
+      const resume = el("button", "primary", `Resume · ${fmtClock(resumeMs / 1000)}`);
+      resume.type = "button";
+      resume.addEventListener("click", () => { close(); play(d, Object.assign({ startMs: resumeMs }, playOpts())); });
+      choices.append(resume);
+    }
+    const beginning = el("button", "secondary", "Play from beginning");
+    beginning.type = "button";
+    beginning.addEventListener("click", () => { close(); play(d, Object.assign({ startMs: 0 }, playOpts())); });
+    const reset = el("button", "danger", "Reset progress");
+    reset.type = "button";
+    reset.addEventListener("click", async () => {
+      reset.disabled = true;
+      try {
+        await setItemSeen(d, false);
+        close();
+      } catch (err) {
+        reset.textContent = cleanError(err);
+        reset.disabled = false;
+      }
+    });
+    choices.append(beginning, reset);
+    close = openModal("Playback", choices);
+  });
+  actions.append(playBtn);
 
   const trailerBtn = el("button", "secondary", "Trailer");
   trailerBtn.type = "button";
@@ -1219,12 +1314,6 @@ async function openDetail(item, skipHistory, parent = {}) {
 
   actions.append(
     toggleActionButton({
-      active: itemSeen(d),
-      activeLabel: "Seen",
-      inactiveLabel: "Mark Seen",
-      onToggle: (seen) => setItemSeen(d, seen),
-    }),
-    toggleActionButton({
       active: itemWatchlisted(d),
       activeLabel: "In Watchlist",
       inactiveLabel: "Add Watchlist",
@@ -1233,6 +1322,11 @@ async function openDetail(item, skipHistory, parent = {}) {
   );
 
   body.append(actions);
+  body.append(mediaPreferenceSelector(
+    itemRecommendationExcluded(d) ? "not_interested" : itemSeen(d) ? "seen" : "unwatched",
+    (preference) => setItemPreference(d, preference),
+    d.kind === "movie",
+  ));
   body.append(userRatingControl(() => userItemRating(d), (value) => setItemRating(d, value)));
 
   detail.append(posterCol, body);
@@ -1394,10 +1488,13 @@ async function openShow(show, skipHistory, initialSeason) {
 
   const actions = el("div", "detail-actions");
   actions.append(
-    toggleActionButton({ active: showSeen(show), activeLabel: "Seen", inactiveLabel: "Mark Seen", onToggle: (seen) => setShowSeen(show, seen) }),
     toggleActionButton({ active: showWatchlisted(show), activeLabel: "In Watchlist", inactiveLabel: "Add Watchlist", onToggle: (w) => setShowWatchlisted(show, w) }),
   );
   body.append(actions);
+  body.append(mediaPreferenceSelector(
+    showRecommendationExcluded(show) ? "not_interested" : showSeen(show) ? "seen" : "unwatched",
+    (preference) => setShowPreference(show, preference),
+  ));
   body.append(userRatingControl(() => userShowRating(show), (value) => setShowRating(show, value)));
   header.append(poster, body);
   frag.append(header);

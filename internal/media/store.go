@@ -1002,6 +1002,8 @@ func itemOrderBy(sortMode string) string {
 		return `ORDER BY COALESCE(rating, 0) DESC, sort_title, season_number, episode_number`
 	case "rating_asc":
 		return `ORDER BY COALESCE(rating, 0), sort_title, season_number, episode_number`
+	case "random":
+		return `ORDER BY RANDOM()`
 	default:
 		return `ORDER BY sort_title, season_number, episode_number`
 	}
@@ -1009,7 +1011,7 @@ func itemOrderBy(sortMode string) string {
 
 func normalizedSort(sortMode string) string {
 	switch strings.ToLower(strings.TrimSpace(sortMode)) {
-	case "title_desc", "year", "year_desc", "recent", "recent_asc", "mtime", "mtime_asc", "rating", "rating_asc":
+	case "title_desc", "year", "year_desc", "recent", "recent_asc", "mtime", "mtime_asc", "rating", "rating_asc", "random":
 		return strings.ToLower(strings.TrimSpace(sortMode))
 	default:
 		return ""
@@ -1469,6 +1471,8 @@ func (s *Store) SearchShows(ctx context.Context, opts ShowOptions) ([]ShowSummar
 		orderBy = "ORDER BY COALESCE(ms.rating, MAX(mi.rating), 0) DESC, sort_title"
 	case "rating_asc":
 		orderBy = "ORDER BY COALESCE(ms.rating, MAX(mi.rating), 0), sort_title"
+	case "random":
+		orderBy = "ORDER BY RANDOM()"
 	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT mi.library_id,

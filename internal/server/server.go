@@ -183,7 +183,6 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("DELETE /api/items/{id}/watchlist", a.watchlistItemDelete)
 	mux.HandleFunc("PUT /api/watchlist/tv", a.watchlistShowSave)
 	mux.HandleFunc("DELETE /api/watchlist/tv", a.watchlistShowDelete)
-	mux.HandleFunc("GET /api/surprise", a.surprise)
 	mux.HandleFunc("GET /api/home/catalog", a.homeSectionCatalogGet)
 	mux.HandleFunc("GET /api/home/layout", a.homeLayoutGet)
 	mux.HandleFunc("PUT /api/home/layout", a.homeLayoutSave)

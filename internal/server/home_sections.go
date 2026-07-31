@@ -188,6 +188,18 @@ func homeSectionDefs() map[string]homeSectionDef {
 		},
 		{
 			HomeSectionType: media.HomeSectionType{
+				Type: "surprise", Label: "Surprise me", Layout: "poster", Kind: "movie",
+				Description: "A different handful of unwatched titles on every visit.",
+				Params: []media.HomeSectionParam{
+					{Name: "kind", Label: "Media", Type: "enum", Options: []string{"movies", "tv"}, Default: "movies"},
+					limitParam,
+				},
+			},
+			title: "Surprise me",
+			build: buildSurpriseSection,
+		},
+		{
+			HomeSectionType: media.HomeSectionType{
 				Type: "genre", Label: "Genre shelf", Layout: "poster", Kind: "movie", Repeatable: true,
 				Description: "One shelf for a single genre, e.g. everything filed under Horror.",
 				Params: []media.HomeSectionParam{
@@ -206,6 +218,41 @@ func homeSectionDefs() map[string]homeSectionDef {
 		out[def.Type] = def
 	}
 	return out
+}
+
+// The surprise shelf reshuffles on every home build — the response cache keeps
+// that to once every 15 seconds rather than once per keypress.
+func buildSurpriseSection(scope homeSectionScope, cfg media.HomeLayoutSection) (media.HomeSection, error) {
+	limit := sectionLimit(cfg)
+	tv := paramOrDefault(cfg, "kind", "movies") == "tv"
+	if tv && scope.tvLib == nil {
+		return media.HomeSection{}, nil
+	}
+	if !tv && scope.movieLib == nil {
+		return media.HomeSection{}, nil
+	}
+	// Well-rated picks first, then anything unwatched, so a library of unrated
+	// files still fills the shelf.
+	for _, minRating := range []float64{surpriseMinRating, 0} {
+		if tv {
+			shows, err := scope.app.store.ListShowsForUser(scope.ctx, scope.tvLib.ID, "", "", "", "random", "unseen", scope.userID, minRating, limit, 0)
+			if err != nil {
+				return media.HomeSection{}, err
+			}
+			if len(shows) > 0 {
+				return media.HomeSection{Kind: "show", Shows: shows}, nil
+			}
+			continue
+		}
+		items, err := scope.app.store.ListItemsForUser(scope.ctx, scope.movieLib.ID, "", "", "", "random", "unseen", scope.userID, minRating, limit, 0)
+		if err != nil {
+			return media.HomeSection{}, err
+		}
+		if len(items) > 0 {
+			return media.HomeSection{Items: items}, nil
+		}
+	}
+	return media.HomeSection{}, nil
 }
 
 func buildGenreSection(scope homeSectionScope, cfg media.HomeLayoutSection) (media.HomeSection, error) {
@@ -553,3 +600,7 @@ func (a *App) homeLayoutDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, layout)
 }
+
+// surpriseMinRating keeps the surprise shelf away from the bottom of the
+// library while anything decent is still unwatched.
+const surpriseMinRating = 6.5

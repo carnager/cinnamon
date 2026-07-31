@@ -213,3 +213,57 @@ func TestHomeSectionCatalogLeadsWithTheDefaultLayout(t *testing.T) {
 		t.Fatal("genre shelf must declare its parameters")
 	}
 }
+
+func TestSurpriseShelfPicksUnwatchedAndFallsBackBelowTheRatingFloor(t *testing.T) {
+	app, store, userID := newHomeSectionsApp(t)
+	ctx := context.Background()
+
+	// The fixture's movies are both well rated; add one that is not.
+	if err := store.UpsertItem(ctx, media.Item{
+		LibraryID: "movies", Kind: "movie", Path: "/movies/turkey.mkv",
+		Title: "Turkey", SortTitle: "turkey", Rating: 2.1, MTimeUnix: 5,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	layout, err := validateHomeLayout(media.HomeLayoutDoc{Sections: []media.HomeLayoutSection{
+		{ID: "surprise", Type: "surprise", Enabled: true},
+	}})
+	if err != nil {
+		t.Fatalf("validate layout: %v", err)
+	}
+	body, _ := json.Marshal(layout)
+	if err := store.SaveHomeLayout(ctx, userID, string(body)); err != nil {
+		t.Fatalf("save layout: %v", err)
+	}
+
+	// Repeat: the shelf is randomly ordered, so one clean draw proves little.
+	for i := 0; i < 8; i++ {
+		sections := homeSectionsFor(t, app, userID)
+		if len(sections) != 1 || len(sections[0].Items) == 0 {
+			t.Fatalf("surprise shelf = %#v", sections)
+		}
+		for _, item := range sections[0].Items {
+			if item.Title == "Turkey" {
+				t.Fatal("shelf offered a movie below the rating floor while better ones are unwatched")
+			}
+		}
+	}
+
+	// Finish the well-rated ones: the shelf must fall back rather than vanish.
+	items, err := store.ListItemsForUser(ctx, "movies", "", "", "", "", "", userID, 0, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.Title == "Turkey" {
+			continue
+		}
+		if _, err := store.SaveProgress(ctx, userID, item.ID, 100, 100, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sections := homeSectionsFor(t, app, userID)
+	if len(sections) != 1 || len(sections[0].Items) != 1 || sections[0].Items[0].Title != "Turkey" {
+		t.Fatalf("fallback shelf = %#v", sections)
+	}
+}

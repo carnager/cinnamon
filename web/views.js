@@ -1002,7 +1002,8 @@ function homeLayoutParam(param, entry, redraw) {
     if (param.type === "int") input.min = "1";
     if (param.type === "number") { input.min = "0"; input.step = "0.5"; }
     input.value = entry.params[param.name] || param.default || "";
-    if (param.required) input.placeholder = "required";
+    if (param.multi) input.placeholder = param.required ? "required, comma separated" : "any of these, comma separated";
+    else if (param.required) input.placeholder = "required";
   }
   input.addEventListener("change", () => {
     const value = String(input.value || "").trim();

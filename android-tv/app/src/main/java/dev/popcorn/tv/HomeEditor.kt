@@ -292,11 +292,24 @@ fun cycleParam(section: HomeLayoutSection, param: HomeSectionParam): HomeLayoutS
     return section.copy(params = params)
 }
 
-// "90 min", "7.5 and up", "24 items" — or "Any" when the parameter is unset.
+// "90 min", "7.5 and up", "Horror, Thriller" — or "Any" when unset.
 fun paramValueLabel(param: HomeSectionParam, value: String): String {
     if (value.isBlank()) return "Any"
+    if (param.multi) return splitParamValues(value).joinToString(", ")
     if (param.suffix.isBlank()) return value
     return "$value ${param.suffix}"
+}
+
+fun splitParamValues(value: String): List<String> =
+    value.split(",").map { it.trim() }.filter { it.isNotBlank() }
+
+// Multi-valued parameters accumulate: checking a second genre widens the shelf
+// rather than replacing the first.
+fun toggleParamValue(section: HomeLayoutSection, name: String, value: String): HomeLayoutSection {
+    val current = splitParamValues(section.params[name].orEmpty())
+    val next = if (current.contains(value)) current - value else current + value
+    val params = if (next.isEmpty()) section.params - name else section.params + (name to next.joinToString(","))
+    return section.copy(params = params)
 }
 
 fun updateSection(

@@ -1544,19 +1544,23 @@ fun PopcornApp() {
         if (section == null || param == null) {
             homeFacetPicker = null
         } else {
-            val current = section.params[facet].orEmpty()
+            val selected = splitParamValues(section.params[facet].orEmpty())
             TvCheckListShelf(
                 title = param.label.ifBlank { facet }.uppercase(),
-                subtitle = if (values.isEmpty()) "Nothing to choose from" else "Pick a value",
+                subtitle = when {
+                    values.isEmpty() -> "Nothing to choose from"
+                    param.multi -> "Any of these"
+                    else -> "Pick a value"
+                },
                 rows = listOf(
                     TvCheckRow(
                         key = "__any__",
                         label = "Any",
                         description = "No filter on this",
-                        checked = current.isBlank(),
+                        checked = selected.isEmpty(),
                         onToggle = {
                             homeEditDraft = updateSection(homeEditDraft, index) { it.copy(params = it.params - facet) }
-                            homeFacetPicker = null
+                            if (!param.multi) homeFacetPicker = null
                         },
                     )
                 ) + values.map { value ->
@@ -1564,10 +1568,14 @@ fun PopcornApp() {
                         key = value,
                         label = if (facet == "decades") "${value}s" else value,
                         description = "",
-                        checked = current == value,
+                        checked = selected.contains(value),
                         onToggle = {
-                            homeEditDraft = updateSection(homeEditDraft, index) { it.copy(params = it.params + (facet to value)) }
-                            homeFacetPicker = null
+                            if (param.multi) {
+                                homeEditDraft = updateSection(homeEditDraft, index) { toggleParamValue(it, facet, value) }
+                            } else {
+                                homeEditDraft = updateSection(homeEditDraft, index) { it.copy(params = it.params + (facet to value)) }
+                                homeFacetPicker = null
+                            }
                         },
                     )
                 },

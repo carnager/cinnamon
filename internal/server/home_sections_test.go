@@ -430,3 +430,48 @@ func TestBecauseYouWatchedSkipsAnAnchorWithNoLibraryMatches(t *testing.T) {
 		t.Fatalf("shelf = %#v", sections[0].Items)
 	}
 }
+
+func TestFilterShelfAcceptsSeveralValuesPerDimension(t *testing.T) {
+	app, store, userID := newHomeSectionsApp(t)
+	ctx := context.Background()
+
+	for _, item := range []media.Item{
+		{LibraryID: "movies", Kind: "movie", Path: "/movies/a24.mkv", Title: "Studio A", SortTitle: "studio a", Studios: "A24", Countries: "Japan", Genres: "Slasher", Rating: 8.0, MTimeUnix: 40},
+		{LibraryID: "movies", Kind: "movie", Path: "/movies/ghibli.mkv", Title: "Studio B", SortTitle: "studio b", Studios: "Ghibli", Countries: "Südkorea", Genres: "Melodrama", Rating: 7.0, MTimeUnix: 41},
+		{LibraryID: "movies", Kind: "movie", Path: "/movies/other.mkv", Title: "Studio C", SortTitle: "studio c", Studios: "Some Other", Countries: "Kanada", Genres: "Comedy", Rating: 6.0, MTimeUnix: 42},
+	} {
+		if err := store.UpsertItem(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	layout, err := validateHomeLayout(media.HomeLayoutDoc{Sections: []media.HomeLayoutSection{
+		{ID: "studios", Type: "filter", Enabled: true, Params: map[string]string{"studio": "A24,Ghibli", "sort": "title"}},
+		{ID: "countries", Type: "filter", Enabled: true, Params: map[string]string{"country": "Japan, Südkorea", "sort": "title"}},
+		{ID: "genres", Type: "filter", Enabled: true, Params: map[string]string{"genre": "Slasher,Melodrama", "sort": "title"}},
+	}})
+	if err != nil {
+		t.Fatalf("validate layout: %v", err)
+	}
+	body, _ := json.Marshal(layout)
+	if err := store.SaveHomeLayout(ctx, userID, string(body)); err != nil {
+		t.Fatalf("save layout: %v", err)
+	}
+
+	sections := homeSectionsFor(t, app, userID)
+	if len(sections) != 3 {
+		t.Fatalf("sections = %#v", sectionTypes(sections))
+	}
+	for _, section := range sections {
+		titles := make([]string, 0, len(section.Items))
+		for _, item := range section.Items {
+			titles = append(titles, item.Title)
+		}
+		if len(titles) != 2 || titles[0] != "Studio A" || titles[1] != "Studio B" {
+			t.Fatalf("section %q matched %v, want both listed values and nothing else", section.ID, titles)
+		}
+	}
+	if sections[0].Title != "A24, Ghibli" {
+		t.Fatalf("title = %q, want both values", sections[0].Title)
+	}
+}

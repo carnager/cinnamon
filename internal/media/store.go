@@ -874,8 +874,8 @@ func (s *Store) searchItems(ctx context.Context, opts SearchOptions) ([]Item, er
 	genreWhere, genreArgs := itemGenreFilterSQL("genres", genres)
 	decadeWhere := decadeFilterSQL(itemYearExpr, opts.Decades)
 	nameStartsWith := strings.TrimSpace(opts.NameStartsWith)
-	studio := strings.TrimSpace(opts.Studio)
-	country := strings.TrimSpace(opts.Country)
+	studioWhere, studioArgs := likeAnyFilterSQL("studios", opts.Studio)
+	countryWhere, countryArgs := likeAnyFilterSQL("countries", opts.Country)
 	contentRatingWhere, contentRatingArgs := contentRatingFilterSQL(opts.ContentRatings)
 	seenStatus := normalizedSeenStatus(opts.SeenStatus)
 	userID := opts.UserID
@@ -941,8 +941,8 @@ AND (? = '' OR kind = ?)
 ` + genreWhere + `
 ` + decadeWhere + `
 AND (? <= 0 OR COALESCE(rating, 0) >= ?)
-AND (? = '' OR COALESCE(studios, '') LIKE '%' || ? || '%')
-AND (? = '' OR COALESCE(countries, '') LIKE '%' || ? || '%')
+` + studioWhere + `
+` + countryWhere + `
 AND (? <= 0 OR (COALESCE(duration_ms, 0) > 0 AND duration_ms <= ?))
 ` + contentRatingWhere + `
 AND (
@@ -976,12 +976,10 @@ LIMIT ? OFFSET ?`
 		kind, kind,
 	}
 	args = append(args, genreArgs...)
-	args = append(args,
-		opts.MinRating, opts.MinRating,
-		studio, studio,
-		country, country,
-		opts.MaxDurationMS, opts.MaxDurationMS,
-	)
+	args = append(args, opts.MinRating, opts.MinRating)
+	args = append(args, studioArgs...)
+	args = append(args, countryArgs...)
+	args = append(args, opts.MaxDurationMS, opts.MaxDurationMS)
 	args = append(args, contentRatingArgs...)
 	args = append(args,
 		seenStatus, seenStatus, userID, userID, seenStatus, userID, userID, seenStatus, userID, userID,
@@ -1111,6 +1109,23 @@ func decadeFilterSQL(yearExpr, decades string) string {
 		return ""
 	}
 	return "AND (" + strings.Join(clauses, " OR ") + ")"
+}
+
+// likeAnyFilterSQL matches a comma-separated column against any of the wanted
+// values, which is how studios and countries are stored: one row can read
+// "Vereinigtes Königreich, Vereinigte Staaten".
+func likeAnyFilterSQL(column, values string) (string, []any) {
+	wanted := splitFilterList(values)
+	if len(wanted) == 0 {
+		return "", nil
+	}
+	clauses := make([]string, 0, len(wanted))
+	args := make([]any, 0, len(wanted))
+	for _, value := range wanted {
+		clauses = append(clauses, "COALESCE("+column+", '') LIKE '%' || ? || '%'")
+		args = append(args, value)
+	}
+	return "AND (" + strings.Join(clauses, " OR ") + ")", args
 }
 
 // contentRatingFilterSQL keeps a shelf to a set of certificates ("G,PG,FSK 6"),
@@ -1450,8 +1465,8 @@ func (s *Store) SearchShows(ctx context.Context, opts ShowOptions) ([]ShowSummar
 	genreWhere, genreArgs := showGenreFilterSQL(genres)
 	decadeHaving := decadeFilterSQL(showYearExpr, opts.Decades)
 	nameStartsWith := strings.TrimSpace(opts.NameStartsWith)
-	studio := strings.TrimSpace(opts.Studio)
-	country := strings.TrimSpace(opts.Country)
+	studioWhere, studioArgs := likeAnyFilterSQL("mi.studios", opts.Studio)
+	countryWhere, countryArgs := likeAnyFilterSQL("mi.countries", opts.Country)
 	contentRatingWhere, contentRatingArgs := contentRatingFilterSQL(opts.ContentRatings)
 	contentRatingWhere = strings.ReplaceAll(contentRatingWhere, "official_rating", "mi.official_rating")
 	seenStatus := normalizedSeenStatus(opts.SeenStatus)
@@ -1545,8 +1560,8 @@ WHERE mi.kind = 'episode'
 AND (? = '' OR mi.library_id = ?)
 `+genreWhere+`
 AND mi.show_title IS NOT NULL AND mi.show_title != ''
-AND (? = '' OR COALESCE(mi.studios, '') LIKE '%' || ? || '%')
-AND (? = '' OR COALESCE(mi.countries, '') LIKE '%' || ? || '%')
+`+studioWhere+`
+`+countryWhere+`
 AND (? <= 0 OR (COALESCE(mi.duration_ms, 0) > 0 AND mi.duration_ms <= ?))
 `+contentRatingWhere+`
 AND (
@@ -1565,7 +1580,7 @@ AND (
 	OR (? = 'started' AND ? > 0 AND `+showStartedEpisodes+` > 0 AND `+showCompletedEpisodes+` < COUNT(*))
 )
 `+orderBy+`
-LIMIT ? OFFSET ?`, append(append(append(append(append([]any{userID, libraryID, libraryID}, genreArgs...), studio, studio, country, country, opts.MaxDurationMS, opts.MaxDurationMS), contentRatingArgs...), nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith), append(textArgs, opts.MinRating, opts.MinRating, seenStatus, seenStatus, userID, seenStatus, userID, seenStatus, userID, limit, offset)...)...)
+LIMIT ? OFFSET ?`, append(append(append(append(append(append(append([]any{userID, libraryID, libraryID}, genreArgs...), studioArgs...), countryArgs...), opts.MaxDurationMS, opts.MaxDurationMS), contentRatingArgs...), nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith), append(textArgs, opts.MinRating, opts.MinRating, seenStatus, seenStatus, userID, seenStatus, userID, seenStatus, userID, limit, offset)...)...)
 	if err != nil {
 		return nil, err
 	}

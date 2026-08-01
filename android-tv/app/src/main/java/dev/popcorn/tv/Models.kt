@@ -192,6 +192,8 @@ data class HomeSectionParam(
     // Values a picker should offer for a number, and what they are measured in.
     val choices: List<String>,
     val suffix: String,
+    // A comma-separated list where any value matches, not a single choice.
+    val multi: Boolean,
     val default: String,
     val required: Boolean,
 )

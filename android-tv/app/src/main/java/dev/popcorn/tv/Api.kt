@@ -395,6 +395,7 @@ class Api(private val session: Session) {
                         options = (0 until options.length()).map { options.optString(it) },
                         choices = (0 until choices.length()).map { choices.optString(it) },
                         suffix = p.optString("suffix"),
+                        multi = p.optBoolean("multi"),
                         default = p.optString("default"),
                         required = p.optBoolean("required"),
                     )

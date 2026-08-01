@@ -56,8 +56,12 @@ type HomeSectionParam struct {
 	// what they are measured in — without them a client has to guess that
 	// "limit" means items and "maxMinutes" does not. An empty choice clears the
 	// parameter. Unlike Options they are suggestions, not a constraint.
-	Choices  []string `json:"choices,omitempty"`
-	Suffix   string   `json:"suffix,omitempty"`
-	Default  string   `json:"default,omitempty"`
-	Required bool     `json:"required,omitempty"`
+	Choices []string `json:"choices,omitempty"`
+	Suffix  string   `json:"suffix,omitempty"`
+	// Multi means the value is a comma-separated list and any of them matches;
+	// dimensions still combine with each other, so "Horror,Thriller" in the
+	// 1990s is either genre and that decade.
+	Multi    bool   `json:"multi,omitempty"`
+	Default  string `json:"default,omitempty"`
+	Required bool   `json:"required,omitempty"`
 }

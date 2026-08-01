@@ -194,6 +194,10 @@ data class HomeSectionParam(
     val suffix: String,
     // A comma-separated list where any value matches, not a single choice.
     val multi: Boolean,
+    // The companion parameter holding this dimension's any/all mode, and
+    // whether this parameter is that companion (shown inside the picker).
+    val matchParam: String,
+    val hidden: Boolean,
     val default: String,
     val required: Boolean,
 )

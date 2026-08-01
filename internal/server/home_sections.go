@@ -248,16 +248,16 @@ func homeSectionDefs() map[string]homeSectionDef {
 				Description: "A saved search: any mix of genre, decade, country, studio, runtime and rating.",
 				Params: []media.HomeSectionParam{
 					{Name: "kind", Label: "Media", Type: "enum", Options: []string{"movies", "tv"}, Default: "movies"},
-					{Name: "genre", Label: "Genre", Type: "string", Multi: true},
 					// A title can carry several genres, studios and countries at
 					// once, so "all of them" is a question worth asking. It is
 					// not for a decade or a certificate: an item has one of each.
-					{Name: "genreMatch", Label: "Genres", Type: "enum", Options: []string{"any", "all"}, Default: "any"},
+					{Name: "genre", Label: "Genre", Type: "string", Multi: true, MatchParam: "genreMatch"},
+					{Name: "genreMatch", Label: "Genres", Type: "enum", Options: []string{"any", "all"}, Default: "any", Hidden: true},
 					{Name: "decades", Label: "Decade", Type: "string", Multi: true},
-					{Name: "country", Label: "Country", Type: "string", Multi: true},
-					{Name: "countryMatch", Label: "Countries", Type: "enum", Options: []string{"any", "all"}, Default: "any"},
-					{Name: "studio", Label: "Studio", Type: "string", Multi: true},
-					{Name: "studioMatch", Label: "Studios", Type: "enum", Options: []string{"any", "all"}, Default: "any"},
+					{Name: "country", Label: "Country", Type: "string", Multi: true, MatchParam: "countryMatch"},
+					{Name: "countryMatch", Label: "Countries", Type: "enum", Options: []string{"any", "all"}, Default: "any", Hidden: true},
+					{Name: "studio", Label: "Studio", Type: "string", Multi: true, MatchParam: "studioMatch"},
+					{Name: "studioMatch", Label: "Studios", Type: "enum", Options: []string{"any", "all"}, Default: "any", Hidden: true},
 					{Name: "certificate", Label: "Rated", Type: "string", Multi: true},
 					{Name: "maxMinutes", Label: "Max length", Type: "int", Suffix: "min", Choices: []string{"", "45", "60", "75", "90", "105", "120", "150"}},
 					{Name: "minRating", Label: "Min rating", Type: "number", Suffix: "and up", Choices: []string{"", "5", "6", "6.5", "7", "7.5", "8", "8.5"}},

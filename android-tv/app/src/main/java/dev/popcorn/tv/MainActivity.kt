@@ -109,6 +109,10 @@ fun PopcornApp() {
     // that shelf's genre instead of adding and removing shelves.
     var homeGenreTarget by remember { mutableStateOf<Int?>(null) }
     var homeOptionsIndex by remember { mutableStateOf<Int?>(null) }
+    // The options sheet edits its own copy of the shelf and writes it back when
+    // it closes. Editing the draft on every keypress recomposed the rail
+    // underneath the popup, which cost the sheet its focus mid-cycle.
+    var homeOptionsSection by remember { mutableStateOf<HomeLayoutSection?>(null) }
     var homeGenres by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     // facet name -> values, per media kind, for the filter shelf's pickers.
     var homeFacets by remember { mutableStateOf<Map<String, Map<String, List<String>>>>(emptyMap()) }
@@ -821,6 +825,7 @@ fun PopcornApp() {
             homeEditGrabbed = false
             homeShelvesOpen = false
             homeGenrePicker = false
+            homeOptionsSection = null
             homeOptionsIndex = null
             screen = Screen.ArrangeHome
         }
@@ -833,6 +838,7 @@ fun PopcornApp() {
         homeGenrePicker = false
         homeGenreTarget = null
         homeFacetPicker = null
+        homeOptionsSection = null
         homeOptionsIndex = null
         screen = Screen.Home
         scope.launch {
@@ -955,7 +961,15 @@ fun PopcornApp() {
                 homeGenrePicker = false
                 homeGenreTarget = null
             }
-            homeOptionsIndex != null -> homeOptionsIndex = null
+            homeOptionsIndex != null -> {
+                val optionsIndex = homeOptionsIndex
+                val edited = homeOptionsSection
+                if (optionsIndex != null && edited != null) {
+                    homeEditDraft = updateSection(homeEditDraft, optionsIndex) { edited }
+                }
+                homeOptionsSection = null
+                homeOptionsIndex = null
+            }
             homeShelvesOpen -> homeShelvesOpen = false
             homeEditGrabbed -> homeEditGrabbed = false
             else -> session?.let { finishHomeArrange(it) }
@@ -1097,7 +1111,10 @@ fun PopcornApp() {
                 homeEditGrabbed = false
             },
             onAdd = { homeShelvesOpen = true },
-            onOptions = { index -> homeOptionsIndex = index },
+            onOptions = { index ->
+                homeOptionsSection = homeEditDraft.getOrNull(index)
+                homeOptionsIndex = index
+            },
             onDone = { session?.let { finishHomeArrange(it) } },
         )
         Screen.Watchlist -> WatchlistView(
@@ -1500,16 +1517,25 @@ fun PopcornApp() {
     }
 
     homeOptionsIndex?.let { optionsIndex ->
-        val section = homeEditDraft.getOrNull(optionsIndex)
+        val section = homeOptionsSection
         val definition = section?.let { current -> homeCatalog.firstOrNull { it.type == current.type } }
-        if (section == null || definition == null) {
+        val closeOptions = {
+            val edited = homeOptionsSection
+            if (edited != null) {
+                homeEditDraft = updateSection(homeEditDraft, optionsIndex) { edited }
+            }
+            homeOptionsSection = null
             homeOptionsIndex = null
+        }
+        if (section == null || definition == null) {
+            closeOptions()
         } else {
             TvOptionsShelf(
                 title = "SHELF OPTIONS",
                 subtitle = sectionLabel(section, definition),
-                rows = definition.params.map { param ->
-                    val value = section.params[param.name]?.ifBlank { null } ?: param.default.takeIf { param.required || param.type != "string" }.orEmpty()
+                rows = definition.params.filterNot { it.hidden }.map { param ->
+                    val value = section.params[param.name]?.ifBlank { null }
+                        ?: param.default.takeIf { param.required || param.type != "string" }.orEmpty()
                     TvOptionRow(
                         key = param.name,
                         label = param.label.ifBlank { param.name },
@@ -1526,31 +1552,49 @@ fun PopcornApp() {
                                     session?.let { loadHomeFacets(it, kind) }
                                     homeFacetPicker = Triple(optionsIndex, param.name, kind)
                                 }
-                                else -> homeEditDraft = updateSection(homeEditDraft, optionsIndex) { cycleParam(it, param) }
+                                else -> homeOptionsSection = cycleParam(section, param)
                             }
                         },
                     )
                 },
-                onDismiss = { homeOptionsIndex = null },
+                onDismiss = closeOptions,
             )
         }
     }
 
     homeFacetPicker?.let { (index, facet, kind) ->
-        val section = homeEditDraft.getOrNull(index)
+        val working = homeOptionsSection
+        val section = working ?: homeEditDraft.getOrNull(index)
         val definition = section?.let { current -> homeCatalog.firstOrNull { it.type == current.type } }
         val param = definition?.params?.firstOrNull { it.name == facet }
         val values = homeFacets[kind]?.get(facet).orEmpty()
+        val applyToSection = { transform: (HomeLayoutSection) -> HomeLayoutSection ->
+            if (working != null) {
+                homeOptionsSection = transform(working)
+            } else {
+                homeEditDraft = updateSection(homeEditDraft, index, transform)
+            }
+        }
         if (section == null || param == null) {
             homeFacetPicker = null
         } else {
             val selected = splitParamValues(section.params[facet].orEmpty())
+            val matchParam = definition.params.firstOrNull { it.name == param.matchParam }
+            val matchValue = section.params[param.matchParam].orEmpty().ifBlank { matchParam?.default.orEmpty() }
             TvCheckListShelf(
                 title = param.label.ifBlank { facet }.uppercase(),
                 subtitle = when {
                     values.isEmpty() -> "Nothing to choose from"
-                    param.multi -> "Any of these"
+                    param.multi -> "Pick as many as you like"
                     else -> "Pick a value"
+                },
+                modeRow = matchParam?.let { mode ->
+                    TvOptionRow(
+                        key = mode.name,
+                        label = "MATCH",
+                        value = if (matchValue == "all") "All of them" else "Any of them",
+                        onCycle = { applyToSection { cycleParam(it, mode) } },
+                    )
                 },
                 rows = listOf(
                     TvCheckRow(
@@ -1559,7 +1603,7 @@ fun PopcornApp() {
                         description = "No filter on this",
                         checked = selected.isEmpty(),
                         onToggle = {
-                            homeEditDraft = updateSection(homeEditDraft, index) { it.copy(params = it.params - facet) }
+                            applyToSection { it.copy(params = it.params - facet) }
                             if (!param.multi) homeFacetPicker = null
                         },
                     )
@@ -1571,9 +1615,9 @@ fun PopcornApp() {
                         checked = selected.contains(value),
                         onToggle = {
                             if (param.multi) {
-                                homeEditDraft = updateSection(homeEditDraft, index) { toggleParamValue(it, facet, value) }
+                                applyToSection { toggleParamValue(it, facet, value) }
                             } else {
-                                homeEditDraft = updateSection(homeEditDraft, index) { it.copy(params = it.params + (facet to value)) }
+                                applyToSection { it.copy(params = it.params + (facet to value)) }
                                 homeFacetPicker = null
                             }
                         },

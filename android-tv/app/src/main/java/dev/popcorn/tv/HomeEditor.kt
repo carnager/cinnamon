@@ -59,6 +59,9 @@ fun TvCheckListShelf(
     title: String,
     subtitle: String,
     rows: List<TvCheckRow>,
+    // Shown above the list for a dimension that can mean either or both, so the
+    // choice sits with the values it applies to.
+    modeRow: TvOptionRow? = null,
     onDismiss: () -> Unit,
 ) {
     val firstFocus = remember { FocusRequester() }
@@ -83,6 +86,10 @@ fun TvCheckListShelf(
                 Text(title.uppercase(), color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(7.dp))
                 Text(subtitle, color = TextColor, fontSize = 21.sp, fontWeight = FontWeight.Black)
+                if (modeRow != null) {
+                    Spacer(Modifier.height(12.dp))
+                    TvMatchToggle(modeRow)
+                }
                 Spacer(Modifier.height(16.dp))
                 LazyColumn(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     itemsIndexed(rows, key = { _, row -> row.key }) { index, row ->
@@ -94,6 +101,30 @@ fun TvCheckListShelf(
                 }
             }
         }
+    }
+}
+
+// Match this / match all, as a pill rather than a list row: it is a property of
+// the whole selection, not one more thing to tick.
+@Composable
+private fun TvMatchToggle(row: TvOptionRow) {
+    var focused by remember { mutableStateOf(false) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(9.dp))
+            .background(if (focused) Accent.copy(alpha = .16f) else Surface2.copy(alpha = .6f))
+            .border(1.dp, if (focused) Accent else Color.White.copy(alpha = .08f), RoundedCornerShape(9.dp))
+            .onFocusChanged { focused = it.isFocused }
+            .focusable()
+            .tvActivate(row.onCycle)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(row.label, color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
+        Text(row.value, color = if (focused) Accent else TextColor, fontSize = 13.sp, fontWeight = FontWeight.Black)
+        Text("⇄", color = if (focused) Accent else Muted, fontSize = 13.sp, fontWeight = FontWeight.Black)
     }
 }
 

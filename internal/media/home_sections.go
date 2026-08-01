@@ -61,7 +61,12 @@ type HomeSectionParam struct {
 	// Multi means the value is a comma-separated list and any of them matches;
 	// dimensions still combine with each other, so "Horror,Thriller" in the
 	// 1990s is either genre and that decade.
-	Multi    bool   `json:"multi,omitempty"`
-	Default  string `json:"default,omitempty"`
-	Required bool   `json:"required,omitempty"`
+	Multi bool `json:"multi,omitempty"`
+	// MatchParam names the companion parameter holding this dimension's any/all
+	// mode, so an editor can offer it inside the value picker rather than as a
+	// row of its own. The companion carries Hidden so it is not listed twice.
+	MatchParam string `json:"matchParam,omitempty"`
+	Hidden     bool   `json:"hidden,omitempty"`
+	Default    string `json:"default,omitempty"`
+	Required   bool   `json:"required,omitempty"`
 }

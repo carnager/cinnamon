@@ -3966,6 +3966,7 @@ body {
   padding: 5px 8px; font-size: 13px; width: 100%; min-width: 0;
 }
 
+.home-layout-match { margin-top: 4px; font-size: 11px !important; padding: 3px 6px !important; color: var(--text-muted) !important; }
 .home-layout-controls { display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
 .home-layout-toggle { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
 .home-layout-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 16px; }

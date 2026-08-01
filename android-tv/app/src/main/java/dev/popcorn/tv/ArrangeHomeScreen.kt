@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -321,7 +322,7 @@ private fun ArrangePreview(
         Text(
             sectionLabel(section, definition),
             color = Color.White,
-            fontSize = 28.sp,
+            fontSize = 26.sp,
             fontWeight = FontWeight.Black,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -338,14 +339,17 @@ private fun ArrangePreview(
 
         val chips = sectionParamChips(section, definition)
         if (chips.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                chips.forEach { chip ->
+                // One line of them: the buttons below must never be pushed off.
+                chips.take(4).forEach { chip ->
                     Text(
                         chip,
                         color = Teal,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Black,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
                             .border(1.dp, Teal.copy(alpha = .35f), RoundedCornerShape(4.dp))
@@ -355,10 +359,9 @@ private fun ArrangePreview(
             }
         }
 
-        Spacer(Modifier.height(18.dp))
-        ArrangePosterStrip(session, content)
-
-        Spacer(Modifier.weight(1f))
+        // The actions come before the artwork, not after it: anything that grows
+        // has to grow into space the buttons have already claimed.
+        Spacer(Modifier.height(16.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
             ArrangeAction(
                 label = "Remove",
@@ -367,10 +370,15 @@ private fun ArrangePreview(
                 onLeft = onBackToRail,
                 onClick = onRemove,
             )
-            if (definition?.params?.isNotEmpty() == true) {
+            if (definition?.params?.any { !it.hidden } == true) {
                 ArrangeAction(label = "Options", enabled = !grabbed, onLeft = onBackToRail, onClick = onOptions)
             }
             ArrangeAction(label = "Done", primary = true, enabled = !grabbed, onLeft = onBackToRail, onClick = onDone)
+        }
+
+        Spacer(Modifier.height(18.dp))
+        Box(Modifier.fillMaxWidth().weight(1f, fill = false)) {
+            ArrangePosterStrip(session, content)
         }
     }
 }
@@ -382,7 +390,7 @@ private fun ArrangePosterStrip(session: Session?, content: HomeSection?) {
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(150.dp)
+                .heightIn(max = 150.dp)
                 .clip(RoundedCornerShape(10.dp))
                 .background(Surface2.copy(alpha = .45f)),
             contentAlignment = Alignment.Center,
@@ -397,7 +405,7 @@ private fun ArrangePosterStrip(session: Session?, content: HomeSection?) {
         return
     }
     LazyRow(
-        modifier = Modifier.fillMaxWidth().height(190.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(max = 190.dp),
         horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
         itemsIndexed(posters) { _, poster ->

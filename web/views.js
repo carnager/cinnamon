@@ -954,8 +954,12 @@ function homeLayoutRow(entry, index, draft, types, redraw) {
   else if (!definition) copy.append(el("span", null, "This server no longer offers this shelf."));
 
   const params = el("div", "home-layout-params");
+  const byName = new Map((definition?.params || []).map((param) => [param.name, param]));
   for (const param of definition?.params || []) {
-    params.append(homeLayoutParam(param, entry, redraw));
+    // A match mode belongs to the dimension it applies to, not to a row of its
+    // own — it is rendered inside that field's cell.
+    if (param.hidden) continue;
+    params.append(homeLayoutParam(param, entry, redraw, byName.get(param.matchParam)));
   }
 
   const toggle = el("label", "home-layout-toggle");
@@ -981,9 +985,10 @@ function homeLayoutRow(entry, index, draft, types, redraw) {
   return row;
 }
 
-function homeLayoutParam(param, entry, redraw) {
+function homeLayoutParam(param, entry, redraw, matchParam) {
   const wrap = el("label", "home-layout-param");
-  wrap.append(el("span", null, param.label || param.name));
+  const head = el("span", null, param.label || param.name);
+  wrap.append(head);
   let input;
   // A parameter that declares options or choices is a list, not a free field —
   // "any length" has to be selectable, not just an empty box.
@@ -1012,6 +1017,20 @@ function homeLayoutParam(param, entry, redraw) {
     if (choices?.length) redraw();
   });
   wrap.append(input);
+  if (matchParam) {
+    const mode = el("select", "home-layout-match");
+    for (const option of matchParam.options || []) {
+      const node = el("option", null, option === "all" ? "all of them" : "any of them");
+      node.value = option;
+      mode.append(node);
+    }
+    mode.value = entry.params[matchParam.name] || matchParam.default || "any";
+    mode.addEventListener("change", () => {
+      if (mode.value && mode.value !== matchParam.default) entry.params[matchParam.name] = mode.value;
+      else delete entry.params[matchParam.name];
+    });
+    wrap.append(mode);
+  }
   return wrap;
 }
 

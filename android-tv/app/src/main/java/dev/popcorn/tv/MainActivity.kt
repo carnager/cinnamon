@@ -108,6 +108,7 @@ fun PopcornApp() {
     var homeEditIndex by remember { mutableStateOf(0) }
     var homeEditGrabbed by remember { mutableStateOf(false) }
     var homeShelvesOpen by remember { mutableStateOf(false) }
+    var homeActionsIndex by remember { mutableStateOf<Int?>(null) }
     var homeOptionsIndex by remember { mutableStateOf<Int?>(null) }
     // The options sheet edits its own copy of the shelf and writes it back when
     // it closes. Editing the draft on every keypress recomposed the rail
@@ -952,6 +953,7 @@ fun PopcornApp() {
     BackHandler(enabled = screen is Screen.ArrangeHome) {
         when {
             homeFacetPicker != null -> homeFacetPicker = null
+            homeActionsIndex != null -> homeActionsIndex = null
             homeOptionsIndex != null -> {
                 val optionsIndex = homeOptionsIndex
                 val edited = homeOptionsSection
@@ -1102,6 +1104,10 @@ fun PopcornApp() {
                 homeEditGrabbed = false
             },
             onAdd = { homeShelvesOpen = true },
+            onOpenActions = { index ->
+                homeEditIndex = index
+                homeActionsIndex = index
+            },
             onOptions = { index ->
                 homeOptionsSection = homeEditDraft.getOrNull(index)
                 homeOptionsIndex = index
@@ -1513,6 +1519,35 @@ fun PopcornApp() {
             },
             onDismiss = { homeShelvesOpen = false },
         )
+    }
+
+    homeActionsIndex?.let { actionsIndex ->
+        val section = homeEditDraft.getOrNull(actionsIndex)
+        val definition = section?.let { current -> homeCatalog.firstOrNull { it.type == current.type } }
+        if (section == null) {
+            homeActionsIndex = null
+        } else {
+            ArrangeActionsShelf(
+                title = sectionLabel(section, definition),
+                canConfigure = definition?.params?.any { !it.hidden } == true,
+                onMove = {
+                    homeActionsIndex = null
+                    homeEditGrabbed = true
+                },
+                onOptions = {
+                    homeActionsIndex = null
+                    homeOptionsSection = section
+                    homeOptionsIndex = actionsIndex
+                },
+                onRemove = {
+                    homeActionsIndex = null
+                    homeEditDraft = homeEditDraft.filterIndexed { position, _ -> position != actionsIndex }
+                    homeEditIndex = actionsIndex.coerceAtMost(maxOf(homeEditDraft.lastIndex, 0))
+                    homeEditGrabbed = false
+                },
+                onDismiss = { homeActionsIndex = null },
+            )
+        }
     }
 
     homeOptionsIndex?.let { optionsIndex ->

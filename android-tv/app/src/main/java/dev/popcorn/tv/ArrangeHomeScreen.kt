@@ -1,5 +1,6 @@
 package dev.popcorn.tv
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
@@ -29,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,7 +50,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 // ── Arrange home ──
 //
@@ -73,13 +79,13 @@ fun ArrangeHomeView(
     onRemove: (Int) -> Unit,
     onAdd: () -> Unit,
     onOptions: (Int) -> Unit,
+    onOpenActions: (Int) -> Unit,
     onDone: () -> Unit,
 ) {
     val types = remember(catalog) { catalog.associateBy { it.type } }
     val byId = remember(rendered) { rendered.associateBy { it.id } }
     val railState = rememberLazyListState()
     val railFocus = remember { FocusRequester() }
-    val actionFocus = remember { FocusRequester() }
     val current = draft.getOrNull(focusedIndex)
 
     // Focus brings its own row into view, so moving the selection needs no help
@@ -139,7 +145,8 @@ fun ArrangeHomeView(
                             grabbed = grabbed && index == focusedIndex,
                             focusRequester = if (index == focusedIndex) railFocus else null,
                             onFocus = { onFocusIndex(index) },
-                            onClick = onToggleGrab,
+                            onClick = { if (grabbed) onToggleGrab() else onOpenActions(index) },
+                            onLongClick = { if (!grabbed) onToggleGrab() },
                             onUp = {
                                 when {
                                     grabbed && index > 0 -> {
@@ -160,13 +167,15 @@ fun ArrangeHomeView(
                                     else -> false
                                 }
                             },
-                            onRight = {
-                                if (grabbed) true else requestArrangeFocus(actionFocus)
-                            },
                         )
                     }
                     item(key = "arrange-add") {
-                        AddShelfRow(enabled = !grabbed, onClick = onAdd)
+                        AddShelfRow("+", "Add a shelf", enabled = !grabbed, onClick = onAdd)
+                    }
+                    item(key = "arrange-done") {
+                        // Done lives in the rail so the whole screen is one
+                        // column of focus, rather than a panel you arrow into.
+                        AddShelfRow("✓", "Done", enabled = !grabbed, onClick = onDone)
                     }
                 }
 
@@ -175,12 +184,6 @@ fun ArrangeHomeView(
                     section = current,
                     definition = current?.let { types[it.type] },
                     content = current?.let { byId[it.id] },
-                    grabbed = grabbed,
-                    actionFocus = actionFocus,
-                    onBackToRail = { requestArrangeFocus(railFocus) },
-                    onRemove = { onRemove(focusedIndex) },
-                    onOptions = { onOptions(focusedIndex) },
-                    onDone = onDone,
                 )
             }
 
@@ -189,7 +192,7 @@ fun ArrangeHomeView(
                 if (grabbed) {
                     "Moving — up/down to place it, OK to drop, Back to cancel"
                 } else {
-                    "OK to pick a shelf up  •  ▶ for its options  •  Back to save and return"
+                    "OK for what you can do  •  hold OK to move a shelf  •  Back to save"
                 },
                 color = if (grabbed) Accent else Muted,
                 fontSize = 12.sp,
@@ -208,11 +211,14 @@ private fun ArrangeRow(
     focusRequester: FocusRequester?,
     onFocus: () -> Unit,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
     onUp: () -> Boolean,
     onDown: () -> Boolean,
-    onRight: () -> Boolean,
 ) {
     var focused by remember { mutableStateOf(false) }
+    var longPressReady by remember { mutableStateOf(false) }
+    var longPressJob by remember { mutableStateOf<Job?>(null) }
+    val scope = rememberCoroutineScope()
     val border = when {
         grabbed -> Accent
         focused -> Accent.copy(alpha = .65f)
@@ -238,14 +244,32 @@ private fun ArrangeRow(
             .focusable()
             .onPreviewKeyEvent {
                 when {
-                    it.type != KeyEventType.KeyDown -> false
-                    it.key == Key.DirectionUp -> onUp()
-                    it.key == Key.DirectionDown -> onDown()
-                    it.key == Key.DirectionRight -> onRight()
+                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionUp -> onUp()
+                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionDown -> onDown()
+                    // Hold to pick a shelf up; a press opens what you can do
+                    // with it. Long press means "more with this" everywhere
+                    // else in the app, and moving is what you came here for.
+                    it.type == KeyEventType.KeyDown && isActivationKey(it.key) -> {
+                        if (longPressJob == null) {
+                            longPressReady = false
+                            longPressJob = scope.launch {
+                                delay(600)
+                                longPressReady = true
+                                onLongClick()
+                            }
+                        }
+                        true
+                    }
+                    it.type == KeyEventType.KeyUp && isActivationKey(it.key) -> {
+                        longPressJob?.cancel()
+                        longPressJob = null
+                        if (!longPressReady) onClick()
+                        longPressReady = false
+                        true
+                    }
                     else -> false
                 }
             }
-            .tvActivate(onClick)
             .padding(horizontal = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -272,7 +296,7 @@ private fun ArrangeRow(
 }
 
 @Composable
-private fun AddShelfRow(enabled: Boolean, onClick: () -> Unit) {
+private fun AddShelfRow(glyph: String, label: String, enabled: Boolean, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
     Row(
         Modifier
@@ -288,8 +312,8 @@ private fun AddShelfRow(enabled: Boolean, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("+", color = Accent, fontSize = 19.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(20.dp))
-        Text("Add a shelf", color = if (focused) TextColor else TextColor.copy(alpha = .85f), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text(glyph, color = Accent, fontSize = 19.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(20.dp))
+        Text(label, color = if (focused) TextColor else TextColor.copy(alpha = .85f), fontSize = 15.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -299,12 +323,6 @@ private fun ArrangePreview(
     section: HomeLayoutSection?,
     definition: HomeSectionType?,
     content: HomeSection?,
-    grabbed: Boolean,
-    actionFocus: FocusRequester,
-    onBackToRail: () -> Boolean,
-    onRemove: () -> Unit,
-    onOptions: () -> Unit,
-    onDone: () -> Unit,
 ) {
     Column(
         Modifier
@@ -357,23 +375,6 @@ private fun ArrangePreview(
                     )
                 }
             }
-        }
-
-        // The actions come before the artwork, not after it: anything that grows
-        // has to grow into space the buttons have already claimed.
-        Spacer(Modifier.height(16.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            ArrangeAction(
-                label = "Remove",
-                focusRequester = actionFocus,
-                enabled = !grabbed,
-                onLeft = onBackToRail,
-                onClick = onRemove,
-            )
-            if (definition?.params?.any { !it.hidden } == true) {
-                ArrangeAction(label = "Options", enabled = !grabbed, onLeft = onBackToRail, onClick = onOptions)
-            }
-            ArrangeAction(label = "Done", primary = true, enabled = !grabbed, onLeft = onBackToRail, onClick = onDone)
         }
 
         Spacer(Modifier.height(18.dp))
@@ -469,6 +470,72 @@ private fun ArrangeAction(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, color = TextColor, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+// What you can do with one shelf, as a panel rather than buttons wedged under
+// the artwork — the same right-hand sheet the checklists use, so there is one
+// place to look and one way back.
+@Composable
+fun ArrangeActionsShelf(
+    title: String,
+    canConfigure: Boolean,
+    onMove: () -> Unit,
+    onOptions: () -> Unit,
+    onRemove: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val firstFocus = remember { FocusRequester() }
+    BackHandler(onBack = onDismiss)
+    LaunchedEffect(title) {
+        delay(60)
+        requestArrangeFocus(firstFocus)
+    }
+    Popup(alignment = Alignment.CenterEnd, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
+        Box(
+            Modifier.fillMaxSize().background(Color.Black.copy(alpha = .32f)),
+            contentAlignment = Alignment.CenterEnd,
+        ) {
+            Column(
+                Modifier
+                    .fillMaxHeight()
+                    .width(400.dp)
+                    .background(Bg.copy(alpha = .98f))
+                    .border(1.dp, Color.White.copy(alpha = .10f))
+                    .padding(horizontal = 26.dp, vertical = 38.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text("SHELF", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                Spacer(Modifier.height(7.dp))
+                Text(title, color = TextColor, fontSize = 21.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Spacer(Modifier.height(16.dp))
+                ArrangeActionRow("Move", "Up and down to place it", firstFocus, onMove)
+                if (canConfigure) {
+                    ArrangeActionRow("Options", "Genre, length, sort, how many", null, onOptions)
+                }
+                ArrangeActionRow("Remove", "Take it off home", null, onRemove)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArrangeActionRow(label: String, detail: String, focusRequester: FocusRequester?, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(9.dp))
+            .background(if (focused) Surface2 else Color.Transparent)
+            .border(1.dp, if (focused) FocusGlow else Color.Transparent, RoundedCornerShape(9.dp))
+            .onFocusChanged { focused = it.isFocused }
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .focusable()
+            .tvActivate(onClick)
+            .padding(horizontal = 12.dp, vertical = 11.dp),
+    ) {
+        Text(label, color = TextColor, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text(detail, color = Muted, fontSize = 11.sp)
     }
 }
 

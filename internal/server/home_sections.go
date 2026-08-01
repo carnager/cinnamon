@@ -200,6 +200,65 @@ func homeSectionDefs() map[string]homeSectionDef {
 		},
 		{
 			HomeSectionType: media.HomeSectionType{
+				Type: "new_episodes", Label: "New episodes for you", Layout: "poster", Kind: "episode",
+				Description: "Recently added episodes of shows you have already started.",
+				Params:      []media.HomeSectionParam{limitParam},
+			},
+			title: "New episodes for you",
+			build: buildNewEpisodesSection,
+		},
+		{
+			HomeSectionType: media.HomeSectionType{
+				Type: "because_you_watched", Label: "Because you watched…", Layout: "poster", Kind: "movie",
+				Description: "Titles TMDb ranks alongside the last film you finished.",
+				Params:      []media.HomeSectionParam{limitParam},
+			},
+			title: "Because you watched",
+			build: buildBecauseYouWatchedSection,
+		},
+		{
+			HomeSectionType: media.HomeSectionType{
+				Type: "gathering_dust", Label: "Gathering dust", Layout: "poster", Kind: "movie",
+				Description: "The oldest files in your library that you have never watched.",
+				Params: []media.HomeSectionParam{
+					{Name: "kind", Label: "Media", Type: "enum", Options: []string{"movies", "tv"}, Default: "movies"},
+					limitParam,
+				},
+			},
+			title: "Gathering dust",
+			build: buildGatheringDustSection,
+		},
+		{
+			HomeSectionType: media.HomeSectionType{
+				Type: "watchlist_waiting", Label: "Longest on your watchlist", Layout: "poster", Kind: "movie",
+				Description: "What you saved and never got round to, oldest first.",
+				Params:      []media.HomeSectionParam{limitParam},
+			},
+			title: "Longest on your watchlist",
+			build: buildWatchlistWaitingSection,
+		},
+		{
+			HomeSectionType: media.HomeSectionType{
+				Type: "filter", Label: "Filter shelf", Layout: "poster", Kind: "movie", Repeatable: true,
+				Description: "A saved search: any mix of genre, decade, country, studio, runtime and rating.",
+				Params: []media.HomeSectionParam{
+					{Name: "kind", Label: "Media", Type: "enum", Options: []string{"movies", "tv"}, Default: "movies"},
+					{Name: "genre", Label: "Genre", Type: "string"},
+					{Name: "decades", Label: "Decade", Type: "string"},
+					{Name: "country", Label: "Country", Type: "string"},
+					{Name: "studio", Label: "Studio", Type: "string"},
+					{Name: "certificate", Label: "Rated", Type: "string"},
+					{Name: "maxMinutes", Label: "Max length", Type: "int"},
+					{Name: "minRating", Label: "Min rating", Type: "int"},
+					{Name: "sort", Label: "Sort", Type: "enum", Options: []string{"rating", "mtime", "year_desc", "title", "random"}, Default: "rating"},
+					{Name: "seen", Label: "Watched", Type: "enum", Options: []string{"any", "unseen", "seen"}, Default: "unseen"},
+					limitParam,
+				},
+			},
+			build: buildFilterSection,
+		},
+		{
+			HomeSectionType: media.HomeSectionType{
 				Type: "genre", Label: "Genre shelf", Layout: "poster", Kind: "movie", Repeatable: true,
 				Description: "One shelf for a single genre, e.g. everything filed under Horror.",
 				Params: []media.HomeSectionParam{
@@ -216,6 +275,181 @@ func homeSectionDefs() map[string]homeSectionDef {
 	out := make(map[string]homeSectionDef, len(defs))
 	for _, def := range defs {
 		out[def.Type] = def
+	}
+	return out
+}
+
+// Shows the user has actually started, newest episodes first. The started set
+// comes from the progress already loaded for this request.
+func buildNewEpisodesSection(scope homeSectionScope, cfg media.HomeLayoutSection) (media.HomeSection, error) {
+	started := make([]media.ShowProgress, 0, len(scope.payload.ShowProgress))
+	for _, show := range scope.payload.ShowProgress {
+		if show.CompletedCount > 0 {
+			started = append(started, show)
+		}
+	}
+	if len(started) == 0 {
+		return media.HomeSection{}, nil
+	}
+	episodes, err := scope.app.store.RecentEpisodesForShows(scope.ctx, scope.userID, started, sectionLimit(cfg))
+	if err != nil {
+		return media.HomeSection{}, err
+	}
+	return media.HomeSection{Items: episodes, More: "continue/tv"}, nil
+}
+
+// The same warmed TMDb list the hero draws from, as a shelf of its own with the
+// anchor in its title. Empty until the background worker has the answer — home
+// never waits on TMDb.
+func buildBecauseYouWatchedSection(scope homeSectionScope, cfg media.HomeLayoutSection) (media.HomeSection, error) {
+	anchor, ok := scope.app.recommendationAnchor(scope.ctx, scope.userID)
+	if !ok {
+		return media.HomeSection{}, nil
+	}
+	candidates, ready := scope.app.readySimilarItems(anchor.ID)
+	if !ready {
+		scope.app.queueSimilarItems(anchor)
+		return media.HomeSection{}, nil
+	}
+	completed := completedItemIDs(scope.payload.Progress)
+	out := make([]media.Item, 0, sectionLimit(cfg))
+	for _, candidate := range candidates {
+		if completed[candidate.ID] {
+			continue
+		}
+		out = append(out, candidate)
+		if len(out) >= sectionLimit(cfg) {
+			break
+		}
+	}
+	if len(out) == 0 {
+		return media.HomeSection{}, nil
+	}
+	return media.HomeSection{Title: fmt.Sprintf("Because you watched %s", anchor.Title), Items: out}, nil
+}
+
+func buildGatheringDustSection(scope homeSectionScope, cfg media.HomeLayoutSection) (media.HomeSection, error) {
+	limit := sectionLimit(cfg)
+	if paramOrDefault(cfg, "kind", "movies") == "tv" {
+		if scope.tvLib == nil {
+			return media.HomeSection{}, nil
+		}
+		shows, err := scope.app.store.ListShowsForUser(scope.ctx, scope.tvLib.ID, "", "", "", "mtime_asc", "unseen", scope.userID, 0, limit, 0)
+		if err != nil {
+			return media.HomeSection{}, err
+		}
+		return media.HomeSection{Kind: "show", Shows: shows}, nil
+	}
+	if scope.movieLib == nil {
+		return media.HomeSection{}, nil
+	}
+	items, err := scope.app.store.ListItemsForUser(scope.ctx, scope.movieLib.ID, "", "", "", "mtime_asc", "unseen", scope.userID, 0, limit, 0)
+	if err != nil {
+		return media.HomeSection{}, err
+	}
+	return media.HomeSection{Items: items}, nil
+}
+
+func buildWatchlistWaitingSection(scope homeSectionScope, cfg media.HomeLayoutSection) (media.HomeSection, error) {
+	items, err := scope.app.store.ListWatchlistItemsByAge(scope.ctx, scope.userID, sectionLimit(cfg))
+	if err != nil {
+		return media.HomeSection{}, err
+	}
+	return media.HomeSection{Items: items, More: "watchlist"}, nil
+}
+
+// One section type behind every "everything that is X" shelf. Genre shelves are
+// the same query with one parameter set; this one exposes the rest.
+func buildFilterSection(scope homeSectionScope, cfg media.HomeLayoutSection) (media.HomeSection, error) {
+	sortMode := paramOrDefault(cfg, "sort", "rating")
+	seen := paramOrDefault(cfg, "seen", "unseen")
+	if seen == "any" {
+		seen = ""
+	}
+	minRating, _ := strconv.ParseFloat(strings.TrimSpace(cfg.Params["minRating"]), 64)
+	maxMinutes, _ := strconv.Atoi(strings.TrimSpace(cfg.Params["maxMinutes"]))
+	opts := media.SearchOptions{
+		Genre:          strings.TrimSpace(cfg.Params["genre"]),
+		Decades:        strings.TrimSpace(cfg.Params["decades"]),
+		Studio:         strings.TrimSpace(cfg.Params["studio"]),
+		Country:        strings.TrimSpace(cfg.Params["country"]),
+		ContentRatings: strings.TrimSpace(cfg.Params["certificate"]),
+		MaxDurationMS:  int64(maxMinutes) * 60_000,
+		Sort:           sortMode,
+		SeenStatus:     seen,
+		UserID:         scope.userID,
+		MinRating:      minRating,
+		Limit:          sectionLimit(cfg),
+	}
+	section := media.HomeSection{Title: filterSectionTitle(cfg)}
+	if paramOrDefault(cfg, "kind", "movies") == "tv" {
+		if scope.tvLib == nil {
+			return media.HomeSection{}, nil
+		}
+		// Shows carry no columns of their own for studio, country or runtime;
+		// those filters would silently match nothing, so they are dropped here.
+		shows, err := scope.app.store.ListShowsForUser(scope.ctx, scope.tvLib.ID, "", opts.Genre, opts.Decades, sortMode, seen, scope.userID, minRating, opts.Limit, 0)
+		if err != nil {
+			return media.HomeSection{}, err
+		}
+		section.Kind = "show"
+		section.Shows = shows
+		return section, nil
+	}
+	if scope.movieLib == nil {
+		return media.HomeSection{}, nil
+	}
+	opts.LibraryID = scope.movieLib.ID
+	opts.Kind = "movie"
+	items, err := scope.app.store.SearchItems(scope.ctx, opts)
+	if err != nil {
+		return media.HomeSection{}, err
+	}
+	section.Items = items
+	return section, nil
+}
+
+// A filter shelf names itself after whatever it was narrowed by, so the user
+// does not have to title every one by hand.
+func filterSectionTitle(cfg media.HomeLayoutSection) string {
+	parts := make([]string, 0, 4)
+	for _, name := range []string{"decades", "country", "studio", "genre", "certificate"} {
+		value := strings.TrimSpace(cfg.Params[name])
+		if value == "" {
+			continue
+		}
+		values := strings.Split(value, ",")
+		for i, entry := range values {
+			entry = strings.TrimSpace(entry)
+			if name == "decades" {
+				entry += "s"
+			}
+			values[i] = entry
+		}
+		parts = append(parts, strings.Join(values, ", "))
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, " · ")
+	}
+	if minutes := strings.TrimSpace(cfg.Params["maxMinutes"]); minutes != "" {
+		return "Under " + minutes + " minutes"
+	}
+	if rating := strings.TrimSpace(cfg.Params["minRating"]); rating != "" {
+		return "Rated " + rating + " and up"
+	}
+	// An unnarrowed filter shelf is just the library by whatever it sorts on.
+	if paramOrDefault(cfg, "seen", "unseen") == "unseen" {
+		return "Still unwatched"
+	}
+	return "From your library"
+}
+
+func completedItemIDs(progress []media.PlaybackProgress) map[int64]bool {
+	out := make(map[int64]bool, len(progress))
+	for _, entry := range progress {
+		if entry.Completed || isFinished(entry.PositionMS, entry.DurationMS) {
+			out[entry.ItemID] = true
+		}
 	}
 	return out
 }

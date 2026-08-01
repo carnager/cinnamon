@@ -267,3 +267,118 @@ func TestSurpriseShelfPicksUnwatchedAndFallsBackBelowTheRatingFloor(t *testing.T
 		t.Fatalf("fallback shelf = %#v", sections)
 	}
 }
+
+func TestFilterShelfNarrowsAndNamesItself(t *testing.T) {
+	app, store, userID := newHomeSectionsApp(t)
+	ctx := context.Background()
+
+	if err := store.UpsertItem(ctx, media.Item{
+		LibraryID: "movies", Kind: "movie", Path: "/movies/short.mkv", Title: "Short One", SortTitle: "short one",
+		Rating: 9.0, Genres: "Drama", Countries: "Japan", Studios: "Ghibli", DurationMS: 80 * 60_000, MTimeUnix: 30,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	layout, err := validateHomeLayout(media.HomeLayoutDoc{Sections: []media.HomeLayoutSection{
+		{ID: "japan", Type: "filter", Enabled: true, Params: map[string]string{"country": "Japan"}},
+		{ID: "short", Type: "filter", Enabled: true, Params: map[string]string{"maxMinutes": "90"}},
+		{ID: "studio", Type: "filter", Enabled: true, Params: map[string]string{"studio": "Ghibli", "genre": "Drama"}},
+		{ID: "nothing", Type: "filter", Enabled: true, Params: map[string]string{"country": "Atlantis"}},
+	}})
+	if err != nil {
+		t.Fatalf("validate layout: %v", err)
+	}
+	body, _ := json.Marshal(layout)
+	if err := store.SaveHomeLayout(ctx, userID, string(body)); err != nil {
+		t.Fatalf("save layout: %v", err)
+	}
+
+	sections := homeSectionsFor(t, app, userID)
+	if len(sections) != 3 {
+		t.Fatalf("got %d sections, want the three with matches: %#v", len(sections), sectionTypes(sections))
+	}
+	for _, section := range sections {
+		if len(section.Items) != 1 || section.Items[0].Title != "Short One" {
+			t.Fatalf("section %q = %#v, want only the matching movie", section.ID, section.Items)
+		}
+	}
+	if sections[0].Title != "Japan" || sections[1].Title != "Under 90 minutes" || sections[2].Title != "Ghibli · Drama" {
+		t.Fatalf("titles = %q, %q, %q", sections[0].Title, sections[1].Title, sections[2].Title)
+	}
+}
+
+func TestNewEpisodesShelfOnlyCoversStartedShows(t *testing.T) {
+	app, store, userID := newHomeSectionsApp(t)
+	ctx := context.Background()
+
+	// A second show the user has never touched, added most recently.
+	if err := store.UpsertItem(ctx, media.Item{
+		LibraryID: "tv", Kind: "episode", Path: "/tv/other/s01e01.mkv", Title: "Other S01E01", SortTitle: "other 01 01",
+		ShowTitle: "Other", SeasonNumber: 1, EpisodeNumber: 1, MTimeUnix: 99,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// A new episode of the show that has been started.
+	if err := store.UpsertItem(ctx, media.Item{
+		LibraryID: "tv", Kind: "episode", Path: "/tv/watch/s01e02.mkv", Title: "Night Watch S01E02", SortTitle: "night watch 01 02",
+		ShowTitle: "Night Watch", SeasonNumber: 1, EpisodeNumber: 2, MTimeUnix: 98,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	episodes, err := store.ListEpisodes(ctx, "tv", "Night Watch", -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, episode := range episodes {
+		if episode.EpisodeNumber != 1 {
+			continue
+		}
+		if _, err := store.SaveProgress(ctx, userID, episode.ID, 100, 100, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	layout, err := validateHomeLayout(media.HomeLayoutDoc{Sections: []media.HomeLayoutSection{
+		{ID: "new-episodes", Type: "new_episodes", Enabled: true},
+	}})
+	if err != nil {
+		t.Fatalf("validate layout: %v", err)
+	}
+	body, _ := json.Marshal(layout)
+	if err := store.SaveHomeLayout(ctx, userID, string(body)); err != nil {
+		t.Fatalf("save layout: %v", err)
+	}
+
+	sections := homeSectionsFor(t, app, userID)
+	if len(sections) != 1 {
+		t.Fatalf("sections = %#v", sectionTypes(sections))
+	}
+	if len(sections[0].Items) != 1 || sections[0].Items[0].EpisodeNumber != 2 {
+		t.Fatalf("shelf = %#v, want only the new episode of the started show", sections[0].Items)
+	}
+}
+
+func TestGatheringDustAndWatchlistAgeOrderByAge(t *testing.T) {
+	app, store, userID := newHomeSectionsApp(t)
+	ctx := context.Background()
+
+	layout, err := validateHomeLayout(media.HomeLayoutDoc{Sections: []media.HomeLayoutSection{
+		{ID: "dust", Type: "gathering_dust", Enabled: true},
+	}})
+	if err != nil {
+		t.Fatalf("validate layout: %v", err)
+	}
+	body, _ := json.Marshal(layout)
+	if err := store.SaveHomeLayout(ctx, userID, string(body)); err != nil {
+		t.Fatalf("save layout: %v", err)
+	}
+
+	sections := homeSectionsFor(t, app, userID)
+	if len(sections) != 1 || len(sections[0].Items) == 0 {
+		t.Fatalf("dust shelf = %#v", sections)
+	}
+	// Dunes has the older mtime of the two fixture movies.
+	if sections[0].Items[0].Title != "Dunes" {
+		t.Fatalf("oldest first = %q, want Dunes", sections[0].Items[0].Title)
+	}
+}

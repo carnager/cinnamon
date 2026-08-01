@@ -1459,7 +1459,10 @@ fun PopcornApp() {
         TvCheckListShelf(
             title = "SHELVES",
             subtitle = "What home shows",
-            rows = homeCatalog.filterNot { it.layout == "hero" }.map { type ->
+            // A shelf whose parameters need typing cannot be set up with a
+            // D-pad. The genre shelf has a picker; anything with more free text
+            // than that is built in the browser and only reordered here.
+            rows = homeCatalog.filterNot { it.layout == "hero" || it.params.count { param -> param.type == "string" } > 1 }.map { type ->
                 if (type.type == genreType?.type) {
                     val count = homeEditDraft.count { it.type == type.type }
                     TvCheckRow(

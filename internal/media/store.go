@@ -19,11 +19,18 @@ type Store struct {
 }
 
 type SearchOptions struct {
-	Query          string
-	LibraryID      string
-	Kind           string
-	Genre          string
-	Decades        string
+	Query     string
+	LibraryID string
+	Kind      string
+	Genre     string
+	Decades   string
+	// Filter-shelf dimensions. Studio and Country match a substring of the
+	// comma-separated columns; MaxDurationMS and ContentRatings are ignored
+	// when zero and empty.
+	Studio         string
+	Country        string
+	ContentRatings string
+	MaxDurationMS  int64
 	Sort           string
 	SeenStatus     string
 	UserID         int64
@@ -861,6 +868,9 @@ func (s *Store) searchItems(ctx context.Context, opts SearchOptions) ([]Item, er
 	genreWhere, genreArgs := itemGenreFilterSQL("genres", genres)
 	decadeWhere := decadeFilterSQL(itemYearExpr, opts.Decades)
 	nameStartsWith := strings.TrimSpace(opts.NameStartsWith)
+	studio := strings.TrimSpace(opts.Studio)
+	country := strings.TrimSpace(opts.Country)
+	contentRatingWhere, contentRatingArgs := contentRatingFilterSQL(opts.ContentRatings)
 	seenStatus := normalizedSeenStatus(opts.SeenStatus)
 	userID := opts.UserID
 	sortMode := normalizedSort(opts.Sort)
@@ -925,6 +935,10 @@ AND (? = '' OR kind = ?)
 ` + genreWhere + `
 ` + decadeWhere + `
 AND (? <= 0 OR COALESCE(rating, 0) >= ?)
+AND (? = '' OR COALESCE(studios, '') LIKE '%' || ? || '%')
+AND (? = '' OR COALESCE(countries, '') LIKE '%' || ? || '%')
+AND (? <= 0 OR (COALESCE(duration_ms, 0) > 0 AND duration_ms <= ?))
+` + contentRatingWhere + `
 AND (
 	? = ''
 	OR (? = 'seen' AND ? > 0 AND EXISTS (
@@ -958,6 +972,12 @@ LIMIT ? OFFSET ?`
 	args = append(args, genreArgs...)
 	args = append(args,
 		opts.MinRating, opts.MinRating,
+		studio, studio,
+		country, country,
+		opts.MaxDurationMS, opts.MaxDurationMS,
+	)
+	args = append(args, contentRatingArgs...)
+	args = append(args,
 		seenStatus, seenStatus, userID, userID, seenStatus, userID, userID, seenStatus, userID, userID,
 		nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith,
 	)
@@ -1085,6 +1105,23 @@ func decadeFilterSQL(yearExpr, decades string) string {
 		return ""
 	}
 	return "AND (" + strings.Join(clauses, " OR ") + ")"
+}
+
+// contentRatingFilterSQL keeps a shelf to a set of certificates ("G,PG,FSK 6"),
+// which is how a family shelf is expressed. Ratings vary by country, so this
+// matches the values as written rather than trying to rank them.
+func contentRatingFilterSQL(ratings string) (string, []any) {
+	values := splitFilterList(ratings)
+	if len(values) == 0 {
+		return "", nil
+	}
+	clauses := make([]string, 0, len(values))
+	args := make([]any, 0, len(values))
+	for _, value := range values {
+		clauses = append(clauses, "UPPER(COALESCE(official_rating, '')) = UPPER(?)")
+		args = append(args, value)
+	}
+	return "AND (" + strings.Join(clauses, " OR ") + ")", args
 }
 
 func itemGenreFilterSQL(column string, genres []string) (string, []any) {
@@ -2642,4 +2679,85 @@ ON CONFLICT(user_id) DO UPDATE SET
 func (s *Store) DeleteHomeLayout(ctx context.Context, userID int64) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM home_layouts WHERE user_id = ?`, userID)
 	return err
+}
+
+// RecentEpisodesForShows returns the newest unwatched episodes of the given
+// shows, newest file first. The show set is passed in rather than derived with
+// a correlated subquery — matching (library_id, show_title) per row is what
+// made the seen filter quadratic.
+func (s *Store) RecentEpisodesForShows(ctx context.Context, userID int64, shows []ShowProgress, limit int) ([]Item, error) {
+	if len(shows) == 0 || limit <= 0 {
+		return nil, nil
+	}
+	clauses := make([]string, 0, len(shows))
+	args := []any{userID}
+	seen := map[string]bool{}
+	for _, show := range shows {
+		libraryID := strings.TrimSpace(show.LibraryID)
+		showTitle := strings.TrimSpace(show.ShowTitle)
+		if libraryID == "" || showTitle == "" {
+			continue
+		}
+		key := showEpisodeKey(libraryID, showTitle)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		clauses = append(clauses, "(mi.library_id = ? AND mi.show_title = ?)")
+		args = append(args, libraryID, showTitle)
+	}
+	if len(clauses) == 0 {
+		return nil, nil
+	}
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, itemSelectMI+`
+FROM media_items mi
+LEFT JOIN playback_progress pp ON pp.user_id = ? AND pp.item_id = mi.id
+WHERE mi.kind = 'episode'
+AND (`+strings.Join(clauses, " OR ")+`)
+AND COALESCE(pp.completed, 0) = 0
+ORDER BY mi.mtime_unix DESC, mi.id DESC
+LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Item{}
+	for rows.Next() {
+		item, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// ListWatchlistItemsByAge returns watchlisted movies oldest first — what has
+// been waiting longest rather than what was added last.
+func (s *Store) ListWatchlistItemsByAge(ctx context.Context, userID int64, limit int) ([]Item, error) {
+	if limit <= 0 {
+		limit = 24
+	}
+	rows, err := s.db.QueryContext(ctx, itemSelectMI+`
+FROM user_watchlist w
+JOIN media_items mi ON mi.id = w.item_id
+LEFT JOIN playback_progress pp ON pp.user_id = ? AND pp.item_id = mi.id
+WHERE w.user_id = ? AND w.item_id IS NOT NULL
+AND COALESCE(pp.completed, 0) = 0
+ORDER BY w.created_at, w.updated_at
+LIMIT ?`, userID, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Item{}
+	for rows.Next() {
+		item, err := scanItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }

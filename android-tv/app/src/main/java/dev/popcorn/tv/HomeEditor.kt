@@ -243,25 +243,12 @@ fun toggleSectionType(sections: List<HomeLayoutSection>, type: HomeSectionType):
     return sections + HomeLayoutSection(id = newSectionId(sections, type.type), type = type.type, params = params)
 }
 
-// A genre shelf per checked genre, keyed by genre and media kind so Horror
-// movies and Horror shows can both be on home.
-fun toggleGenreSection(
-    sections: List<HomeLayoutSection>,
-    type: HomeSectionType,
-    genre: String,
-    kind: String,
-): List<HomeLayoutSection> {
-    val existing = sections.indexOfFirst { it.type == type.type && it.params["genre"] == genre && genreKind(it) == kind }
-    if (existing >= 0) return sections.filterIndexed { index, _ -> index != existing }
-    val params = buildMap {
-        type.params.filter { it.default.isNotBlank() }.forEach { put(it.name, it.default) }
-        put("genre", genre)
-        put("kind", kind)
-    }
+// A repeatable shelf is always added rather than toggled: there is no single
+// instance to turn off, and the new one is configured straight away.
+fun addSection(sections: List<HomeLayoutSection>, type: HomeSectionType): List<HomeLayoutSection> {
+    val params = type.params.filter { it.default.isNotBlank() }.associate { it.name to it.default }
     return sections + HomeLayoutSection(id = newSectionId(sections, type.type), type = type.type, params = params)
 }
-
-fun genreKind(section: HomeLayoutSection): String = section.params["kind"] ?: "movies"
 
 private fun newSectionId(sections: List<HomeLayoutSection>, type: String): String {
     var index = sections.count { it.type == type } + 1

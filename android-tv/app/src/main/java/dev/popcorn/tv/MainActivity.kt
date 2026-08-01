@@ -104,13 +104,11 @@ fun PopcornApp() {
     var homeEditIndex by remember { mutableStateOf(0) }
     var homeEditGrabbed by remember { mutableStateOf(false) }
     var homeShelvesOpen by remember { mutableStateOf(false) }
-    var homeGenrePicker by remember { mutableStateOf(false) }
     var homeOptionsIndex by remember { mutableStateOf<Int?>(null) }
     // The options sheet edits its own copy of the shelf and writes it back when
     // it closes. Editing the draft on every keypress recomposed the rail
     // underneath the popup, which cost the sheet its focus mid-cycle.
     var homeOptionsSection by remember { mutableStateOf<HomeLayoutSection?>(null) }
-    var homeGenres by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     // facet name -> values, per media kind, for the filter shelf's pickers.
     var homeFacets by remember { mutableStateOf<Map<String, Map<String, List<String>>>>(emptyMap()) }
     var homeFacetPicker by remember { mutableStateOf<Triple<Int, String, String>?>(null) }
@@ -823,7 +821,6 @@ fun PopcornApp() {
             homeEditIndex = 0
             homeEditGrabbed = false
             homeShelvesOpen = false
-            homeGenrePicker = false
             homeOptionsSection = null
             homeOptionsIndex = null
             screen = Screen.ArrangeHome
@@ -834,7 +831,6 @@ fun PopcornApp() {
         val draft = homePinnedSections + homeEditDraft
         homeEditGrabbed = false
         homeShelvesOpen = false
-        homeGenrePicker = false
         homeFacetPicker = null
         homeOptionsSection = null
         homeOptionsIndex = null
@@ -851,23 +847,6 @@ fun PopcornApp() {
         scope.launch {
             runCatching { Api(activeSession).homeFacets(kind) }
                 .onSuccess { homeFacets = homeFacets + (kind to it) }
-        }
-    }
-
-    fun loadHomeGenres(activeSession: Session) {
-        if (homeGenres.isNotEmpty()) return
-        scope.launch {
-            val api = Api(activeSession)
-            val movieLib = libraries.firstOrNull { it.type == "movies" || it.type == "movie" }
-            val tvLib = libraries.firstOrNull { it.type == "tv" }
-            val rows = mutableListOf<Pair<String, String>>()
-            movieLib?.let { library ->
-                runCatching { api.genres(library.id) }.getOrDefault(emptyList()).forEach { rows.add(it to "movies") }
-            }
-            tvLib?.let { library ->
-                runCatching { api.genres(library.id) }.getOrDefault(emptyList()).forEach { rows.add(it to "tv") }
-            }
-            homeGenres = rows
         }
     }
 
@@ -955,7 +934,6 @@ fun PopcornApp() {
     BackHandler(enabled = screen is Screen.ArrangeHome) {
         when {
             homeFacetPicker != null -> homeFacetPicker = null
-            homeGenrePicker -> homeGenrePicker = false
             homeOptionsIndex != null -> {
                 val optionsIndex = homeOptionsIndex
                 val edited = homeOptionsSection
@@ -1479,22 +1457,28 @@ fun PopcornApp() {
             onDismiss = { closeWatchMenu(menu) },
         )
     }
-    if (homeShelvesOpen && !homeGenrePicker) {
-        val genreType = homeCatalog.firstOrNull { it.repeatable && it.params.any { param -> param.name == "genre" } }
+    if (homeShelvesOpen) {
         TvCheckListShelf(
             title = "SHELVES",
             subtitle = "What home shows",
             rows = homeCatalog.filterNot { it.layout == "hero" }.map { type ->
-                if (type.type == genreType?.type) {
-                    val count = homeEditDraft.count { it.type == type.type }
+                val count = homeEditDraft.count { it.type == type.type }
+                if (type.repeatable) {
                     TvCheckRow(
                         key = type.type,
                         label = type.label,
-                        description = if (count > 0) "$count on home · pick genres" else "Pick one or more genres",
+                        description = if (count > 0) "$count on home · adds another" else type.description,
                         checked = count > 0,
                         onToggle = {
-                            session?.let { loadHomeGenres(it) }
-                            homeGenrePicker = true
+                            // A repeatable shelf means nothing until it is
+                            // narrowed, so open its options rather than leaving
+                            // an unconfigured row on the rail.
+                            val added = withUniqueIds(addSection(homeEditDraft, type))
+                            homeEditDraft = added
+                            homeEditIndex = added.lastIndex
+                            homeShelvesOpen = false
+                            homeOptionsSection = added.lastOrNull()
+                            homeOptionsIndex = added.lastIndex
                         },
                     )
                 } else {
@@ -1502,7 +1486,7 @@ fun PopcornApp() {
                         key = type.type,
                         label = type.label,
                         description = type.description,
-                        checked = homeEditDraft.any { it.type == type.type },
+                        checked = count > 0,
                         onToggle = { homeEditDraft = withUniqueIds(toggleSectionType(homeEditDraft, type)) },
                     )
                 }
@@ -1616,29 +1600,6 @@ fun PopcornApp() {
                 onDismiss = { homeFacetPicker = null },
             )
         }
-    }
-
-    // Bulk add: every genre ticked here becomes a shelf of its own. Narrowing
-    // an existing shelf goes through the parameter picker instead.
-    if (homeGenrePicker) {
-        val genreType = homeCatalog.firstOrNull { it.repeatable && it.params.any { param -> param.name == "genre" } }
-        TvCheckListShelf(
-            title = "GENRE SHELVES",
-            subtitle = "One shelf per genre",
-            rows = homeGenres.map { (genre, kind) ->
-                TvCheckRow(
-                    key = "$kind:$genre",
-                    label = genre,
-                    description = if (kind == "tv") "TV shows" else "Movies",
-                    checked = homeEditDraft.any { it.type == genreType?.type && it.params["genre"] == genre && genreKind(it) == kind },
-                    onToggle = {
-                        val type = genreType ?: return@TvCheckRow
-                        homeEditDraft = withUniqueIds(toggleGenreSection(homeEditDraft, type, genre, kind))
-                    },
-                )
-            },
-            onDismiss = { homeGenrePicker = false },
-        )
     }
 
     if (updateDialogOpen) {

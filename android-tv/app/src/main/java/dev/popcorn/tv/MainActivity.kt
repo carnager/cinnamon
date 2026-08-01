@@ -96,9 +96,9 @@ fun PopcornApp() {
     var items by remember { mutableStateOf<List<PopItem>>(emptyList()) }
     var shows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
     var homeSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
-    // Set by anything the server composes home from — watchlist, watch state,
-    // ratings, "not interested". The shelves are built server-side, so the only
-    // way to show the change is to ask for them again.
+    // Set only by an explicit watchlist change. Home otherwise shows what it
+    // showed when you opened it: shelves that re-shuffle because something was
+    // marked watched are unsettling, and the next visit picks it all up anyway.
     var homeStale by remember { mutableStateOf(false) }
     var homeEditDraft by remember { mutableStateOf<List<HomeLayoutSection>>(emptyList()) }
     // The hero always draws at the top whatever its position, so it is carried
@@ -164,7 +164,6 @@ fun PopcornApp() {
     fun showKey(show: ShowSummary): String = "${show.libraryId}\n${show.title.lowercase()}"
 
     fun refreshProgress(activeSession: Session) {
-        homeStale = true
         scope.launch {
             runCatching {
                 val api = Api(activeSession)
@@ -179,7 +178,6 @@ fun PopcornApp() {
     }
 
     fun setItemRating(activeSession: Session, item: PopItem, rating: Int) {
-        homeStale = true
         scope.launch {
             runCatching {
                 val api = Api(activeSession)
@@ -244,7 +242,6 @@ fun PopcornApp() {
                     api.unmarkItemWatched(item.id)
                 }
             }.onSuccess {
-                homeStale = true
                 completedItems = if (watched) completedItems + item.id else completedItems - item.id
                 refreshProgress(activeSession)
             }.onFailure {
@@ -263,7 +260,6 @@ fun PopcornApp() {
                     api.unmarkShowWatched(show.libraryId, show.title)
                 }
             }.onSuccess {
-                homeStale = true
                 val key = showKey(show)
                 completedShows = if (watched) completedShows + key else completedShows - key
                 refreshProgress(activeSession)
@@ -351,7 +347,6 @@ fun PopcornApp() {
                 val api = Api(activeSession)
                 if (excluded) api.excludeItemRecommendation(item.id) else api.restoreItemRecommendation(item.id)
             }.onSuccess {
-                homeStale = true
                 recommendationExclusionKeys = if (excluded) recommendationExclusionKeys + key else recommendationExclusionKeys - key
                 homeSections = dropRecommendation(homeSections, key)
             }.onFailure { error = it.message ?: "Failed to update recommendations" }
@@ -365,7 +360,6 @@ fun PopcornApp() {
                 val api = Api(activeSession)
                 if (excluded) api.excludeShowRecommendation(show.libraryId, show.title) else api.restoreShowRecommendation(show.libraryId, show.title)
             }.onSuccess {
-                homeStale = true
                 recommendationExclusionKeys = if (excluded) recommendationExclusionKeys + key else recommendationExclusionKeys - key
                 homeSections = dropRecommendation(homeSections, key)
             }.onFailure { error = it.message ?: "Failed to update recommendations" }
@@ -392,7 +386,6 @@ fun PopcornApp() {
                     }
                 }
             }.onSuccess {
-                homeStale = true
                 completedItems = if (preference == MediaPreference.Seen) completedItems + item.id else completedItems - item.id
                 recommendationExclusionKeys = if (preference == MediaPreference.NotInterested) recommendationExclusionKeys + key else recommendationExclusionKeys - key
                 if (preference == MediaPreference.NotInterested) homeSections = dropRecommendation(homeSections, key)
@@ -422,7 +415,6 @@ fun PopcornApp() {
                     }
                 }
             }.onSuccess {
-                homeStale = true
                 completedShows = if (preference == MediaPreference.Seen) completedShows + marker else completedShows - marker
                 recommendationExclusionKeys = if (preference == MediaPreference.NotInterested) recommendationExclusionKeys + key else recommendationExclusionKeys - key
                 if (preference == MediaPreference.NotInterested) homeSections = dropRecommendation(homeSections, key)
@@ -748,9 +740,7 @@ fun PopcornApp() {
                     refreshWatchlist(activeSession)
                     refreshUpdateAvailable(activeSession)
                     when (val current = screen) {
-                        // The refresh above already marked home stale; letting
-                        // the one effect act on it avoids loading home twice.
-                        Screen.Home -> Unit
+                        Screen.Home -> if (libraries.isNotEmpty()) loadHome(activeSession, libraries)
                         is Screen.LibraryPage -> loadLibraryPage(current.library, activeSession, pageIndex, selectedGenre, selectedSort, selectedMinRating, selectedSeenStatus, preserveFocusKey = true)
                         is Screen.Show, is Screen.Season -> visibleContentRefresh += 1
                         else -> Unit
@@ -771,10 +761,9 @@ fun PopcornApp() {
         }
     }
 
-    // Home is composed on the server, so a change made anywhere else only shows
-    // up by asking for it again. Refresh on the way back to home rather than on
-    // every change: leaving the shelves re-ordering under a running edit would
-    // be worse than a stale row.
+    // Putting something on the watchlist is a request to see it there, so that
+    // one change refreshes home — on arrival if you were elsewhere, at once if
+    // you were already on it.
     LaunchedEffect(screen, homeStale) {
         if (screen !is Screen.Home || !homeStale) return@LaunchedEffect
         val active = session ?: return@LaunchedEffect

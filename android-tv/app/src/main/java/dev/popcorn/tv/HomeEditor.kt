@@ -24,7 +24,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,11 +66,11 @@ fun TvCheckListShelf(
     modeRow: TvOptionRow? = null,
     onDismiss: () -> Unit,
 ) {
-    val firstFocus = remember { FocusRequester() }
+    val rowFocus = rememberRowFocus()
     BackHandler(onBack = onDismiss)
     LaunchedEffect(title) {
         delay(60)
-        runCatching { firstFocus.requestFocus() }
+        rowFocus.focusFirst(rows.firstOrNull()?.key)
     }
     Popup(alignment = Alignment.CenterEnd, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
         Box(
@@ -92,10 +94,11 @@ fun TvCheckListShelf(
                 }
                 Spacer(Modifier.height(16.dp))
                 LazyColumn(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    itemsIndexed(rows, key = { _, row -> row.key }) { index, row ->
+                    itemsIndexed(rows, key = { _, row -> row.key }) { _, row ->
                         TvCheckRowItem(
                             row = row,
-                            focusRequester = if (index == 0) firstFocus else null,
+                            focusRequester = rowFocus.requester(row.key),
+                            afterActivate = { rowFocus.restore(row.key) },
                         )
                     }
                 }
@@ -109,6 +112,7 @@ fun TvCheckListShelf(
 @Composable
 private fun TvMatchToggle(row: TvOptionRow) {
     var focused by remember { mutableStateOf(false) }
+    val onActivate = rememberStableActivate(row.onCycle)
     Row(
         Modifier
             .fillMaxWidth()
@@ -117,7 +121,7 @@ private fun TvMatchToggle(row: TvOptionRow) {
             .border(1.dp, if (focused) Accent else Color.White.copy(alpha = .08f), RoundedCornerShape(9.dp))
             .onFocusChanged { focused = it.isFocused }
             .focusable()
-            .tvActivate(row.onCycle)
+            .tvActivate(onActivate)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -129,8 +133,12 @@ private fun TvMatchToggle(row: TvOptionRow) {
 }
 
 @Composable
-private fun TvCheckRowItem(row: TvCheckRow, focusRequester: FocusRequester?) {
+private fun TvCheckRowItem(row: TvCheckRow, focusRequester: FocusRequester?, afterActivate: () -> Unit = {}) {
     var focused by remember { mutableStateOf(false) }
+    val onActivate = rememberStableActivate {
+        row.onToggle()
+        afterActivate()
+    }
     Row(
         Modifier
             .fillMaxWidth()
@@ -140,7 +148,7 @@ private fun TvCheckRowItem(row: TvCheckRow, focusRequester: FocusRequester?) {
             .onFocusChanged { focused = it.isFocused }
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .focusable()
-            .tvActivate(row.onToggle)
+            .tvActivate(onActivate)
             .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -169,6 +177,53 @@ private fun TvCheckRowItem(row: TvCheckRow, focusRequester: FocusRequester?) {
             }
         }
     }
+}
+
+// Modifier.clickable, which tvActivate ends in, is a focus target of its own and
+// rebuilds when its callback changes identity — and a row that changes its own
+// value recomposes with a fresh lambda every time it is pressed, so the press
+// took the focus with it. Hand it a lambda that never changes and forward to
+// the current one.
+// One FocusRequester per row, and a way to put focus back on the row that was
+// just pressed. The stable lambda above should make that unnecessary; this makes
+// it certain, because an editor that swallows the highlight is unusable.
+@Stable
+private class RowFocus {
+    private val requesters = mutableMapOf<String, FocusRequester>()
+    private var tick = 0
+    var pending by mutableStateOf<Pair<String, Int>?>(null)
+        private set
+
+    fun requester(key: String): FocusRequester = requesters.getOrPut(key) { FocusRequester() }
+
+    fun restore(key: String) {
+        tick += 1
+        pending = key to tick
+    }
+
+    fun focusFirst(key: String?) {
+        apply(key ?: return)
+    }
+
+    fun apply(key: String) {
+        runCatching { requester(key).requestFocus() }
+    }
+}
+
+@Composable
+private fun rememberRowFocus(): RowFocus {
+    val rowFocus = remember { RowFocus() }
+    LaunchedEffect(rowFocus.pending) {
+        val key = rowFocus.pending?.first ?: return@LaunchedEffect
+        rowFocus.apply(key)
+    }
+    return rowFocus
+}
+
+@Composable
+private fun rememberStableActivate(action: () -> Unit): () -> Unit {
+    val current by rememberUpdatedState(action)
+    return remember { { current() } }
 }
 
 // ── Draft edits ──
@@ -247,11 +302,11 @@ fun TvOptionsShelf(
     rows: List<TvOptionRow>,
     onDismiss: () -> Unit,
 ) {
-    val firstFocus = remember { FocusRequester() }
+    val rowFocus = rememberRowFocus()
     BackHandler(onBack = onDismiss)
     LaunchedEffect(title) {
         delay(60)
-        runCatching { firstFocus.requestFocus() }
+        rowFocus.focusFirst(rows.firstOrNull()?.key)
     }
     Popup(alignment = Alignment.CenterEnd, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
         Box(
@@ -271,8 +326,12 @@ fun TvOptionsShelf(
                 Text(subtitle, color = TextColor, fontSize = 21.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(16.dp))
                 LazyColumn(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    itemsIndexed(rows, key = { _, row -> row.key }) { index, row ->
-                        TvOptionRowItem(row, if (index == 0) firstFocus else null)
+                    itemsIndexed(rows, key = { _, row -> row.key }) { _, row ->
+                        TvOptionRowItem(
+                            row = row,
+                            focusRequester = rowFocus.requester(row.key),
+                            afterActivate = { rowFocus.restore(row.key) },
+                        )
                     }
                 }
                 Spacer(Modifier.height(12.dp))
@@ -283,8 +342,12 @@ fun TvOptionsShelf(
 }
 
 @Composable
-private fun TvOptionRowItem(row: TvOptionRow, focusRequester: FocusRequester?) {
+private fun TvOptionRowItem(row: TvOptionRow, focusRequester: FocusRequester?, afterActivate: () -> Unit = {}) {
     var focused by remember { mutableStateOf(false) }
+    val onActivate = rememberStableActivate {
+        row.onCycle()
+        afterActivate()
+    }
     Row(
         Modifier
             .fillMaxWidth()
@@ -294,7 +357,7 @@ private fun TvOptionRowItem(row: TvOptionRow, focusRequester: FocusRequester?) {
             .onFocusChanged { focused = it.isFocused }
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .focusable()
-            .tvActivate(row.onCycle)
+            .tvActivate(onActivate)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),

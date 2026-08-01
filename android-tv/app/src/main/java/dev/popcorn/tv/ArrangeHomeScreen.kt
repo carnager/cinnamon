@@ -81,10 +81,22 @@ fun ArrangeHomeView(
     val actionFocus = remember { FocusRequester() }
     val current = draft.getOrNull(focusedIndex)
 
-    // The rail only scrolls for very long layouts, but when it does the focused
-    // row has to come with it.
-    LaunchedEffect(focusedIndex, draft.size) {
-        runCatching { railState.animateScrollToItem(focusedIndex.coerceIn(0, maxOf(draft.size, 1))) }
+    // Focus brings its own row into view, so moving the selection needs no help
+    // here — scrolling on every focus change pinned the selection to the top of
+    // the rail. A held shelf is the exception: it travels without a focus
+    // change, so nothing reveals it. Scroll then, and only if it left the
+    // viewport, by the smallest amount that puts it back.
+    LaunchedEffect(focusedIndex, grabbed) {
+        if (!grabbed) return@LaunchedEffect
+        val info = railState.layoutInfo
+        val viewportHeight = info.viewportEndOffset - info.viewportStartOffset
+        val row = info.visibleItemsInfo.firstOrNull { it.index == focusedIndex }
+        when {
+            row == null || row.offset < info.viewportStartOffset ->
+                runCatching { railState.animateScrollToItem(focusedIndex) }
+            row.offset + row.size > info.viewportEndOffset ->
+                runCatching { railState.animateScrollToItem(focusedIndex, row.size - viewportHeight) }
+        }
     }
     LaunchedEffect(Unit) {
         delay(140)

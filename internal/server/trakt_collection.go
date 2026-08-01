@@ -24,7 +24,16 @@ import (
 // posts is recorded, so a prune can take back its own and leave alone whatever
 // was collected from a phone, a Trakt import, or years before this existed.
 
-const traktCollectionChunk = 100
+// Trakt allows one write per second per user, and a first sync is a couple of
+// dozen of them: send fewer, larger requests and pace them.
+const (
+	traktCollectionMovieChunk = 250
+	traktCollectionShowChunk  = 40
+	traktCollectionRetries    = 4
+)
+
+// A var so a test does not have to wait out the pacing.
+var traktCollectionWriteDelay = 1100 * time.Millisecond
 
 type traktCollectionResult struct {
 	Movies       int `json:"movies"`
@@ -132,12 +141,12 @@ func (a *App) traktSyncCollection(ctx context.Context, userID int64, bearer stri
 	result.Movies = len(movies)
 	result.Shows = len(shows)
 
-	for _, chunk := range chunkMaps(movies, traktCollectionChunk) {
+	for _, chunk := range chunkMaps(movies, traktCollectionMovieChunk) {
 		if err := a.traktPostCollection(ctx, bearer, map[string]any{"movies": chunk}); err != nil {
 			return result, err
 		}
 	}
-	for _, chunk := range chunkMaps(shows, traktCollectionChunk) {
+	for _, chunk := range chunkMaps(shows, traktCollectionShowChunk) {
 		if err := a.traktPostCollection(ctx, bearer, map[string]any{"shows": chunk}); err != nil {
 			return result, err
 		}
@@ -206,12 +215,12 @@ func (a *App) traktPruneCollection(ctx context.Context, userID int64, bearer str
 	for _, key := range showOrder {
 		shows = append(shows, byShow[key].payload(""))
 	}
-	for _, chunk := range chunkMaps(movies, traktCollectionChunk) {
+	for _, chunk := range chunkMaps(movies, traktCollectionMovieChunk) {
 		if err := a.traktRemoveCollection(ctx, bearer, map[string]any{"movies": chunk}); err != nil {
 			return 0, err
 		}
 	}
-	for _, chunk := range chunkMaps(shows, traktCollectionChunk) {
+	for _, chunk := range chunkMaps(shows, traktCollectionShowChunk) {
 		if err := a.traktRemoveCollection(ctx, bearer, map[string]any{"shows": chunk}); err != nil {
 			return 0, err
 		}
@@ -220,19 +229,6 @@ func (a *App) traktPruneCollection(ctx context.Context, userID int64, bearer str
 		return 0, err
 	}
 	return len(gone), nil
-}
-
-func (a *App) traktRemoveCollection(ctx context.Context, bearer string, body map[string]any) error {
-	resp, err := a.traktRequest(ctx, bearer, http.MethodPost, "/sync/collection/remove", body)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("trakt collection removal failed: %s", strings.TrimSpace(string(payload)))
-	}
-	return nil
 }
 
 func mustJSON(value any) string {
@@ -343,16 +339,71 @@ func traktAudio(codec string) string {
 }
 
 func (a *App) traktPostCollection(ctx context.Context, bearer string, body map[string]any) error {
-	resp, err := a.traktRequest(ctx, bearer, http.MethodPost, "/sync/collection", body)
-	if err != nil {
-		return err
+	return a.traktCollectionWrite(ctx, bearer, "/sync/collection", body)
+}
+
+func (a *App) traktRemoveCollection(ctx context.Context, bearer string, body map[string]any) error {
+	return a.traktCollectionWrite(ctx, bearer, "/sync/collection/remove", body)
+}
+
+// A rate-limited response has an empty body, so failing on it told you nothing.
+// Wait for as long as Trakt asks and try again; report the status when it is
+// something else.
+func (a *App) traktCollectionWrite(ctx context.Context, bearer, path string, body map[string]any) error {
+	for attempt := 0; attempt < traktCollectionRetries; attempt++ {
+		// One write per second per user, counted from the previous one.
+		if wait := traktCollectionWriteDelay - time.Since(a.traktLastWrite); wait > 0 {
+			if err := sleepContext(ctx, wait); err != nil {
+				return err
+			}
+		}
+		resp, err := a.traktRequest(ctx, bearer, http.MethodPost, path, body)
+		if err != nil {
+			return err
+		}
+		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+		retryAfter := resp.Header.Get("Retry-After")
+		status := resp.StatusCode
+		resp.Body.Close()
+
+		switch {
+		case status >= 200 && status <= 299:
+			a.traktLastWrite = time.Now()
+			return nil
+		case status == http.StatusTooManyRequests || status == 420:
+			if a.log != nil {
+				a.log.Debug("trakt rate limited, waiting", "path", path, "retryAfter", retryAfter)
+			}
+			if err := sleepContext(ctx, traktRetryAfter(retryAfter)); err != nil {
+				return err
+			}
+		default:
+			message := strings.TrimSpace(string(payload))
+			if message == "" {
+				message = http.StatusText(status)
+			}
+			return fmt.Errorf("trakt %s failed (%d): %s", path, status, message)
+		}
 	}
-	defer resp.Body.Close()
-	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("trakt collection sync failed: %s", strings.TrimSpace(string(payload)))
+	return fmt.Errorf("trakt %s failed: still rate limited after %d attempts", path, traktCollectionRetries)
+}
+
+func traktRetryAfter(header string) time.Duration {
+	if seconds, err := strconv.Atoi(strings.TrimSpace(header)); err == nil && seconds > 0 {
+		return time.Duration(seconds)*time.Second + 250*time.Millisecond
 	}
-	return nil
+	return 2 * time.Second
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // traktCollected reads what Trakt already holds so a repeat sync posts only the
@@ -419,7 +470,11 @@ func (a *App) traktGetJSON(ctx context.Context, bearer, path string, dest any) e
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
-		return fmt.Errorf("trakt %s failed: %s", path, strings.TrimSpace(string(payload)))
+		message := strings.TrimSpace(string(payload))
+		if message == "" {
+			message = http.StatusText(resp.StatusCode)
+		}
+		return fmt.Errorf("trakt %s failed (%d): %s", path, resp.StatusCode, message)
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 32*1024*1024)).Decode(dest)
 }

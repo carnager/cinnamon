@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"popcorn/internal/config"
@@ -14,7 +15,17 @@ import (
 	"popcorn/internal/media"
 )
 
+// The pacing exists for the real API's one-write-per-second rule; tests should
+// not sit through it.
+func withoutTraktPacing(t *testing.T) {
+	t.Helper()
+	previous := traktCollectionWriteDelay
+	traktCollectionWriteDelay = 0
+	t.Cleanup(func() { traktCollectionWriteDelay = previous })
+}
+
 func TestTraktCollectionSyncPostsOnlyWhatIsMissing(t *testing.T) {
+	withoutTraktPacing(t)
 	db, err := database.Open(filepath.Join(t.TempDir(), "popcorn.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -126,6 +137,7 @@ func postedEntries(t *testing.T, posted []map[string]any, key string) []map[stri
 }
 
 func TestTraktCollectionPruneOnlyTakesBackWhatPopcornSent(t *testing.T) {
+	withoutTraktPacing(t)
 	db, err := database.Open(filepath.Join(t.TempDir(), "popcorn.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -213,5 +225,111 @@ func TestTraktCollectionPruneOnlyTakesBackWhatPopcornSent(t *testing.T) {
 	}
 	if _, ok := entries["imdb:tt0001"]; !ok {
 		t.Fatalf("record lost the surviving movie: %#v", entries)
+	}
+}
+
+func TestTraktCollectionSyncWaitsOutARateLimit(t *testing.T) {
+	withoutTraktPacing(t)
+	db, err := database.Open(filepath.Join(t.TempDir(), "popcorn.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := media.NewStore(db)
+	ctx := context.Background()
+	res, err := store.DB().Exec(`INSERT INTO users(username, display_name, password_hash, is_admin) VALUES ('alice', 'Alice', 'test', 0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userID, _ := res.LastInsertId()
+	if err := store.UpsertItem(ctx, media.Item{
+		LibraryID: "movies", Kind: "movie", Path: "/movies/one.mkv", Title: "One", SortTitle: "one", Year: 2001, IMDbID: "tt0001",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	attempts := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/sync/collection/movies", "/sync/collection/shows":
+			_, _ = w.Write([]byte(`[]`))
+		case "/sync/collection":
+			attempts++
+			if attempts == 1 {
+				// Trakt answers a rate limit with an empty body, which is why
+				// the first version of this reported nothing useful.
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusTooManyRequests)
+				return
+			}
+			_, _ = w.Write([]byte(`{"added":{"movies":1}}`))
+		default:
+			t.Errorf("unexpected trakt path %s", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	app := New(Options{
+		Config: config.Config{TraktClientID: "id", TraktClientSecret: "secret", TraktAPIURL: upstream.URL},
+		Store:  store,
+		Log:    slog.New(slog.DiscardHandler),
+	})
+	t.Cleanup(app.Close)
+
+	result, err := app.traktSyncCollection(ctx, userID, "token", false)
+	if err != nil {
+		t.Fatalf("sync gave up on a rate limit: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("posted %d times, want a retry after the rate limit", attempts)
+	}
+	if result.Movies != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestTraktCollectionSyncReportsTheStatus(t *testing.T) {
+	withoutTraktPacing(t)
+	db, err := database.Open(filepath.Join(t.TempDir(), "popcorn.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := media.NewStore(db)
+	ctx := context.Background()
+	res, err := store.DB().Exec(`INSERT INTO users(username, display_name, password_hash, is_admin) VALUES ('alice', 'Alice', 'test', 0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userID, _ := res.LastInsertId()
+	if err := store.UpsertItem(ctx, media.Item{
+		LibraryID: "movies", Kind: "movie", Path: "/movies/one.mkv", Title: "One", SortTitle: "one", IMDbID: "tt0001",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/sync/collection/movies", "/sync/collection/shows":
+			_, _ = w.Write([]byte(`[]`))
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer upstream.Close()
+
+	app := New(Options{
+		Config: config.Config{TraktClientID: "id", TraktClientSecret: "secret", TraktAPIURL: upstream.URL},
+		Store:  store,
+		Log:    slog.New(slog.DiscardHandler),
+	})
+	t.Cleanup(app.Close)
+
+	_, err = app.traktSyncCollection(ctx, userID, "token", false)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "401") || !strings.Contains(err.Error(), "Unauthorized") {
+		t.Fatalf("error = %q, want the status in it", err)
 	}
 }

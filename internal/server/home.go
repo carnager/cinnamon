@@ -160,49 +160,18 @@ func (a *App) homeRecommendations(ctx context.Context, userID int64, movieLib, t
 		}
 	}
 
-	var watched []media.Item
-	watchedIDs := make([]int64, 0, len(completedItems))
-	for _, progress := range home.Progress {
-		if completedItems[progress.ItemID] {
-			watchedIDs = append(watchedIDs, progress.ItemID)
-			if len(watchedIDs) >= 12 {
-				break
-			}
-		}
-	}
-	if len(watchedIDs) > 0 {
-		loaded, loadErr := a.store.ItemsByIDs(ctx, watchedIDs)
-		err = loadErr
-		if err != nil {
-			return nil, err
-		}
-		byID := make(map[int64]media.Item, len(loaded))
-		for _, item := range loaded {
-			byID[item.ID] = item
-		}
-		for _, id := range watchedIDs {
-			if item, ok := byID[id]; ok && item.Kind == "movie" {
-				watched = append(watched, item)
-			}
-		}
-	}
 	// "Because you watched" is reserved for TMDb's ranked recommendations (or
 	// its similar endpoint fallback), intersected with the local library. A
 	// shared genre alone is too weak to justify that wording.
-	if len(watched) > 0 {
-		anchor := watched[0]
-		if candidates, ready := a.readySimilarItems(anchor.ID); ready {
-			for _, candidate := range candidates {
-				addItem(candidate, fmt.Sprintf("Because you watched %s", anchor.Title), "tmdb")
-				if len(recommendations) >= 7 {
-					break
-				}
+	//
+	// Home must never wait on an external API: an anchor with nothing warmed
+	// yet is queued and picked up by a later request.
+	if anchor, candidates, ok := a.similarFromAnchors(a.anchorsFromProgress(ctx, home.Progress, recommendationAnchorCandidates)); ok {
+		for _, candidate := range candidates {
+			addItem(candidate, fmt.Sprintf("Because you watched %s", anchor.Title), "tmdb")
+			if len(recommendations) >= 7 {
+				break
 			}
-		} else {
-			// Home must never wait on an external API. The current request gets
-			// the local-library portion of the feed immediately; a later request
-			// can use the asynchronously warmed TMDb result.
-			a.queueSimilarItems(anchor)
 		}
 	}
 

@@ -302,13 +302,9 @@ func buildNewEpisodesSection(scope homeSectionScope, cfg media.HomeLayoutSection
 // anchor in its title. Empty until the background worker has the answer — home
 // never waits on TMDb.
 func buildBecauseYouWatchedSection(scope homeSectionScope, cfg media.HomeLayoutSection) (media.HomeSection, error) {
-	anchor, ok := scope.app.recommendationAnchor(scope.ctx, scope.userID)
+	anchors := scope.app.anchorsFromProgress(scope.ctx, scope.payload.Progress, recommendationAnchorCandidates)
+	anchor, candidates, ok := scope.app.similarFromAnchors(anchors)
 	if !ok {
-		return media.HomeSection{}, nil
-	}
-	candidates, ready := scope.app.readySimilarItems(anchor.ID)
-	if !ready {
-		scope.app.queueSimilarItems(anchor)
 		return media.HomeSection{}, nil
 	}
 	completed := completedItemIDs(scope.payload.Progress)

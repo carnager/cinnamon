@@ -382,3 +382,51 @@ func TestGatheringDustAndWatchlistAgeOrderByAge(t *testing.T) {
 		t.Fatalf("oldest first = %q, want Dunes", sections[0].Items[0].Title)
 	}
 }
+
+func TestBecauseYouWatchedSkipsAnAnchorWithNoLibraryMatches(t *testing.T) {
+	app, store, userID := newHomeSectionsApp(t)
+	ctx := context.Background()
+
+	items, err := store.ListItemsForUser(ctx, "movies", "", "", "", "", "", userID, 0, 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byTitle := map[string]media.Item{}
+	for _, item := range items {
+		byTitle[item.Title] = item
+	}
+	harbor, dunes := byTitle["Harbor"], byTitle["Dunes"]
+
+	// Finish Dunes first, then Harbor: Harbor is the newest anchor, and TMDb
+	// found nothing of it in the library — the case that kept the row blank.
+	if _, err := store.SaveProgress(ctx, userID, dunes.ID, 100, 100, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveProgress(ctx, userID, harbor.ID, 100, 100, true); err != nil {
+		t.Fatal(err)
+	}
+	app.storeSimilarItems(harbor.ID, nil)
+	app.storeSimilarItems(dunes.ID, []media.Item{{ID: 9001, Kind: "movie", Title: "Neighbouring Film"}})
+
+	layout, err := validateHomeLayout(media.HomeLayoutDoc{Sections: []media.HomeLayoutSection{
+		{ID: "byw", Type: "because_you_watched", Enabled: true},
+	}})
+	if err != nil {
+		t.Fatalf("validate layout: %v", err)
+	}
+	body, _ := json.Marshal(layout)
+	if err := store.SaveHomeLayout(ctx, userID, string(body)); err != nil {
+		t.Fatalf("save layout: %v", err)
+	}
+
+	sections := homeSectionsFor(t, app, userID)
+	if len(sections) != 1 {
+		t.Fatalf("sections = %#v, want the shelf built from the older anchor", sectionTypes(sections))
+	}
+	if sections[0].Title != "Because you watched Dunes" {
+		t.Fatalf("title = %q, want the anchor that has matches", sections[0].Title)
+	}
+	if len(sections[0].Items) != 1 || sections[0].Items[0].Title != "Neighbouring Film" {
+		t.Fatalf("shelf = %#v", sections[0].Items)
+	}
+}

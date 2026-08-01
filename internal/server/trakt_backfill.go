@@ -50,6 +50,8 @@ func (a *App) ItemsAdded(paths []string) {
 	if start {
 		go a.traktBackfillWorker()
 	}
+	// New files mean the collection on Trakt is behind.
+	a.LibraryChanged()
 }
 
 func (a *App) traktBackfillWorker() {

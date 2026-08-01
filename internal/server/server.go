@@ -33,28 +33,30 @@ type Options struct {
 }
 
 type App struct {
-	cfg             config.Config
-	log             *slog.Logger
-	store           *media.Store
-	auth            *auth.Store
-	ctx             context.Context
-	cancel          context.CancelFunc
-	hlsMu           sync.Mutex
-	hlsSessions     map[string]*hlsSession
-	playbackMu      sync.Mutex
-	plans           map[string]PlaybackPlan
-	failHints       map[string]time.Time
-	loginMu         sync.Mutex
-	loginFails      map[string]loginAttempt
-	cache           responseCache
-	cacheGen        atomic.Uint64
-	historyMu       sync.Mutex
-	history         map[int64]historyCacheEntry
-	traktLastWrite  time.Time
-	traktUpgradeURL string
-	similarMu       sync.Mutex
-	similar         map[int64]similarCacheEntry
-	similarWork     map[int64]bool
+	cfg               config.Config
+	log               *slog.Logger
+	store             *media.Store
+	auth              *auth.Store
+	ctx               context.Context
+	cancel            context.CancelFunc
+	hlsMu             sync.Mutex
+	hlsSessions       map[string]*hlsSession
+	playbackMu        sync.Mutex
+	plans             map[string]PlaybackPlan
+	failHints         map[string]time.Time
+	loginMu           sync.Mutex
+	loginFails        map[string]loginAttempt
+	cache             responseCache
+	cacheGen          atomic.Uint64
+	historyMu         sync.Mutex
+	history           map[int64]historyCacheEntry
+	traktLastWrite    time.Time
+	traktUpgradeURL   string
+	collectionMu      sync.Mutex
+	collectionPending bool
+	similarMu         sync.Mutex
+	similar           map[int64]similarCacheEntry
+	similarWork       map[int64]bool
 
 	scopedMu      sync.Mutex
 	scopedPending map[string]map[string]bool
@@ -108,6 +110,7 @@ func New(opts Options) *App {
 	app.cleanThumbCache()
 	go app.reapIdleHLSSessions()
 	go app.recommendationPrebuildWorker()
+	go app.traktCollectionWorker()
 	return app
 }
 

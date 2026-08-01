@@ -600,3 +600,90 @@ func (a *App) traktSyncCollectionEndpoint(w http.ResponseWriter, r *http.Request
 	}
 	writeJSON(w, http.StatusOK, result)
 }
+
+// ── Keeping Trakt current without being asked ──
+//
+// A collection that only updates when someone remembers to press a button is
+// the complaint people have about every other Trakt client. Sync on a timer,
+// and again shortly after a scan changes the library.
+
+const (
+	traktCollectionInterval = 12 * time.Hour
+	traktCollectionSettle   = 2 * time.Minute
+	traktCollectionTimeout  = 30 * time.Minute
+)
+
+func (a *App) traktCollectionWorker() {
+	// Let start-up settle before the first run: a restart after a big scan
+	// should not race the scan's own follow-up.
+	if err := sleepContext(a.ctx, traktCollectionSettle); err != nil {
+		return
+	}
+	for {
+		a.syncTraktCollections("startup")
+		select {
+		case <-time.After(traktCollectionInterval):
+		case <-a.ctx.Done():
+			return
+		}
+	}
+}
+
+// LibraryChanged is called when a scan adds or removes files. The collection
+// follows the library, so it is worth another pass — after a pause, so a scan
+// that reports in batches only triggers one.
+func (a *App) LibraryChanged() {
+	a.collectionMu.Lock()
+	if a.collectionPending {
+		a.collectionMu.Unlock()
+		return
+	}
+	a.collectionPending = true
+	a.collectionMu.Unlock()
+	go func() {
+		if err := sleepContext(a.ctx, traktCollectionSettle); err != nil {
+			return
+		}
+		a.collectionMu.Lock()
+		a.collectionPending = false
+		a.collectionMu.Unlock()
+		a.syncTraktCollections("library changed")
+	}()
+}
+
+func (a *App) syncTraktCollections(reason string) {
+	if !a.traktConfigured() || a.store == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, traktCollectionTimeout)
+	defer cancel()
+	users, err := a.store.TraktLinkedUsers(ctx)
+	if err != nil {
+		if a.log != nil {
+			a.log.Warn("trakt collection users failed", "error", err)
+		}
+		return
+	}
+	for _, userID := range users {
+		account, err := a.traktAccountForRequest(ctx, userID)
+		if err != nil {
+			continue
+		}
+		// Pruning is safe unattended because it only takes back entries
+		// popcorn recorded posting itself.
+		result, err := a.traktSyncCollection(ctx, userID, account.AccessToken, true)
+		if err != nil {
+			if a.log != nil {
+				a.log.Warn("trakt collection sync failed", "user", userID, "reason", reason, "error", err)
+			}
+			continue
+		}
+		if a.log == nil || (result.Movies == 0 && result.Episodes == 0 && result.Removed == 0 && !result.LimitReached) {
+			continue
+		}
+		a.log.Info("trakt collection synced",
+			"user", userID, "reason", reason,
+			"movies", result.Movies, "episodes", result.Episodes, "removed", result.Removed,
+			"limitReached", result.LimitReached)
+	}
+}

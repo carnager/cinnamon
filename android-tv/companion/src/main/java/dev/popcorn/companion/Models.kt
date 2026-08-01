@@ -285,8 +285,39 @@ data class StreamInfo(
     }
 }
 
+// A title as Trakt has it, with the one thing popcorn can add: whether it is on
+// the shelf. The Discover surface only ever shows entries where it is not.
+data class TraktEntry(
+    val kind: String,
+    val title: String,
+    val year: Int,
+    val showTitle: String,
+    val season: Int,
+    val episode: Int,
+    val imdbId: String,
+    val tmdbId: Int,
+    val listedAt: String,
+    val watchedAt: String,
+    val airedAt: String,
+    val inLibrary: Boolean,
+    val item: PopItem?,
+) {
+    val displayTitle: String get() = if (kind == "episode") showTitle.ifBlank { title } else title
+    val key: String get() = listOfNotNull(
+        kind, imdbId.ifBlank { null }, tmdbId.takeIf { it > 0 }?.toString(),
+        displayTitle, season.takeIf { it > 0 }?.toString(), episode.takeIf { it > 0 }?.toString(),
+    ).joinToString(":")
+}
+
+enum class DiscoverChip(val label: String) {
+    ForYou("For you"),
+    Wanted("Wanted"),
+    AiringSoon("Airing soon"),
+}
+
 sealed interface Page {
     data object Home : Page
+    data object Discover : Page
     data object Movies : Page
     data object Shows : Page
     data object Search : Page

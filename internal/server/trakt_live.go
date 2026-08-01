@@ -330,3 +330,116 @@ func matchTraktEpisode(entry *traktLiveEntry, index traktImportIndex) string {
 	}
 	return reason
 }
+
+// ── Acting on something you do not have ──
+//
+// The library watchlist is a row in popcorn's own table; a title that is not in
+// the library has no row to point at, so these write straight to Trakt. The
+// phone shows one button either way.
+
+type traktLiveActionRequest struct {
+	Kind   string `json:"kind"`
+	IMDbID string `json:"imdbId"`
+	TMDbID int    `json:"tmdbId"`
+	Title  string `json:"title"`
+	Year   int    `json:"year"`
+}
+
+func (a *App) traktLiveWatchlistAdd(w http.ResponseWriter, r *http.Request) {
+	a.traktLiveWatchlistWrite(w, r, false)
+}
+
+func (a *App) traktLiveWatchlistRemove(w http.ResponseWriter, r *http.Request) {
+	a.traktLiveWatchlistWrite(w, r, true)
+}
+
+func (a *App) traktLiveWatchlistWrite(w http.ResponseWriter, r *http.Request, remove bool) {
+	account, in, ok := a.traktLiveAction(w, r)
+	if !ok {
+		return
+	}
+	entry := map[string]any{}
+	if ids := traktLiveIDs(in); len(ids) > 0 {
+		entry["ids"] = ids
+	} else if strings.TrimSpace(in.Title) != "" {
+		entry["title"] = in.Title
+		if in.Year > 0 {
+			entry["year"] = in.Year
+		}
+	} else {
+		http.Error(w, "need an id or a title", http.StatusBadRequest)
+		return
+	}
+	body := map[string]any{traktLiveCollectionKey(in.Kind): []map[string]any{entry}}
+	path := "/sync/watchlist"
+	if remove {
+		path = "/sync/watchlist/remove"
+	}
+	if err := a.traktCollectionWrite(r.Context(), account.AccessToken, path, body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	a.invalidateResponseCache()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Hiding tells Trakt to stop suggesting it, which is the same intent as "not
+// interested" on a library title.
+func (a *App) traktLiveHide(w http.ResponseWriter, r *http.Request) {
+	account, in, ok := a.traktLiveAction(w, r)
+	if !ok {
+		return
+	}
+	ids := traktLiveIDs(in)
+	if len(ids) == 0 {
+		http.Error(w, "need an id", http.StatusBadRequest)
+		return
+	}
+	body := map[string]any{traktLiveCollectionKey(in.Kind): []map[string]any{{"ids": ids}}}
+	if err := a.traktCollectionWrite(r.Context(), account.AccessToken, "/users/hidden/recommendations", body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	a.invalidateResponseCache()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *App) traktLiveAction(w http.ResponseWriter, r *http.Request) (media.TraktAccount, traktLiveActionRequest, bool) {
+	user, ok := a.requireUser(w, r)
+	if !ok {
+		return media.TraktAccount{}, traktLiveActionRequest{}, false
+	}
+	account, err := a.traktAccountForRequest(r.Context(), user.ID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "trakt account is not linked", http.StatusConflict)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return media.TraktAccount{}, traktLiveActionRequest{}, false
+	}
+	var in traktLiveActionRequest
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return media.TraktAccount{}, traktLiveActionRequest{}, false
+	}
+	return account, in, true
+}
+
+func traktLiveIDs(in traktLiveActionRequest) map[string]any {
+	ids := map[string]any{}
+	if strings.TrimSpace(in.IMDbID) != "" {
+		ids["imdb"] = strings.TrimSpace(in.IMDbID)
+	}
+	if in.TMDbID > 0 {
+		ids["tmdb"] = in.TMDbID
+	}
+	return ids
+}
+
+func traktLiveCollectionKey(kind string) string {
+	if strings.EqualFold(kind, "show") || strings.EqualFold(kind, "shows") {
+		return "shows"
+	}
+	return "movies"
+}

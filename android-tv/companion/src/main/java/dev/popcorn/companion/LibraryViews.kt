@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
@@ -107,7 +108,7 @@ import kotlin.math.abs
 val PosterColumnWidth = 110.dp
 
 @Composable
-fun BottomNavigation(page: Page, onHome: () -> Unit, onMovies: () -> Unit, onShows: () -> Unit, onSearch: () -> Unit) {
+fun BottomNavigation(page: Page, onHome: () -> Unit, onMovies: () -> Unit, onShows: () -> Unit, onDiscover: () -> Unit) {
     val colors = NavigationBarItemDefaults.colors(
         selectedIconColor = Accent,
         selectedTextColor = TextColor,
@@ -142,11 +143,14 @@ fun BottomNavigation(page: Page, onHome: () -> Unit, onMovies: () -> Unit, onSho
             label = { Text("TV") },
             colors = colors,
         )
+        // Search is a verb, not a place: it moved to the button that floats
+        // over the library. This slot holds everything the library does not
+        // have, which is the one thing needing a home of its own.
         NavigationBarItem(
-            selected = page is Page.Search,
-            onClick = onSearch,
-            icon = { Icon(Icons.Default.Search, contentDescription = null) },
-            label = { Text("Search") },
+            selected = page is Page.Discover,
+            onClick = onDiscover,
+            icon = { Icon(Icons.Default.Explore, contentDescription = null) },
+            label = { Text("Discover") },
             colors = colors,
         )
     }

@@ -176,6 +176,50 @@ class Api(private val session: Session) {
         outFile
     }
 
+    // Discover reads Trakt through popcornd: the phone never talks to Trakt
+    // and never holds a token.
+    suspend fun traktLive(path: String): List<TraktEntry> = withContext(Dispatchers.IO) {
+        val arr = request("/api/trakt/live/$path").optJSONArray("entries") ?: JSONArray()
+        (0 until arr.length()).map { index ->
+            val o = arr.getJSONObject(index)
+            TraktEntry(
+                kind = o.optString("kind"),
+                title = o.optString("title"),
+                year = o.optInt("year"),
+                showTitle = o.optString("showTitle"),
+                season = o.optInt("season"),
+                episode = o.optInt("episode"),
+                imdbId = o.optString("imdbId"),
+                tmdbId = o.optInt("tmdbId"),
+                listedAt = o.optString("listedAt"),
+                watchedAt = o.optString("watchedAt"),
+                airedAt = o.optString("airedAt"),
+                inLibrary = o.optBoolean("inLibrary"),
+                item = o.optJSONObject("item")?.let(::jsonToItem),
+            )
+        }
+    }
+
+    suspend fun traktWatchlistAdd(entry: TraktEntry) = withContext(Dispatchers.IO) {
+        request("/api/trakt/live/watchlist", "POST", traktActionBody(entry))
+    }
+
+    suspend fun traktWatchlistRemove(entry: TraktEntry) = withContext(Dispatchers.IO) {
+        requestText("/api/trakt/live/watchlist", "DELETE", traktActionBody(entry))
+    }
+
+    suspend fun traktHide(entry: TraktEntry) = withContext(Dispatchers.IO) {
+        request("/api/trakt/live/hide", "POST", traktActionBody(entry))
+    }
+
+    private fun traktActionBody(entry: TraktEntry): String = JSONObject()
+        .put("kind", if (entry.kind == "movie") "movie" else "show")
+        .put("imdbId", entry.imdbId)
+        .put("tmdbId", entry.tmdbId)
+        .put("title", entry.displayTitle)
+        .put("year", entry.year)
+        .toString()
+
     suspend fun libraries(): List<Library> = withContext(Dispatchers.IO) {
         val arr = requestArray("/api/libraries")
         (0 until arr.length()).map { jsonToLibrary(arr.getJSONObject(it)) }

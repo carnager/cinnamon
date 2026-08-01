@@ -79,6 +79,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
@@ -344,6 +345,15 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     val controlPrefs = remember { context.getSharedPreferences("cinnamon-playback-target", Context.MODE_PRIVATE) }
     val scope = rememberCoroutineScope()
     var page by remember { mutableStateOf<Page>(Page.Home) }
+    var discoverChip by remember { mutableStateOf(DiscoverChip.ForYou) }
+    var discoverKind by remember { mutableStateOf("movies") }
+    var discoverEntries by remember { mutableStateOf<List<TraktEntry>>(emptyList()) }
+    var discoverLoading by remember { mutableStateOf(false) }
+    var discoverError by remember { mutableStateOf("") }
+    var wantedKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // Set only by a watchlist change: home refreshes for that, and otherwise
+    // shows what it showed when you opened it.
+    var homeStale by remember { mutableStateOf(false) }
     var backStack by remember { mutableStateOf<List<Page>>(emptyList()) }
     var libraries by remember { mutableStateOf<List<Library>>(emptyList()) }
     var devices by remember { mutableStateOf<List<Device>>(emptyList()) }
@@ -459,6 +469,57 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         }
     }
 
+    // One request per chip, read live. An empty answer and a failed one are
+    // different states here, which is the entire point of not keeping a copy.
+    fun loadDiscover(chip: DiscoverChip, kind: String) {
+        discoverLoading = true
+        discoverError = ""
+        scope.launch {
+            val path = when (chip) {
+                DiscoverChip.ForYou -> "recommendations?kind=$kind"
+                DiscoverChip.Wanted -> "watchlist"
+                DiscoverChip.AiringSoon -> "upcoming?days=21"
+            }
+            runCatching { api.traktLive(path) }
+                .onSuccess { entries ->
+                    discoverEntries = when (chip) {
+                        // The library half of the watchlist already has a page
+                        // of its own; this one is what is not on the shelf.
+                        DiscoverChip.Wanted -> entries.filterNot { it.inLibrary }
+                            .filter { if (kind == "shows") it.kind != "movie" else it.kind == "movie" }
+                        else -> entries
+                    }
+                    wantedKeys = if (chip == DiscoverChip.Wanted) entries.map { it.key }.toSet() else wantedKeys
+                    discoverError = ""
+                }
+                .onFailure {
+                    discoverEntries = emptyList()
+                    discoverError = it.message ?: "Request failed"
+                }
+            discoverLoading = false
+        }
+    }
+
+    fun setWanted(entry: TraktEntry) {
+        val wanted = wantedKeys.contains(entry.key)
+        scope.launch {
+            runCatching {
+                if (wanted) api.traktWatchlistRemove(entry) else api.traktWatchlistAdd(entry)
+            }.onSuccess {
+                wantedKeys = if (wanted) wantedKeys - entry.key else wantedKeys + entry.key
+                if (discoverChip == DiscoverChip.Wanted) loadDiscover(discoverChip, discoverKind)
+            }.onFailure { reportError(it, "Could not update the list") }
+        }
+    }
+
+    fun hideSuggestion(entry: TraktEntry) {
+        scope.launch {
+            runCatching { api.traktHide(entry) }
+                .onSuccess { discoverEntries = discoverEntries.filterNot { it.key == entry.key } }
+                .onFailure { reportError(it, "Could not hide it") }
+        }
+    }
+
     fun refreshMarkers() {
         scope.launch {
             runCatching {
@@ -493,6 +554,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
             }.onSuccess {
                 watchlistItems = if (watchlisted) watchlistItems + item.id else watchlistItems - item.id
                 refreshMarkers()
+                homeStale = true
             }.onFailure { reportError(it, "Could not update watchlist") }
         }
     }
@@ -1235,14 +1297,14 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // While the app stays open, keep the home shelves current so content added
-    // server-side appears without any user action. Keyed on resumeTick as well
-    // so a loop frozen by the app cache is replaced on the next foreground.
-    LaunchedEffect(session.server, session.token, resumeTick) {
-        while (true) {
-            delay(60_000)
-            loadContent(initial = false)
-        }
+    // Home is not polled. Shelves that re-order while you are reading them are
+    // worse than shelves a visit out of date, so it refreshes when you come
+    // back to the app, when the connection returns, and when you put something
+    // on the watchlist — that last one being a request to see it there.
+    LaunchedEffect(homeStale) {
+        if (!homeStale) return@LaunchedEffect
+        homeStale = false
+        loadContent(initial = false)
     }
 
     LaunchedEffect(session.server, session.token, resumeTick) {
@@ -1431,8 +1493,26 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                         onShows = {
                             if (shows.isEmpty()) loadShows() else { page = Page.Shows; backStack = emptyList() }
                         },
-                        onSearch = { page = Page.Search; backStack = emptyList() },
+                        onDiscover = {
+                            page = Page.Discover
+                            backStack = emptyList()
+                            if (discoverEntries.isEmpty()) loadDiscover(discoverChip, discoverKind)
+                        },
                     )
+                }
+            },
+            // Search is an action, so it floats over the library rather than
+            // holding one of four navigation slots. It stays out of the way on
+            // the pages where searching makes no sense.
+            floatingActionButton = {
+                if (page is Page.Home || page is Page.Movies || page is Page.Shows || page is Page.Discover) {
+                    FloatingActionButton(
+                        onClick = { page = Page.Search; backStack = emptyList() },
+                        containerColor = Accent,
+                        contentColor = Color.Black,
+                    ) {
+                        Icon(Icons.Default.Search, contentDescription = "Search")
+                    }
                 }
             },
             containerColor = MaterialTheme.colorScheme.background,
@@ -1553,6 +1633,28 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 onPlayLocal = { target, audio, subtitle, position -> playLocally(target, audio, subtitle, position) },
                                 onOpenSimilar = ::openDetail,
                                 onActor = ::openActor,
+                            )
+                            Page.Discover -> DiscoverPage(
+                                session = session,
+                                chip = discoverChip,
+                                onChip = { chip ->
+                                    discoverChip = chip
+                                    discoverEntries = emptyList()
+                                    loadDiscover(chip, discoverKind)
+                                },
+                                kind = discoverKind,
+                                onKind = { kind ->
+                                    discoverKind = kind
+                                    discoverEntries = emptyList()
+                                    loadDiscover(discoverChip, kind)
+                                },
+                                entries = discoverEntries,
+                                loading = discoverLoading,
+                                error = discoverError,
+                                wantedKeys = wantedKeys,
+                                onWant = ::setWanted,
+                                onHide = ::hideSuggestion,
+                                onArrived = ::openDetail,
                             )
                             Page.Search -> SearchPage(
                                 session,

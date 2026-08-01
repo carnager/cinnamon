@@ -833,7 +833,11 @@ async function renderHomeLayout(skipHistory) {
     api("/api/home/layout").catch(() => ({ sections: [] })),
   ]);
   const types = new Map((catalog.sections || []).map((entry) => [entry.type, entry]));
-  const draft = { sections: (layout.sections || []).map((section) => ({ ...section, params: { ...(section.params || {}) } })) };
+  const isHero = (section) => types.get(section.type)?.layout === "hero";
+  // The hero draws at the top of home whatever its position, so it is carried
+  // through untouched rather than listed as a shelf you can move.
+  const pinned = (layout.sections || []).filter(isHero);
+  const draft = { sections: (layout.sections || []).filter((section) => !isHero(section)).map((section) => ({ ...section, params: { ...(section.params || {}) } })) };
 
   const header = el("div", "view-header settings-hero");
   header.append(el("div", "settings-hero-copy", el("h1", null, "Settings")));
@@ -864,6 +868,7 @@ async function renderHomeLayout(skipHistory) {
   const adder = el("select", "home-layout-add");
   adder.append(el("option", null, "Add a shelf…"));
   for (const entry of catalog.sections || []) {
+    if (entry.layout === "hero") continue;
     const used = draft.sections.some((s) => s.type === entry.type);
     if (used && !entry.repeatable) continue;
     const option = el("option", null, entry.label);
@@ -890,7 +895,7 @@ async function renderHomeLayout(skipHistory) {
     output.className = "settings-output";
     output.textContent = "Saving…";
     try {
-      const body = { sections: draft.sections.map(({ id, type, enabled, title, params }) => ({ id, type, enabled, title, params })) };
+      const body = { sections: [...pinned, ...draft.sections].map(({ id, type, enabled, title, params }) => ({ id, type, enabled, title, params })) };
       await api("/api/home/layout", { method: "PUT", body: JSON.stringify(body) });
       output.textContent = "Saved. Home will use it on the next load.";
     } catch (err) {

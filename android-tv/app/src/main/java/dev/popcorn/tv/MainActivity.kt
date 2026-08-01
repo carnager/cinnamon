@@ -97,6 +97,9 @@ fun PopcornApp() {
     var shows by remember { mutableStateOf<List<ShowSummary>>(emptyList()) }
     var homeSections by remember { mutableStateOf<List<HomeSection>>(emptyList()) }
     var homeEditDraft by remember { mutableStateOf<List<HomeLayoutSection>>(emptyList()) }
+    // The hero always draws at the top whatever its position, so it is carried
+    // through the editor untouched rather than offered as a movable shelf.
+    var homePinnedSections by remember { mutableStateOf<List<HomeLayoutSection>>(emptyList()) }
     var homeCatalog by remember { mutableStateOf<List<HomeSectionType>>(emptyList()) }
     var homeEditIndex by remember { mutableStateOf(0) }
     var homeEditGrabbed by remember { mutableStateOf(false) }
@@ -806,7 +809,11 @@ fun PopcornApp() {
                 return@launch
             }
             homeCatalog = catalog
-            homeEditDraft = withUniqueIds(layout.sections)
+            val (pinned, editable) = layout.sections.partition { section ->
+                catalog.firstOrNull { it.type == section.type }?.layout == "hero"
+            }
+            homePinnedSections = pinned
+            homeEditDraft = withUniqueIds(editable)
             homeEditIndex = 0
             homeEditGrabbed = false
             homeShelvesOpen = false
@@ -817,7 +824,7 @@ fun PopcornApp() {
     }
 
     fun finishHomeArrange(activeSession: Session) {
-        val draft = homeEditDraft
+        val draft = homePinnedSections + homeEditDraft
         homeEditGrabbed = false
         homeShelvesOpen = false
         homeGenrePicker = false
@@ -1452,7 +1459,7 @@ fun PopcornApp() {
         TvCheckListShelf(
             title = "SHELVES",
             subtitle = "What home shows",
-            rows = homeCatalog.map { type ->
+            rows = homeCatalog.filterNot { it.layout == "hero" }.map { type ->
                 if (type.type == genreType?.type) {
                     val count = homeEditDraft.count { it.type == type.type }
                     TvCheckRow(

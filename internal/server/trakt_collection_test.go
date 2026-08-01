@@ -22,6 +22,11 @@ func TestTraktCollectionSyncPostsOnlyWhatIsMissing(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	store := media.NewStore(db)
 	ctx := context.Background()
+	res, err := store.DB().Exec(`INSERT INTO users(username, display_name, password_hash, is_admin) VALUES ('alice', 'Alice', 'test', 0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userID, _ := res.LastInsertId()
 
 	for _, item := range []media.Item{
 		{LibraryID: "movies", Kind: "movie", Path: "/movies/have.mkv", Title: "Already Collected", SortTitle: "already", Year: 2001, IMDbID: "tt0001", Height: 1080, AudioCodec: "ac3"},
@@ -62,7 +67,7 @@ func TestTraktCollectionSyncPostsOnlyWhatIsMissing(t *testing.T) {
 	})
 	t.Cleanup(app.Close)
 
-	result, err := app.traktSyncCollection(ctx, "token")
+	result, err := app.traktSyncCollection(ctx, userID, "token", false)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -118,4 +123,95 @@ func postedEntries(t *testing.T, posted []map[string]any, key string) []map[stri
 		}
 	}
 	return out
+}
+
+func TestTraktCollectionPruneOnlyTakesBackWhatPopcornSent(t *testing.T) {
+	db, err := database.Open(filepath.Join(t.TempDir(), "popcorn.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := media.NewStore(db)
+	ctx := context.Background()
+	res, err := store.DB().Exec(`INSERT INTO users(username, display_name, password_hash, is_admin) VALUES ('alice', 'Alice', 'test', 0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userID, _ := res.LastInsertId()
+
+	if err := store.UpsertItem(ctx, media.Item{
+		LibraryID: "movies", Kind: "movie", Path: "/movies/kept.mkv", Title: "Still Here", SortTitle: "still", Year: 2001, IMDbID: "tt0001", Height: 1080,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Two entries popcorn sent earlier: one whose file is gone, and one that is
+	// still in the library. Plus a title the user collected on Trakt themselves,
+	// which popcorn never recorded and must never touch.
+	if err := store.SaveTraktCollectionEntries(ctx, userID, map[string]string{
+		"imdb:tt0001":     `{"kind":"movie","ids":{"imdb":"tt0001"},"title":"Still Here","year":2001}`,
+		"imdb:tt0099":     `{"kind":"movie","ids":{"imdb":"tt0099"},"title":"Deleted Locally","year":1994}`,
+		"night watch:1:1": `{"kind":"episode","show":"Night Watch","season":1,"episode":1}`,
+	}, map[string]string{"imdb:tt0001": "movie", "imdb:tt0099": "movie", "night watch:1:1": "episode"}); err != nil {
+		t.Fatal(err)
+	}
+
+	var removals []map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/sync/collection/movies":
+			_, _ = w.Write([]byte(`[{"movie":{"title":"Still Here","year":2001,"ids":{"imdb":"tt0001"}}},{"movie":{"title":"Collected By Hand","year":1980,"ids":{"imdb":"tt0777"}}}]`))
+		case "/sync/collection/shows":
+			_, _ = w.Write([]byte(`[]`))
+		case "/sync/collection":
+			_, _ = w.Write([]byte(`{}`))
+		case "/sync/collection/remove":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("decode removal body: %v", err)
+			}
+			removals = append(removals, body)
+			_, _ = w.Write([]byte(`{"deleted":{"movies":1}}`))
+		default:
+			t.Errorf("unexpected trakt path %s", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	app := New(Options{
+		Config: config.Config{TraktClientID: "id", TraktClientSecret: "secret", TraktAPIURL: upstream.URL},
+		Store:  store,
+		Log:    slog.New(slog.DiscardHandler),
+	})
+	t.Cleanup(app.Close)
+
+	result, err := app.traktSyncCollection(ctx, userID, "token", true)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if result.Removed != 2 {
+		t.Fatalf("removed %d, want the deleted movie and the deleted episode", result.Removed)
+	}
+	movies := postedEntries(t, removals, "movies")
+	if len(movies) != 1 {
+		t.Fatalf("removed %d movies, want only the one popcorn sent that is gone", len(movies))
+	}
+	if ids := movies[0]["ids"].(map[string]any); ids["imdb"] != "tt0099" {
+		t.Fatalf("removed the wrong movie: %#v", ids)
+	}
+	shows := postedEntries(t, removals, "shows")
+	if len(shows) != 1 || shows[0]["title"] != "Night Watch" {
+		t.Fatalf("removed shows = %#v", shows)
+	}
+
+	// The record now holds only what is still in the library.
+	entries, err := store.TraktCollectionEntries(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("record = %#v, want just the surviving movie", entries)
+	}
+	if _, ok := entries["imdb:tt0001"]; !ok {
+		t.Fatalf("record lost the surviving movie: %#v", entries)
+	}
 }

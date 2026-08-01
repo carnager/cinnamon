@@ -331,6 +331,14 @@ CREATE TABLE IF NOT EXISTS recommendation_exclusions (
 	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	PRIMARY KEY(user_id, exclusion_key)
 );
+CREATE TABLE IF NOT EXISTS trakt_collection_entries (
+	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	entry_key TEXT NOT NULL,
+	kind TEXT NOT NULL,
+	payload_json TEXT NOT NULL,
+	synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY(user_id, entry_key)
+);
 CREATE TABLE IF NOT EXISTS home_layouts (
 	user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
 	sections_json TEXT NOT NULL,
@@ -547,6 +555,14 @@ CREATE TABLE IF NOT EXISTS app_updates (
 			PRIMARY KEY(user_id, exclusion_key)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_recommendation_exclusions_user ON recommendation_exclusions(user_id, updated_at)`,
+		`CREATE TABLE IF NOT EXISTS trakt_collection_entries (
+			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			entry_key TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY(user_id, entry_key)
+		)`,
 		`CREATE TABLE IF NOT EXISTS home_layouts (
 			user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
 			sections_json TEXT NOT NULL,

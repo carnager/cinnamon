@@ -725,20 +725,25 @@ function traktSection(status) {
       control: [importSeen, importWatchlist, importRatings, importHidden],
     }));
 
-    const syncCollection = el("button", "secondary", "Sync library");
-    syncCollection.type = "button";
-    syncCollection.addEventListener("click", () => runSettingsAction(syncCollection, output, async () => {
-      const summary = await api("/api/trakt/sync-collection", { method: "POST" });
+    const runCollectionSync = (button, prune) => runSettingsAction(button, output, async () => {
+      const summary = await api(`/api/trakt/sync-collection${prune ? "?prune=1" : ""}`, { method: "POST" });
       const parts = [];
       if (summary.movies) parts.push(`${summary.movies} movies`);
       if (summary.episodes) parts.push(`${summary.episodes} episodes from ${summary.shows} shows`);
-      if (!parts.length) return `Trakt already had everything${summary.alreadyCollected ? ` (${summary.alreadyCollected} titles)` : ""}.`;
-      return `Collected ${parts.join(" and ")}${summary.alreadyCollected ? ` · ${summary.alreadyCollected} already there` : ""}${summary.skipped ? ` · ${summary.skipped} could not be identified` : ""}.`;
-    }));
+      if (summary.removed) parts.push(`removed ${summary.removed} no longer here`);
+      if (!parts.length) return `Trakt already matched your library${summary.alreadyCollected ? ` (${summary.alreadyCollected} titles)` : ""}.`;
+      return `Collected ${parts.join(" · ")}${summary.alreadyCollected ? ` · ${summary.alreadyCollected} already there` : ""}${summary.skipped ? ` · ${summary.skipped} could not be identified` : ""}.`;
+    });
+    const syncCollection = el("button", "secondary", "Sync library");
+    syncCollection.type = "button";
+    syncCollection.addEventListener("click", () => runCollectionSync(syncCollection, false));
+    const syncAndPrune = el("button", "secondary", "Sync and remove deleted");
+    syncAndPrune.type = "button";
+    syncAndPrune.addEventListener("click", () => runCollectionSync(syncAndPrune, true));
     section.append(settingRow({
       title: "Send your library to Trakt",
-      description: "Marks everything in your libraries as collected, so Trakt stops recommending films you already have.",
-      control: syncCollection,
+      description: "Marks everything in your libraries as collected, so Trakt stops recommending films you already have. Removing takes back only the entries Cinnamon added, never ones you collected elsewhere.",
+      control: [syncCollection, syncAndPrune],
     }));
   }
 

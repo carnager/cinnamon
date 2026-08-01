@@ -2872,3 +2872,71 @@ AND `+column+` IS NOT NULL AND `+column+` != ''`, libraryID, libraryID)
 	}
 	return out, nil
 }
+
+// What popcorn has told Trakt is collected, so a later sync can take back its
+// own entries — and only its own — when the file is gone.
+func (s *Store) TraktCollectionEntries(ctx context.Context, userID int64) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT entry_key, payload_json FROM trakt_collection_entries WHERE user_id = ?`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var key, payload string
+		if err := rows.Scan(&key, &payload); err != nil {
+			return nil, err
+		}
+		out[key] = payload
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SaveTraktCollectionEntries(ctx context.Context, userID int64, entries map[string]string, kinds map[string]string) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx, `
+INSERT INTO trakt_collection_entries(user_id, entry_key, kind, payload_json)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(user_id, entry_key) DO UPDATE SET
+	payload_json = excluded.payload_json,
+	synced_at = CURRENT_TIMESTAMP`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for key, payload := range entries {
+		if _, err := stmt.ExecContext(ctx, userID, key, kinds[key], payload); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) DeleteTraktCollectionEntries(ctx context.Context, userID int64, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx, `DELETE FROM trakt_collection_entries WHERE user_id = ? AND entry_key = ?`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, key := range keys {
+		if _, err := stmt.ExecContext(ctx, userID, key); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}

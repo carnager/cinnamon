@@ -20,10 +20,9 @@ import (
 // on the shelf — so it recommends films that are already in the library. Sync
 // the library as a Trakt collection and its own recommendations can skip them.
 //
-// Adds only: a title that leaves the library stays collected on Trakt, because
-// there is no way to tell an entry popcorn added from one the user added
-// somewhere else, and quietly deleting someone's collection is worse than a
-// stale row.
+// Removal is opt-in and limited to what popcorn itself sent: every entry it
+// posts is recorded, so a prune can take back its own and leave alone whatever
+// was collected from a phone, a Trakt import, or years before this existed.
 
 const traktCollectionChunk = 100
 
@@ -33,14 +32,34 @@ type traktCollectionResult struct {
 	Episodes     int `json:"episodes"`
 	AlreadyThere int `json:"alreadyCollected"`
 	Skipped      int `json:"skipped"`
+	Removed      int `json:"removed"`
 }
 
-func (a *App) traktSyncCollection(ctx context.Context, bearer string) (traktCollectionResult, error) {
+// A collected entry as popcorn sent it: enough to take it back once the file it
+// described is gone from the library.
+type traktCollectionRecord struct {
+	Kind    string         `json:"kind"`
+	IDs     map[string]any `json:"ids,omitempty"`
+	Title   string         `json:"title,omitempty"`
+	Year    int            `json:"year,omitempty"`
+	Show    string         `json:"show,omitempty"`
+	Season  int            `json:"season,omitempty"`
+	Episode int            `json:"episode,omitempty"`
+}
+
+func (a *App) traktSyncCollection(ctx context.Context, userID int64, bearer string, prune bool) (traktCollectionResult, error) {
 	result := traktCollectionResult{}
 	items, err := a.store.AllItems(ctx)
 	if err != nil {
 		return result, err
 	}
+	sent, err := a.store.TraktCollectionEntries(ctx, userID)
+	if err != nil {
+		return result, err
+	}
+	posted := map[string]string{}
+	postedKinds := map[string]string{}
+	present := map[string]bool{}
 	collectedMovies, collectedEpisodes, err := a.traktCollected(ctx, bearer)
 	if err != nil {
 		return result, err
@@ -55,6 +74,9 @@ func (a *App) traktSyncCollection(ctx context.Context, bearer string) (traktColl
 		switch item.Kind {
 		case "movie":
 			key := traktCollectionMovieKey(item)
+			if key != "" {
+				present[key] = true
+			}
 			if key != "" && collectedMovies[key] {
 				result.AlreadyThere++
 				continue
@@ -65,16 +87,30 @@ func (a *App) traktSyncCollection(ctx context.Context, bearer string) (traktColl
 				continue
 			}
 			movies = append(movies, entry)
+			if key != "" {
+				record := traktCollectionRecord{Kind: "movie", Title: item.Title, Year: item.Year}
+				if ids := traktIDs(item); len(ids) > 0 {
+					record.IDs = ids
+				}
+				posted[key] = mustJSON(record)
+				postedKinds[key] = "movie"
+			}
 		case "episode":
 			if item.ShowTitle == "" || item.SeasonNumber <= 0 || item.EpisodeNumber <= 0 {
 				result.Skipped++
 				continue
 			}
 			showKey := strings.ToLower(strings.TrimSpace(item.ShowTitle))
-			if collectedEpisodes[traktCollectionEpisodeKey(showKey, item.SeasonNumber, item.EpisodeNumber)] {
+			episodeKey := traktCollectionEpisodeKey(showKey, item.SeasonNumber, item.EpisodeNumber)
+			present[episodeKey] = true
+			if collectedEpisodes[episodeKey] {
 				result.AlreadyThere++
 				continue
 			}
+			posted[episodeKey] = mustJSON(traktCollectionRecord{
+				Kind: "episode", Show: item.ShowTitle, Season: item.SeasonNumber, Episode: item.EpisodeNumber,
+			})
+			postedKinds[episodeKey] = "episode"
 			show, ok := byShow[showKey]
 			if !ok {
 				show = &traktCollectionShow{title: item.ShowTitle, year: item.Year, seasons: map[int][]int{}}
@@ -106,7 +142,105 @@ func (a *App) traktSyncCollection(ctx context.Context, bearer string) (traktColl
 			return result, err
 		}
 	}
+	if err := a.store.SaveTraktCollectionEntries(ctx, userID, posted, postedKinds); err != nil {
+		return result, err
+	}
+	if !prune {
+		return result, nil
+	}
+	removed, err := a.traktPruneCollection(ctx, userID, bearer, sent, present)
+	if err != nil {
+		return result, err
+	}
+	result.Removed = removed
 	return result, nil
+}
+
+// traktPruneCollection takes back the entries popcorn posted for files that are
+// no longer in the library. Anything it did not post is not in the record, and
+// so is never touched.
+func (a *App) traktPruneCollection(ctx context.Context, userID int64, bearer string, sent map[string]string, present map[string]bool) (int, error) {
+	movies := []map[string]any{}
+	byShow := map[string]*traktCollectionShow{}
+	showOrder := []string{}
+	gone := []string{}
+
+	for key, payload := range sent {
+		if present[key] {
+			continue
+		}
+		var record traktCollectionRecord
+		if err := json.Unmarshal([]byte(payload), &record); err != nil {
+			continue
+		}
+		gone = append(gone, key)
+		switch record.Kind {
+		case "movie":
+			entry := map[string]any{}
+			if len(record.IDs) > 0 {
+				entry["ids"] = record.IDs
+			} else if record.Title != "" {
+				entry["title"] = record.Title
+				if record.Year > 0 {
+					entry["year"] = record.Year
+				}
+			} else {
+				continue
+			}
+			movies = append(movies, entry)
+		case "episode":
+			showKey := strings.ToLower(strings.TrimSpace(record.Show))
+			show, ok := byShow[showKey]
+			if !ok {
+				show = &traktCollectionShow{title: record.Show, seasons: map[int][]int{}}
+				byShow[showKey] = show
+				showOrder = append(showOrder, showKey)
+			}
+			show.seasons[record.Season] = append(show.seasons[record.Season], record.Episode)
+		}
+	}
+	if len(gone) == 0 {
+		return 0, nil
+	}
+	shows := make([]map[string]any, 0, len(showOrder))
+	for _, key := range showOrder {
+		shows = append(shows, byShow[key].payload(""))
+	}
+	for _, chunk := range chunkMaps(movies, traktCollectionChunk) {
+		if err := a.traktRemoveCollection(ctx, bearer, map[string]any{"movies": chunk}); err != nil {
+			return 0, err
+		}
+	}
+	for _, chunk := range chunkMaps(shows, traktCollectionChunk) {
+		if err := a.traktRemoveCollection(ctx, bearer, map[string]any{"shows": chunk}); err != nil {
+			return 0, err
+		}
+	}
+	if err := a.store.DeleteTraktCollectionEntries(ctx, userID, gone); err != nil {
+		return 0, err
+	}
+	return len(gone), nil
+}
+
+func (a *App) traktRemoveCollection(ctx context.Context, bearer string, body map[string]any) error {
+	resp, err := a.traktRequest(ctx, bearer, http.MethodPost, "/sync/collection/remove", body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("trakt collection removal failed: %s", strings.TrimSpace(string(payload)))
+	}
+	return nil
+}
+
+func mustJSON(value any) string {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(payload)
 }
 
 type traktCollectionShow struct {
@@ -127,7 +261,11 @@ func (s *traktCollectionShow) payload(collectedAt string) map[string]any {
 		sort.Ints(episodes)
 		entries := make([]map[string]any, 0, len(episodes))
 		for _, episode := range episodes {
-			entries = append(entries, map[string]any{"number": episode, "collected_at": collectedAt})
+			entry := map[string]any{"number": episode}
+			if collectedAt != "" {
+				entry["collected_at"] = collectedAt
+			}
+			entries = append(entries, entry)
 		}
 		seasons = append(seasons, map[string]any{"number": number, "episodes": entries})
 	}
@@ -343,13 +481,14 @@ func (a *App) traktSyncCollectionEndpoint(w http.ResponseWriter, r *http.Request
 	// requests; give it room rather than the default request timeout.
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
-	result, err := a.traktSyncCollection(ctx, account.AccessToken)
+	prune := r.URL.Query().Get("prune") == "1"
+	result, err := a.traktSyncCollection(ctx, user.ID, account.AccessToken, prune)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	if a.log != nil {
-		a.log.Info("trakt collection synced", "user", user.ID, "movies", result.Movies, "shows", result.Shows, "episodes", result.Episodes, "already", result.AlreadyThere, "skipped", result.Skipped)
+		a.log.Info("trakt collection synced", "user", user.ID, "movies", result.Movies, "shows", result.Shows, "episodes", result.Episodes, "already", result.AlreadyThere, "skipped", result.Skipped, "removed", result.Removed)
 	}
 	writeJSON(w, http.StatusOK, result)
 }

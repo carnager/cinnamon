@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"popcorn/internal/database"
 )
@@ -3031,6 +3032,59 @@ WHERE COALESCE(show_title, '') != ''`)
 		if title != "" {
 			out[title] = true
 		}
+	}
+	return out, rows.Err()
+}
+
+// A rendered Trakt list as popcorn last saw it. Kept on disk so a restart does
+// not send everyone back to the network, and served while a refresh runs.
+type TraktLiveCacheEntry struct {
+	Payload   string
+	FetchedAt time.Time
+}
+
+func (s *Store) TraktLiveCache(ctx context.Context, userID int64, name string) (TraktLiveCacheEntry, bool, error) {
+	var payload, fetched string
+	err := s.db.QueryRowContext(ctx, `
+SELECT payload_json, fetched_at FROM trakt_live_cache WHERE user_id = ? AND name = ?`, userID, name).Scan(&payload, &fetched)
+	if errors.Is(err, sql.ErrNoRows) {
+		return TraktLiveCacheEntry{}, false, nil
+	}
+	if err != nil {
+		return TraktLiveCacheEntry{}, false, err
+	}
+	at, parseErr := time.Parse("2006-01-02 15:04:05", fetched)
+	if parseErr != nil {
+		at, _ = time.Parse(time.RFC3339, fetched)
+	}
+	return TraktLiveCacheEntry{Payload: payload, FetchedAt: at.UTC()}, true, nil
+}
+
+func (s *Store) SaveTraktLiveCache(ctx context.Context, userID int64, name, payload string) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO trakt_live_cache(user_id, name, payload_json)
+VALUES (?, ?, ?)
+ON CONFLICT(user_id, name) DO UPDATE SET
+	payload_json = excluded.payload_json,
+	fetched_at = CURRENT_TIMESTAMP`, userID, name, payload)
+	return err
+}
+
+// TraktLiveCacheNames lists what has been cached for a user, so a refresh can
+// renew exactly the lists that are actually looked at.
+func (s *Store) TraktLiveCacheNames(ctx context.Context, userID int64) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT name FROM trakt_live_cache WHERE user_id = ? ORDER BY name`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
 	}
 	return out, rows.Err()
 }

@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"popcorn/internal/auth"
 	"popcorn/internal/media"
 )
 
@@ -24,7 +25,15 @@ import (
 // cache the answer for a minute, and report a failure as a failure. An empty
 // list here means Trakt returned an empty list.
 
-const traktLiveCacheTTL = 60 * time.Second
+// These lists change slowly — recommendations once a day at most, a calendar
+// when something airs — so they are cached on disk and refreshed in the
+// background. A tab switch never waits on Trakt, and a failed refresh keeps
+// serving the last good answer rather than an empty list.
+const (
+	traktLiveFresh    = 6 * time.Hour
+	traktLiveInterval = 6 * time.Hour
+	traktLiveSettle   = 90 * time.Second
+)
 
 // traktLiveEntry is one row as Trakt has it, plus what popcorn can add: whether
 // the title is in the library, and if so how to play it.
@@ -93,6 +102,9 @@ type traktLiveList struct {
 	Entries   []traktLiveEntry `json:"entries"`
 	FetchedAt string           `json:"fetchedAt"`
 	Source    string           `json:"source"`
+	// Stale says the copy is older than it should be and a refresh is running;
+	// the client shows it rather than nothing.
+	Stale bool `json:"stale,omitempty"`
 }
 
 func (a *App) traktLiveWatchlist(w http.ResponseWriter, r *http.Request) {
@@ -136,7 +148,7 @@ func (a *App) traktLiveHistory(w http.ResponseWriter, r *http.Request) {
 	if value, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && value > 0 && value <= 500 {
 		limit = value
 	}
-	a.serveTraktLive(w, r, "history", func(ctx context.Context, bearer string, scope traktLiveScope) ([]traktLiveEntry, error) {
+	a.serveTraktLive(w, r, fmt.Sprintf("history:%d", limit), func(ctx context.Context, bearer string, scope traktLiveScope) ([]traktLiveEntry, error) {
 		var rows []struct {
 			WatchedAt string `json:"watched_at"`
 			Type      string `json:"type"`
@@ -192,7 +204,7 @@ func (a *App) traktLiveRecommendations(w http.ResponseWriter, r *http.Request) {
 	if strings.EqualFold(r.URL.Query().Get("kind"), "shows") {
 		kind = "shows"
 	}
-	a.serveTraktLive(w, r, "recommendations", func(ctx context.Context, bearer string, scope traktLiveScope) ([]traktLiveEntry, error) {
+	a.serveTraktLive(w, r, "recommendations:"+kind, func(ctx context.Context, bearer string, scope traktLiveScope) ([]traktLiveEntry, error) {
 		var rows []struct {
 			Title string          `json:"title"`
 			Year  int             `json:"year"`
@@ -240,7 +252,7 @@ func (a *App) traktLiveUpcoming(w http.ResponseWriter, r *http.Request) {
 		days = value
 	}
 	start := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
-	a.serveTraktLive(w, r, "upcoming", func(ctx context.Context, bearer string, scope traktLiveScope) ([]traktLiveEntry, error) {
+	a.serveTraktLive(w, r, fmt.Sprintf("upcoming:%d", days), func(ctx context.Context, bearer string, scope traktLiveScope) ([]traktLiveEntry, error) {
 		var rows []struct {
 			FirstAired string `json:"first_aired"`
 			Episode    struct {
@@ -289,8 +301,7 @@ func (a *App) serveTraktLive(w http.ResponseWriter, r *http.Request, name string
 	if !ok {
 		return
 	}
-	account, err := a.traktAccountForRequest(r.Context(), user.ID)
-	if err != nil {
+	if _, err := a.traktAccountForRequest(r.Context(), user.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "trakt account is not linked", http.StatusConflict)
 			return
@@ -298,28 +309,158 @@ func (a *App) serveTraktLive(w http.ResponseWriter, r *http.Request, name string
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// A short cache keeps a tab responsive without letting it go stale, and a
-	// failed fetch is never cached — the next pull tries again.
-	a.writeCachedJSON(w, r, cacheKey(r, "trakt-live", name, user.ID), traktLiveCacheTTL, func() (any, error) {
-		items, err := a.store.AllItems(r.Context())
-		if err != nil {
-			return nil, err
+	a.rememberTraktLiveBuilder(name, build)
+
+	force := r.URL.Query().Get("refresh") == "1"
+	cached, found, err := a.store.TraktLiveCache(r.Context(), user.ID, name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if found && !force {
+		stale := time.Since(cached.FetchedAt) > traktLiveFresh
+		if stale {
+			// Serve what we have and renew behind it: waiting on Trakt to look
+			// at a list you already have is the wrong trade.
+			go a.refreshTraktLive(user.ID, name)
 		}
-		shows, err := a.store.ShowTitleIndex(r.Context())
-		if err != nil {
-			return nil, err
+		writeJSONBytes(w, http.StatusOK, []byte(traktLiveWithStale(cached.Payload, stale)))
+		return
+	}
+
+	list, err := a.buildTraktLive(r.Context(), user.ID, name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	payload, err := json.Marshal(list)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSONBytes(w, http.StatusOK, payload)
+}
+
+// The builders are registered as they are used, so the refresher renews exactly
+// the lists a client has actually asked for — including the query variants,
+// which are part of the name.
+func (a *App) rememberTraktLiveBuilder(name string, build func(context.Context, string, traktLiveScope) ([]traktLiveEntry, error)) {
+	a.traktLiveMu.Lock()
+	defer a.traktLiveMu.Unlock()
+	if a.traktLiveBuilders == nil {
+		a.traktLiveBuilders = map[string]func(context.Context, string, traktLiveScope) ([]traktLiveEntry, error){}
+	}
+	a.traktLiveBuilders[name] = build
+}
+
+func (a *App) buildTraktLive(ctx context.Context, userID int64, name string) (traktLiveList, error) {
+	a.traktLiveMu.Lock()
+	build := a.traktLiveBuilders[name]
+	a.traktLiveMu.Unlock()
+	if build == nil {
+		return traktLiveList{}, fmt.Errorf("no builder for %s", name)
+	}
+	account, err := a.traktAccountForRequest(ctx, userID)
+	if err != nil {
+		return traktLiveList{}, err
+	}
+	items, err := a.store.AllItems(ctx)
+	if err != nil {
+		return traktLiveList{}, err
+	}
+	shows, err := a.store.ShowTitleIndex(ctx)
+	if err != nil {
+		return traktLiveList{}, err
+	}
+	entries, err := build(ctx, account.AccessToken, traktLiveScope{index: newTraktImportIndex(items), shows: shows})
+	if err != nil {
+		return traktLiveList{}, err
+	}
+	a.fillTMDbDetails(ctx, entries)
+	list := traktLiveList{
+		Entries:   entries,
+		FetchedAt: time.Now().UTC().Format(time.RFC3339),
+		Source:    "trakt",
+	}
+	if payload, err := json.Marshal(list); err == nil {
+		_ = a.store.SaveTraktLiveCache(ctx, userID, name, string(payload))
+	}
+	return list, nil
+}
+
+// refreshTraktLive renews one list in the background. A failure leaves the
+// cached copy alone — an old answer beats no answer.
+func (a *App) refreshTraktLive(userID int64, name string) {
+	key := fmt.Sprintf("%d:%s", userID, name)
+	a.traktLiveMu.Lock()
+	if a.traktLiveRunning == nil {
+		a.traktLiveRunning = map[string]bool{}
+	}
+	if a.traktLiveRunning[key] {
+		a.traktLiveMu.Unlock()
+		return
+	}
+	a.traktLiveRunning[key] = true
+	a.traktLiveMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(a.ctx, 3*time.Minute)
+	defer cancel()
+	if _, err := a.buildTraktLive(ctx, userID, name); err != nil && a.log != nil {
+		a.log.Debug("trakt list refresh failed", "user", userID, "list", name, "error", err)
+	}
+
+	a.traktLiveMu.Lock()
+	delete(a.traktLiveRunning, key)
+	a.traktLiveMu.Unlock()
+}
+
+// traktLiveWorker keeps the cached lists warm so the tab is instant even on the
+// first look of the day.
+func (a *App) traktLiveWorker() {
+	if err := sleepContext(a.ctx, traktLiveSettle); err != nil {
+		return
+	}
+	for {
+		a.refreshTraktLiveAll()
+		select {
+		case <-time.After(traktLiveInterval):
+		case <-a.ctx.Done():
+			return
 		}
-		entries, err := build(r.Context(), account.AccessToken, traktLiveScope{index: newTraktImportIndex(items), shows: shows})
+	}
+}
+
+func (a *App) refreshTraktLiveAll() {
+	if !a.traktConfigured() || a.store == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, 10*time.Minute)
+	defer cancel()
+	users, err := a.store.TraktLinkedUsers(ctx)
+	if err != nil {
+		return
+	}
+	for _, userID := range users {
+		names, err := a.store.TraktLiveCacheNames(ctx, userID)
 		if err != nil {
-			return nil, err
+			continue
 		}
-		a.fillTMDbDetails(r.Context(), entries)
-		return traktLiveList{
-			Entries:   entries,
-			FetchedAt: time.Now().UTC().Format(time.RFC3339),
-			Source:    "trakt",
-		}, nil
-	})
+		for _, name := range names {
+			a.refreshTraktLive(userID, name)
+		}
+	}
+}
+
+// Marking the copy stale without re-encoding the whole list.
+func traktLiveWithStale(payload string, stale bool) string {
+	if !stale {
+		return payload
+	}
+	trimmed := strings.TrimSpace(payload)
+	if !strings.HasPrefix(trimmed, "{") {
+		return payload
+	}
+	return "{\"stale\":true," + trimmed[1:]
 }
 
 func (a *App) traktGetInto(ctx context.Context, bearer, path string, dest any) error {
@@ -412,7 +553,7 @@ func (a *App) traktLiveWatchlistRemove(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) traktLiveWatchlistWrite(w http.ResponseWriter, r *http.Request, remove bool) {
-	account, in, ok := a.traktLiveAction(w, r)
+	account, user, in, ok := a.traktLiveAction(w, r)
 	if !ok {
 		return
 	}
@@ -438,13 +579,14 @@ func (a *App) traktLiveWatchlistWrite(w http.ResponseWriter, r *http.Request, re
 		return
 	}
 	a.invalidateResponseCache()
+	a.refreshTraktLiveMatching(user.ID, "watchlist")
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // Hiding tells Trakt to stop suggesting it, which is the same intent as "not
 // interested" on a library title.
 func (a *App) traktLiveHide(w http.ResponseWriter, r *http.Request) {
-	account, in, ok := a.traktLiveAction(w, r)
+	account, user, in, ok := a.traktLiveAction(w, r)
 	if !ok {
 		return
 	}
@@ -459,13 +601,27 @@ func (a *App) traktLiveHide(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.invalidateResponseCache()
+	a.refreshTraktLiveMatching(user.ID, "recommendations")
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (a *App) traktLiveAction(w http.ResponseWriter, r *http.Request) (media.TraktAccount, traktLiveActionRequest, bool) {
+// A list this user has just changed is wrong now, whatever its age.
+func (a *App) refreshTraktLiveMatching(userID int64, prefix string) {
+	names, err := a.store.TraktLiveCacheNames(a.ctx, userID)
+	if err != nil {
+		return
+	}
+	for _, name := range names {
+		if strings.HasPrefix(name, prefix) {
+			go a.refreshTraktLive(userID, name)
+		}
+	}
+}
+
+func (a *App) traktLiveAction(w http.ResponseWriter, r *http.Request) (media.TraktAccount, auth.User, traktLiveActionRequest, bool) {
 	user, ok := a.requireUser(w, r)
 	if !ok {
-		return media.TraktAccount{}, traktLiveActionRequest{}, false
+		return media.TraktAccount{}, auth.User{}, traktLiveActionRequest{}, false
 	}
 	account, err := a.traktAccountForRequest(r.Context(), user.ID)
 	if err != nil {
@@ -474,14 +630,14 @@ func (a *App) traktLiveAction(w http.ResponseWriter, r *http.Request) (media.Tra
 		} else {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
-		return media.TraktAccount{}, traktLiveActionRequest{}, false
+		return media.TraktAccount{}, auth.User{}, traktLiveActionRequest{}, false
 	}
 	var in traktLiveActionRequest
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "invalid body", http.StatusBadRequest)
-		return media.TraktAccount{}, traktLiveActionRequest{}, false
+		return media.TraktAccount{}, auth.User{}, traktLiveActionRequest{}, false
 	}
-	return account, in, true
+	return account, user, in, true
 }
 
 func traktLiveIDs(in traktLiveActionRequest) map[string]any {

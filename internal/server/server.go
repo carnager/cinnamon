@@ -54,6 +54,10 @@ type App struct {
 	traktUpgradeURL   string
 	collectionMu      sync.Mutex
 	collectionPending bool
+
+	traktLiveMu       sync.Mutex
+	traktLiveBuilders map[string]func(context.Context, string, traktLiveScope) ([]traktLiveEntry, error)
+	traktLiveRunning  map[string]bool
 	similarMu         sync.Mutex
 	similar           map[int64]similarCacheEntry
 	similarWork       map[int64]bool
@@ -111,6 +115,7 @@ func New(opts Options) *App {
 	go app.reapIdleHLSSessions()
 	go app.recommendationPrebuildWorker()
 	go app.traktCollectionWorker()
+	go app.traktLiveWorker()
 	return app
 }
 

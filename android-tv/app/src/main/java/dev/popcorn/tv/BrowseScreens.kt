@@ -1903,18 +1903,15 @@ fun CuratedLanding(
         }
         itemsIndexed(shelves, key = { _, section -> section.id }) { index, section ->
             val firstShelf = index == 0
-            // The shelf holds what the server sent: the item count is the
-            // user's, set per shelf, and a LazyRow costs nothing for the cards
-            // that are off screen. More opens the whole set at once — offered
-            // when the shelf is full, because then there is likely more behind
-            // it, or when the section names a screen of its own.
-            val moreVisible = section.more.isNotBlank() ||
-                (section.items.isNotEmpty() && section.contentSize() >= section.configuredLimit())
+            // A row shows a handful and stops; More appears only when the shelf
+            // actually holds more than that, and opens the rest. A shelf of
+            // three has nothing behind it and says so by having no More.
+            val moreVisible = section.contentSize() > HomeShelfLimit
             if (section.shows.isNotEmpty()) {
                 PosterShelf(
                     section.title,
                     section.subtitle,
-                    section.shows,
+                    section.shows.take(HomeShelfLimit),
                     key = { it.title },
                     autoFocusFirst = firstShelf,
                     moreVisible = moreVisible,
@@ -1930,7 +1927,7 @@ fun CuratedLanding(
                 PosterShelf(
                     section.title,
                     section.subtitle,
-                    section.items,
+                    section.items.take(HomeShelfLimit),
                     key = { it.id },
                     autoFocusFirst = firstShelf,
                     moreVisible = moreVisible,
@@ -1950,11 +1947,9 @@ private fun HomeSection.hasContent(): Boolean = items.isNotEmpty() || shows.isNo
 
 private fun HomeSection.contentSize(): Int = maxOf(items.size, shows.size, entries.size)
 
-// What the shelf asked the server for; the server defaults to this too.
-private const val HomeSectionDefaultLimit = 24
-
-private fun HomeSection.configuredLimit(): Int =
-    params["limit"]?.trim()?.toIntOrNull()?.takeIf { it > 0 } ?: HomeSectionDefaultLimit
+// How many cards a row shows before More takes over. The shelf's own item count
+// decides how many there are to page through, not how many are on screen.
+private const val HomeShelfLimit = 10
 
 @Composable
 fun ItemShelfView(

@@ -159,14 +159,25 @@ func (a *App) traktLiveRecommendations(w http.ResponseWriter, r *http.Request) {
 		if err := a.traktGetInto(ctx, bearer, path, &rows); err != nil {
 			return nil, err
 		}
+		// ignore_collected is asked for, but Trakt builds its recommendation
+		// set periodically and still offered sixteen titles it had recorded as
+		// collected minutes earlier. A shelf of "things you do not have" has to
+		// be true, so anything matching the library by an external id is
+		// dropped here. Title-only matches are kept but flagged: those are
+		// guesses, and dropping a real recommendation over a title collision is
+		// the worse mistake.
 		entries := make([]traktLiveEntry, 0, len(rows))
 		for _, row := range rows {
 			entry := traktLiveEntry{Kind: strings.TrimSuffix(kind, "s"), Title: row.Title, Year: row.Year}
 			applyTraktIDs(&entry, row.IDs)
+			var reason string
 			if entry.Kind == "movie" {
-				matchTraktMovie(&entry, index)
+				reason = matchTraktMovie(&entry, index)
 			} else {
-				matchTraktShow(&entry, index)
+				reason = matchTraktShow(&entry, index)
+			}
+			if matchedByID(reason) {
+				continue
 			}
 			entries = append(entries, entry)
 		}
@@ -232,26 +243,41 @@ func applyTraktIDs(entry *traktLiveEntry, ids traktIDsPayload) {
 
 // The same matchers the Trakt import uses, so "in your library" means the same
 // thing on every surface.
-func matchTraktMovie(entry *traktLiveEntry, index traktImportIndex) {
-	if item, _ := index.matchMovie(entry.Title, entry.Year, traktIDsPayload{IMDb: entry.IMDbID, TMDb: entry.TMDbID, TVDb: entry.TVDbID}); item != nil {
+func matchTraktMovie(entry *traktLiveEntry, index traktImportIndex) string {
+	item, reason := index.matchMovie(entry.Title, entry.Year, traktIDsPayload{IMDb: entry.IMDbID, TMDb: entry.TMDbID, TVDb: entry.TVDbID})
+	if item != nil {
 		entry.InLibrary = true
 		entry.Item = item
 	}
+	return reason
+}
+
+// An id match is a fact; a title match is a guess.
+func matchedByID(reason string) bool {
+	switch reason {
+	case "imdb", "tmdb", "episode-imdb", "episode-tmdb", "episode-tvdb":
+		return true
+	}
+	return false
 }
 
 // A show is in the library if any episode of it is; the first one found is
 // enough to open the show.
-func matchTraktShow(entry *traktLiveEntry, index traktImportIndex) {
-	if item, _ := index.matchEpisode(entry.Title, entry.Year, traktIDsPayload{}, traktIDsPayload{}, 1, 1); item != nil {
+func matchTraktShow(entry *traktLiveEntry, index traktImportIndex) string {
+	item, reason := index.matchEpisode(entry.Title, entry.Year, traktIDsPayload{}, traktIDsPayload{}, 1, 1)
+	if item != nil {
 		entry.InLibrary = true
 		entry.Item = item
 	}
+	return reason
 }
 
-func matchTraktEpisode(entry *traktLiveEntry, index traktImportIndex) {
+func matchTraktEpisode(entry *traktLiveEntry, index traktImportIndex) string {
 	ids := traktIDsPayload{IMDb: entry.IMDbID, TMDb: entry.TMDbID, TVDb: entry.TVDbID}
-	if item, _ := index.matchEpisode(entry.ShowTitle, entry.Year, traktIDsPayload{}, ids, entry.Season, entry.Episode); item != nil {
+	item, reason := index.matchEpisode(entry.ShowTitle, entry.Year, traktIDsPayload{}, ids, entry.Season, entry.Episode)
+	if item != nil {
 		entry.InLibrary = true
 		entry.Item = item
 	}
+	return reason
 }

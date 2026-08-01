@@ -203,6 +203,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/trakt/live/watchlist", a.traktLiveWatchlist)
 	mux.HandleFunc("GET /api/trakt/live/history", a.traktLiveHistory)
 	mux.HandleFunc("GET /api/trakt/live/recommendations", a.traktLiveRecommendations)
+	mux.HandleFunc("GET /api/trakt/live/upcoming", a.traktLiveUpcoming)
 	mux.HandleFunc("POST /api/trakt/device", a.traktDeviceCode)
 	mux.HandleFunc("POST /api/trakt/device/token", a.traktDeviceToken)
 	mux.HandleFunc("POST /api/trakt/sync-collection", a.traktSyncCollectionEndpoint)

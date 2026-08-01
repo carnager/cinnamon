@@ -39,6 +39,7 @@ type traktLiveEntry struct {
 	TVDbID    int    `json:"tvdbId,omitempty"`
 	ListedAt  string `json:"listedAt,omitempty"`
 	WatchedAt string `json:"watchedAt,omitempty"`
+	AiredAt   string `json:"airedAt,omitempty"`
 	Plays     int    `json:"plays,omitempty"`
 	// InLibrary and Item are what no third-party client can offer: this one is
 	// on the shelf, press play.
@@ -179,6 +180,54 @@ func (a *App) traktLiveRecommendations(w http.ResponseWriter, r *http.Request) {
 			if matchedByID(reason) {
 				continue
 			}
+			entries = append(entries, entry)
+		}
+		return entries, nil
+	})
+}
+
+// traktLiveUpcoming is the payoff from the collection sync: Trakt's calendar of
+// what is next for the shows you actually have, rather than everything airing.
+// An episode already on the shelf says so, which turns the list into "what has
+// landed and what is still coming".
+func (a *App) traktLiveUpcoming(w http.ResponseWriter, r *http.Request) {
+	days := 14
+	if value, err := strconv.Atoi(r.URL.Query().Get("days")); err == nil && value > 0 && value <= 33 {
+		days = value
+	}
+	start := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
+	a.serveTraktLive(w, r, "upcoming", func(ctx context.Context, bearer string, index traktImportIndex) ([]traktLiveEntry, error) {
+		var rows []struct {
+			FirstAired string `json:"first_aired"`
+			Episode    struct {
+				Title  string          `json:"title"`
+				Season int             `json:"season"`
+				Number int             `json:"number"`
+				IDs    traktIDsPayload `json:"ids"`
+			} `json:"episode"`
+			Show struct {
+				Title string          `json:"title"`
+				Year  int             `json:"year"`
+				IDs   traktIDsPayload `json:"ids"`
+			} `json:"show"`
+		}
+		path := fmt.Sprintf("/calendars/my/shows/%s/%d", start, days)
+		if err := a.traktGetInto(ctx, bearer, path, &rows); err != nil {
+			return nil, err
+		}
+		entries := make([]traktLiveEntry, 0, len(rows))
+		for _, row := range rows {
+			entry := traktLiveEntry{
+				Kind:      "episode",
+				Title:     row.Episode.Title,
+				ShowTitle: row.Show.Title,
+				Year:      row.Show.Year,
+				Season:    row.Episode.Season,
+				Episode:   row.Episode.Number,
+				AiredAt:   row.FirstAired,
+			}
+			applyTraktIDs(&entry, row.Episode.IDs)
+			matchTraktEpisode(&entry, index)
 			entries = append(entries, entry)
 		}
 		return entries, nil

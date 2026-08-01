@@ -879,7 +879,9 @@ fun PopcornApp() {
 
     fun returnFromDetail(s: Screen.Detail) {
         lastDetail = null
-        screen = if (s.fromActor != null) {
+        screen = if (s.fromShelf != null) {
+            s.fromShelf
+        } else if (s.fromActor != null) {
             Screen.Actor(s.fromActor)
         } else if (s.fromSearch && s.fromShow == null) {
             Screen.Search
@@ -1254,7 +1256,9 @@ fun PopcornApp() {
             completedItems = completedItems,
             watchlistItems = watchlistItems,
             onBack = { screen = current.returnTo ?: Screen.Home },
-            onItem = { screen = Screen.Detail(it, null, fromHome = true) },
+            // Back from the detail belongs to the shelf that opened it, not to
+            // wherever the shelf itself was opened from.
+            onItem = { screen = Screen.Detail(it, null, fromShelf = current) },
             onItemMenu = { item, requester -> openItemWatchMenu(item, requester) },
         )
         is Screen.Show -> ShowView(

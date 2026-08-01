@@ -105,9 +105,6 @@ fun PopcornApp() {
     var homeEditGrabbed by remember { mutableStateOf(false) }
     var homeShelvesOpen by remember { mutableStateOf(false) }
     var homeGenrePicker by remember { mutableStateOf(false) }
-    // Set when the picker was opened from a shelf's options: it then changes
-    // that shelf's genre instead of adding and removing shelves.
-    var homeGenreTarget by remember { mutableStateOf<Int?>(null) }
     var homeOptionsIndex by remember { mutableStateOf<Int?>(null) }
     // The options sheet edits its own copy of the shelf and writes it back when
     // it closes. Editing the draft on every keypress recomposed the rail
@@ -838,7 +835,6 @@ fun PopcornApp() {
         homeEditGrabbed = false
         homeShelvesOpen = false
         homeGenrePicker = false
-        homeGenreTarget = null
         homeFacetPicker = null
         homeOptionsSection = null
         homeOptionsIndex = null
@@ -959,10 +955,7 @@ fun PopcornApp() {
     BackHandler(enabled = screen is Screen.ArrangeHome) {
         when {
             homeFacetPicker != null -> homeFacetPicker = null
-            homeGenrePicker -> {
-                homeGenrePicker = false
-                homeGenreTarget = null
-            }
+            homeGenrePicker -> homeGenrePicker = false
             homeOptionsIndex != null -> {
                 val optionsIndex = homeOptionsIndex
                 val edited = homeOptionsSection
@@ -1544,11 +1537,6 @@ fun PopcornApp() {
                         value = paramValueLabel(param, value),
                         onCycle = {
                             when {
-                                param.type == "string" && section.type == "genre" -> {
-                                    session?.let { loadHomeGenres(it) }
-                                    homeGenreTarget = optionsIndex
-                                    homeGenrePicker = true
-                                }
                                 param.type == "string" -> {
                                     val kind = section.params["kind"] ?: "movies"
                                     session?.let { loadHomeFacets(it, kind) }
@@ -1630,41 +1618,26 @@ fun PopcornApp() {
         }
     }
 
+    // Bulk add: every genre ticked here becomes a shelf of its own. Narrowing
+    // an existing shelf goes through the parameter picker instead.
     if (homeGenrePicker) {
         val genreType = homeCatalog.firstOrNull { it.repeatable && it.params.any { param -> param.name == "genre" } }
-        val target = homeGenreTarget
         TvCheckListShelf(
-            title = if (target != null) "GENRE" else "GENRE SHELVES",
-            subtitle = if (target != null) "Which genre" else "One shelf per genre",
+            title = "GENRE SHELVES",
+            subtitle = "One shelf per genre",
             rows = homeGenres.map { (genre, kind) ->
-                val current = target?.let { homeEditDraft.getOrNull(it) }
                 TvCheckRow(
                     key = "$kind:$genre",
                     label = genre,
                     description = if (kind == "tv") "TV shows" else "Movies",
-                    checked = if (current != null) {
-                        current.params["genre"] == genre && genreKind(current) == kind
-                    } else {
-                        homeEditDraft.any { it.type == genreType?.type && it.params["genre"] == genre && genreKind(it) == kind }
-                    },
+                    checked = homeEditDraft.any { it.type == genreType?.type && it.params["genre"] == genre && genreKind(it) == kind },
                     onToggle = {
-                        if (target != null) {
-                            homeEditDraft = updateSection(homeEditDraft, target) { section ->
-                                section.copy(params = section.params + mapOf("genre" to genre, "kind" to kind))
-                            }
-                            homeGenrePicker = false
-                            homeGenreTarget = null
-                        } else {
-                            val type = genreType ?: return@TvCheckRow
-                            homeEditDraft = withUniqueIds(toggleGenreSection(homeEditDraft, type, genre, kind))
-                        }
+                        val type = genreType ?: return@TvCheckRow
+                        homeEditDraft = withUniqueIds(toggleGenreSection(homeEditDraft, type, genre, kind))
                     },
                 )
             },
-            onDismiss = {
-                homeGenrePicker = false
-                homeGenreTarget = null
-            },
+            onDismiss = { homeGenrePicker = false },
         )
     }
 

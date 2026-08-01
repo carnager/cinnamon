@@ -168,11 +168,18 @@ func TestValidateHomeLayoutRejectsBadConfigurations(t *testing.T) {
 		"unknown param": {Sections: []media.HomeLayoutSection{{Type: "recent_movies", Enabled: true, Params: map[string]string{"colour": "red"}}}},
 		"bad enum":      {Sections: []media.HomeLayoutSection{{Type: "genre", Enabled: true, Params: map[string]string{"genre": "Horror", "kind": "books"}}}},
 		"bad int":       {Sections: []media.HomeLayoutSection{{Type: "recent_movies", Enabled: true, Params: map[string]string{"limit": "lots"}}}},
-		"missing genre": {Sections: []media.HomeLayoutSection{{Type: "genre", Enabled: true}}},
 	} {
 		if _, err := validateHomeLayout(layout); err == nil {
 			t.Errorf("%s was accepted", name)
 		}
+	}
+
+	// The merged shelf can be narrowed by any dimension, so a genre is no
+	// longer required — an unnarrowed one is the library, and titles itself so.
+	if _, err := validateHomeLayout(media.HomeLayoutDoc{Sections: []media.HomeLayoutSection{
+		{Type: "genre", Enabled: true},
+	}}); err != nil {
+		t.Errorf("an unnarrowed shelf was rejected: %v", err)
 	}
 
 	ok, err := validateHomeLayout(media.HomeLayoutDoc{Sections: []media.HomeLayoutSection{
@@ -268,7 +275,7 @@ func TestSurpriseShelfPicksUnwatchedAndFallsBackBelowTheRatingFloor(t *testing.T
 	}
 }
 
-func TestFilterShelfNarrowsAndNamesItself(t *testing.T) {
+func TestGenreShelfNarrowsAndNamesItself(t *testing.T) {
 	app, store, userID := newHomeSectionsApp(t)
 	ctx := context.Background()
 
@@ -280,10 +287,10 @@ func TestFilterShelfNarrowsAndNamesItself(t *testing.T) {
 	}
 
 	layout, err := validateHomeLayout(media.HomeLayoutDoc{Sections: []media.HomeLayoutSection{
-		{ID: "japan", Type: "filter", Enabled: true, Params: map[string]string{"country": "Japan"}},
-		{ID: "short", Type: "filter", Enabled: true, Params: map[string]string{"maxMinutes": "90"}},
-		{ID: "studio", Type: "filter", Enabled: true, Params: map[string]string{"studio": "Ghibli", "genre": "Drama"}},
-		{ID: "nothing", Type: "filter", Enabled: true, Params: map[string]string{"country": "Atlantis"}},
+		{ID: "japan", Type: "genre", Enabled: true, Params: map[string]string{"country": "Japan"}},
+		{ID: "short", Type: "genre", Enabled: true, Params: map[string]string{"maxMinutes": "90"}},
+		{ID: "studio", Type: "genre", Enabled: true, Params: map[string]string{"studio": "Ghibli", "genre": "Drama"}},
+		{ID: "nothing", Type: "genre", Enabled: true, Params: map[string]string{"country": "Atlantis"}},
 	}})
 	if err != nil {
 		t.Fatalf("validate layout: %v", err)
@@ -431,7 +438,7 @@ func TestBecauseYouWatchedSkipsAnAnchorWithNoLibraryMatches(t *testing.T) {
 	}
 }
 
-func TestFilterShelfAcceptsSeveralValuesPerDimension(t *testing.T) {
+func TestGenreShelfAcceptsSeveralValuesPerDimension(t *testing.T) {
 	app, store, userID := newHomeSectionsApp(t)
 	ctx := context.Background()
 
@@ -446,9 +453,9 @@ func TestFilterShelfAcceptsSeveralValuesPerDimension(t *testing.T) {
 	}
 
 	layout, err := validateHomeLayout(media.HomeLayoutDoc{Sections: []media.HomeLayoutSection{
-		{ID: "studios", Type: "filter", Enabled: true, Params: map[string]string{"studio": "A24,Ghibli", "sort": "title"}},
-		{ID: "countries", Type: "filter", Enabled: true, Params: map[string]string{"country": "Japan, Südkorea", "sort": "title"}},
-		{ID: "genres", Type: "filter", Enabled: true, Params: map[string]string{"genre": "Slasher,Melodrama", "sort": "title"}},
+		{ID: "studios", Type: "genre", Enabled: true, Params: map[string]string{"studio": "A24,Ghibli", "sort": "title"}},
+		{ID: "countries", Type: "genre", Enabled: true, Params: map[string]string{"country": "Japan, Südkorea", "sort": "title"}},
+		{ID: "genres", Type: "genre", Enabled: true, Params: map[string]string{"genre": "Slasher,Melodrama", "sort": "title"}},
 	}})
 	if err != nil {
 		t.Fatalf("validate layout: %v", err)
@@ -476,7 +483,7 @@ func TestFilterShelfAcceptsSeveralValuesPerDimension(t *testing.T) {
 	}
 }
 
-func TestFilterShelfMatchesAnyOrAllOfADimension(t *testing.T) {
+func TestGenreShelfMatchesAnyOrAllOfADimension(t *testing.T) {
 	app, store, userID := newHomeSectionsApp(t)
 	ctx := context.Background()
 
@@ -490,8 +497,8 @@ func TestFilterShelfMatchesAnyOrAllOfADimension(t *testing.T) {
 	}
 
 	layout, err := validateHomeLayout(media.HomeLayoutDoc{Sections: []media.HomeLayoutSection{
-		{ID: "either", Type: "filter", Enabled: true, Params: map[string]string{"genre": "Horror,Comedy", "sort": "rating"}},
-		{ID: "both", Type: "filter", Enabled: true, Params: map[string]string{"genre": "Horror,Comedy", "genreMatch": "all", "sort": "rating"}},
+		{ID: "either", Type: "genre", Enabled: true, Params: map[string]string{"genre": "Horror,Comedy", "sort": "rating"}},
+		{ID: "both", Type: "genre", Enabled: true, Params: map[string]string{"genre": "Horror,Comedy", "genreMatch": "all", "sort": "rating"}},
 	}})
 	if err != nil {
 		t.Fatalf("validate layout: %v", err)

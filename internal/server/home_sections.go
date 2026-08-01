@@ -244,8 +244,8 @@ func homeSectionDefs() map[string]homeSectionDef {
 		},
 		{
 			HomeSectionType: media.HomeSectionType{
-				Type: "filter", Label: "Filter shelf", Layout: "poster", Kind: "movie", Repeatable: true,
-				Description: "A saved search: any mix of genre, decade, country, studio, runtime and rating.",
+				Type: "genre", Label: "Genre shelf", Layout: "poster", Kind: "movie", Repeatable: true,
+				Description: "One or more genres, narrowed further by decade, country, studio, length or rating.",
 				Params: []media.HomeSectionParam{
 					{Name: "kind", Label: "Media", Type: "enum", Options: []string{"movies", "tv"}, Default: "movies"},
 					// A title can carry several genres, studios and countries at
@@ -263,20 +263,6 @@ func homeSectionDefs() map[string]homeSectionDef {
 					{Name: "minRating", Label: "Min rating", Type: "number", Suffix: "and up", Choices: []string{"", "5", "6", "6.5", "7", "7.5", "8", "8.5"}},
 					{Name: "sort", Label: "Sort", Type: "enum", Options: []string{"rating", "mtime", "year_desc", "title", "random"}, Default: "rating"},
 					{Name: "seen", Label: "Watched", Type: "enum", Options: []string{"any", "unseen", "seen"}, Default: "unseen"},
-					limitParam,
-				},
-			},
-			build: buildFilterSection,
-		},
-		{
-			HomeSectionType: media.HomeSectionType{
-				Type: "genre", Label: "Genre shelf", Layout: "poster", Kind: "movie", Repeatable: true,
-				Description: "One shelf for a single genre, e.g. everything filed under Horror.",
-				Params: []media.HomeSectionParam{
-					{Name: "genre", Label: "Genre", Type: "string", Required: true},
-					{Name: "kind", Label: "Media", Type: "enum", Options: []string{"movies", "tv"}, Default: "movies"},
-					{Name: "sort", Label: "Sort", Type: "enum", Options: []string{"rating", "mtime", "year_desc", "title"}, Default: "rating"},
-					{Name: "seen", Label: "Watched", Type: "enum", Options: []string{"any", "unseen"}, Default: "unseen"},
 					limitParam,
 				},
 			},
@@ -365,9 +351,9 @@ func buildWatchlistWaitingSection(scope homeSectionScope, cfg media.HomeLayoutSe
 	return media.HomeSection{Items: items, More: "watchlist"}, nil
 }
 
-// One section type behind every "everything that is X" shelf. Genre shelves are
-// the same query with one parameter set; this one exposes the rest.
-func buildFilterSection(scope homeSectionScope, cfg media.HomeLayoutSection) (media.HomeSection, error) {
+// One section type behind every "everything that is X" shelf: a genre is one
+// parameter of it, and the rest narrow that further.
+func buildGenreSection(scope homeSectionScope, cfg media.HomeLayoutSection) (media.HomeSection, error) {
 	sortMode := paramOrDefault(cfg, "sort", "rating")
 	seen := paramOrDefault(cfg, "seen", "unseen")
 	if seen == "any" {
@@ -391,7 +377,7 @@ func buildFilterSection(scope homeSectionScope, cfg media.HomeLayoutSection) (me
 		MinRating:      minRating,
 		Limit:          sectionLimit(cfg),
 	}
-	section := media.HomeSection{Title: filterSectionTitle(cfg)}
+	section := media.HomeSection{Title: genreSectionTitle(cfg)}
 	if paramOrDefault(cfg, "kind", "movies") == "tv" {
 		if scope.tvLib == nil {
 			return media.HomeSection{}, nil
@@ -437,7 +423,7 @@ func buildFilterSection(scope homeSectionScope, cfg media.HomeLayoutSection) (me
 
 // A filter shelf names itself after whatever it was narrowed by, so the user
 // does not have to title every one by hand.
-func filterSectionTitle(cfg media.HomeLayoutSection) string {
+func genreSectionTitle(cfg media.HomeLayoutSection) string {
 	parts := make([]string, 0, 4)
 	for _, name := range []string{"decades", "country", "studio", "genre", "certificate"} {
 		value := strings.TrimSpace(cfg.Params[name])
@@ -520,41 +506,6 @@ func buildSurpriseSection(scope homeSectionScope, cfg media.HomeLayoutSection) (
 	return media.HomeSection{}, nil
 }
 
-func buildGenreSection(scope homeSectionScope, cfg media.HomeLayoutSection) (media.HomeSection, error) {
-	genre := strings.TrimSpace(cfg.Params["genre"])
-	if genre == "" {
-		return media.HomeSection{}, nil
-	}
-	sort := paramOrDefault(cfg, "sort", "rating")
-	seen := paramOrDefault(cfg, "seen", "unseen")
-	if seen == "any" {
-		seen = ""
-	}
-	limit := sectionLimit(cfg)
-	section := media.HomeSection{Title: genre}
-	if paramOrDefault(cfg, "kind", "movies") == "tv" {
-		if scope.tvLib == nil {
-			return media.HomeSection{}, nil
-		}
-		shows, err := scope.app.store.ListShowsForUser(scope.ctx, scope.tvLib.ID, "", genre, "", sort, seen, scope.userID, 0, limit, 0)
-		if err != nil {
-			return media.HomeSection{}, err
-		}
-		section.Kind = "show"
-		section.Shows = shows
-		return section, nil
-	}
-	if scope.movieLib == nil {
-		return media.HomeSection{}, nil
-	}
-	items, err := scope.app.store.ListItemsForUser(scope.ctx, scope.movieLib.ID, "", genre, "", sort, seen, scope.userID, 0, limit, 0)
-	if err != nil {
-		return media.HomeSection{}, err
-	}
-	section.Items = items
-	return section, nil
-}
-
 // defaultHomeLayout is what every client rendered before layouts existed, so an
 // untouched account sees no change.
 func defaultHomeLayout() media.HomeLayoutDoc {
@@ -612,6 +563,14 @@ func (a *App) resolveHomeLayout(ctx context.Context, userID int64) (media.HomeLa
 		return defaultHomeLayout(), nil
 	}
 	parsed.Source = "user"
+	for i, section := range parsed.Sections {
+		// The genre shelf and the filter shelf were the same query with
+		// different parameter lists; they are one type now, under the name
+		// people recognise.
+		if section.Type == "filter" {
+			parsed.Sections[i].Type = "genre"
+		}
+	}
 	return parsed, nil
 }
 
@@ -668,6 +627,11 @@ func validateHomeLayout(doc media.HomeLayoutDoc) (media.HomeLayoutDoc, error) {
 	}
 	defs := homeSectionDefs()
 	seenIDs := map[string]bool{}
+	for i, section := range doc.Sections {
+		if section.Type == "filter" {
+			doc.Sections[i].Type = "genre"
+		}
+	}
 	seenTypes := map[string]bool{}
 	out := make([]media.HomeLayoutSection, 0, len(doc.Sections))
 	for index, section := range doc.Sections {

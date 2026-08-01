@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"popcorn/internal/media"
@@ -36,15 +37,56 @@ type traktLiveEntry struct {
 	Episode   int    `json:"episode,omitempty"`
 	IMDbID    string `json:"imdbId,omitempty"`
 	TMDbID    int    `json:"tmdbId,omitempty"`
-	TVDbID    int    `json:"tvdbId,omitempty"`
-	ListedAt  string `json:"listedAt,omitempty"`
-	WatchedAt string `json:"watchedAt,omitempty"`
-	AiredAt   string `json:"airedAt,omitempty"`
-	Plays     int    `json:"plays,omitempty"`
+	// An episode's own id says nothing to an artwork lookup; the show's does.
+	ShowTMDbID int    `json:"showTmdbId,omitempty"`
+	TVDbID     int    `json:"tvdbId,omitempty"`
+	ListedAt   string `json:"listedAt,omitempty"`
+	WatchedAt  string `json:"watchedAt,omitempty"`
+	AiredAt    string `json:"airedAt,omitempty"`
+	Plays      int    `json:"plays,omitempty"`
 	// InLibrary and Item are what no third-party client can offer: this one is
 	// on the shelf, press play.
 	InLibrary bool        `json:"inLibrary"`
 	Item      *media.Item `json:"item,omitempty"`
+	// Filled from TMDb for titles the library does not have, so a row can show
+	// a cover and say what it is about.
+	PosterURL string  `json:"posterUrl,omitempty"`
+	Overview  string  `json:"overview,omitempty"`
+	Rating    float64 `json:"rating,omitempty"`
+	Runtime   int     `json:"runtime,omitempty"`
+	Genres    string  `json:"genres,omitempty"`
+}
+
+// traktLiveScope is what a builder needs to say whether a row is on the shelf:
+// the import matchers for movies and episodes, and every show title the library
+// holds, because a show has no external id of its own here.
+type traktLiveScope struct {
+	index traktImportIndex
+	shows map[string]bool
+}
+
+// A library title often carries a local subtitle the source does not have —
+// "Fringe" against "Fringe - Grenzfälle des FBI" — so a prefix up to a
+// separator counts as the same show. Bare prefixes do not, or "Dark" would
+// swallow "Dark Matter".
+func (s traktLiveScope) ownsShow(title string) bool {
+	wanted := strings.ToLower(strings.TrimSpace(title))
+	if wanted == "" {
+		return false
+	}
+	if s.shows[wanted] {
+		return true
+	}
+	for known := range s.shows {
+		if len(known) <= len(wanted) || !strings.HasPrefix(known, wanted) {
+			continue
+		}
+		switch known[len(wanted)] {
+		case ' ', '-', ':', '(', ',':
+			return true
+		}
+	}
+	return false
 }
 
 type traktLiveList struct {
@@ -54,7 +96,7 @@ type traktLiveList struct {
 }
 
 func (a *App) traktLiveWatchlist(w http.ResponseWriter, r *http.Request) {
-	a.serveTraktLive(w, r, "watchlist", func(ctx context.Context, bearer string, index traktImportIndex) ([]traktLiveEntry, error) {
+	a.serveTraktLive(w, r, "watchlist", func(ctx context.Context, bearer string, scope traktLiveScope) ([]traktLiveEntry, error) {
 		source, err := a.traktWatchlist(ctx, bearer)
 		if err != nil {
 			return nil, err
@@ -65,7 +107,7 @@ func (a *App) traktLiveWatchlist(w http.ResponseWriter, r *http.Request) {
 				Kind: "movie", Title: row.Movie.Title, Year: row.Movie.Year, ListedAt: row.ListedAt,
 			}
 			applyTraktIDs(&entry, row.Movie.IDs)
-			matchTraktMovie(&entry, index)
+			matchTraktMovie(&entry, scope.index)
 			entries = append(entries, entry)
 		}
 		for _, row := range source.Shows {
@@ -73,7 +115,7 @@ func (a *App) traktLiveWatchlist(w http.ResponseWriter, r *http.Request) {
 				Kind: "show", Title: row.Show.Title, Year: row.Show.Year, ListedAt: row.ListedAt,
 			}
 			applyTraktIDs(&entry, row.Show.IDs)
-			matchTraktShow(&entry, index)
+			matchTraktShow(&entry, scope)
 			entries = append(entries, entry)
 		}
 		for _, row := range source.Episodes {
@@ -82,7 +124,7 @@ func (a *App) traktLiveWatchlist(w http.ResponseWriter, r *http.Request) {
 				Season: row.Episode.Season, Episode: row.Episode.Number, ListedAt: row.ListedAt,
 			}
 			applyTraktIDs(&entry, row.Episode.IDs)
-			matchTraktEpisode(&entry, index)
+			matchTraktEpisode(&entry, scope.index)
 			entries = append(entries, entry)
 		}
 		return entries, nil
@@ -94,7 +136,7 @@ func (a *App) traktLiveHistory(w http.ResponseWriter, r *http.Request) {
 	if value, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && value > 0 && value <= 500 {
 		limit = value
 	}
-	a.serveTraktLive(w, r, "history", func(ctx context.Context, bearer string, index traktImportIndex) ([]traktLiveEntry, error) {
+	a.serveTraktLive(w, r, "history", func(ctx context.Context, bearer string, scope traktLiveScope) ([]traktLiveEntry, error) {
 		var rows []struct {
 			WatchedAt string `json:"watched_at"`
 			Type      string `json:"type"`
@@ -129,13 +171,13 @@ func (a *App) traktLiveHistory(w http.ResponseWriter, r *http.Request) {
 				entry.Season = row.Episode.Season
 				entry.Episode = row.Episode.Number
 				applyTraktIDs(&entry, row.Episode.IDs)
-				matchTraktEpisode(&entry, index)
+				matchTraktEpisode(&entry, scope.index)
 			default:
 				entry.Kind = "movie"
 				entry.Title = row.Movie.Title
 				entry.Year = row.Movie.Year
 				applyTraktIDs(&entry, row.Movie.IDs)
-				matchTraktMovie(&entry, index)
+				matchTraktMovie(&entry, scope.index)
 			}
 			entries = append(entries, entry)
 		}
@@ -150,7 +192,7 @@ func (a *App) traktLiveRecommendations(w http.ResponseWriter, r *http.Request) {
 	if strings.EqualFold(r.URL.Query().Get("kind"), "shows") {
 		kind = "shows"
 	}
-	a.serveTraktLive(w, r, "recommendations", func(ctx context.Context, bearer string, index traktImportIndex) ([]traktLiveEntry, error) {
+	a.serveTraktLive(w, r, "recommendations", func(ctx context.Context, bearer string, scope traktLiveScope) ([]traktLiveEntry, error) {
 		var rows []struct {
 			Title string          `json:"title"`
 			Year  int             `json:"year"`
@@ -173,11 +215,13 @@ func (a *App) traktLiveRecommendations(w http.ResponseWriter, r *http.Request) {
 			applyTraktIDs(&entry, row.IDs)
 			var reason string
 			if entry.Kind == "movie" {
-				reason = matchTraktMovie(&entry, index)
+				reason = matchTraktMovie(&entry, scope.index)
 			} else {
-				reason = matchTraktShow(&entry, index)
+				reason = matchTraktShow(&entry, scope)
 			}
-			if matchedByID(reason) {
+			// A movie is dropped on an id match; a show on a title match,
+			// because that is the only handle a show has here.
+			if matchedByID(reason) || reason == "show-title" {
 				continue
 			}
 			entries = append(entries, entry)
@@ -196,7 +240,7 @@ func (a *App) traktLiveUpcoming(w http.ResponseWriter, r *http.Request) {
 		days = value
 	}
 	start := time.Now().UTC().AddDate(0, 0, -1).Format("2006-01-02")
-	a.serveTraktLive(w, r, "upcoming", func(ctx context.Context, bearer string, index traktImportIndex) ([]traktLiveEntry, error) {
+	a.serveTraktLive(w, r, "upcoming", func(ctx context.Context, bearer string, scope traktLiveScope) ([]traktLiveEntry, error) {
 		var rows []struct {
 			FirstAired string `json:"first_aired"`
 			Episode    struct {
@@ -218,23 +262,29 @@ func (a *App) traktLiveUpcoming(w http.ResponseWriter, r *http.Request) {
 		entries := make([]traktLiveEntry, 0, len(rows))
 		for _, row := range rows {
 			entry := traktLiveEntry{
-				Kind:      "episode",
-				Title:     row.Episode.Title,
-				ShowTitle: row.Show.Title,
-				Year:      row.Show.Year,
-				Season:    row.Episode.Season,
-				Episode:   row.Episode.Number,
-				AiredAt:   row.FirstAired,
+				Kind:       "episode",
+				Title:      row.Episode.Title,
+				ShowTitle:  row.Show.Title,
+				Year:       row.Show.Year,
+				Season:     row.Episode.Season,
+				Episode:    row.Episode.Number,
+				AiredAt:    row.FirstAired,
+				ShowTMDbID: row.Show.IDs.TMDb,
 			}
 			applyTraktIDs(&entry, row.Episode.IDs)
-			matchTraktEpisode(&entry, index)
+			// Trakt's calendar covers everything you watch; this list is for
+			// the shows actually on the shelf.
+			if !scope.ownsShow(row.Show.Title) {
+				continue
+			}
+			matchTraktEpisode(&entry, scope.index)
 			entries = append(entries, entry)
 		}
 		return entries, nil
 	})
 }
 
-func (a *App) serveTraktLive(w http.ResponseWriter, r *http.Request, name string, build func(context.Context, string, traktImportIndex) ([]traktLiveEntry, error)) {
+func (a *App) serveTraktLive(w http.ResponseWriter, r *http.Request, name string, build func(context.Context, string, traktLiveScope) ([]traktLiveEntry, error)) {
 	user, ok := a.requireUser(w, r)
 	if !ok {
 		return
@@ -255,10 +305,15 @@ func (a *App) serveTraktLive(w http.ResponseWriter, r *http.Request, name string
 		if err != nil {
 			return nil, err
 		}
-		entries, err := build(r.Context(), account.AccessToken, newTraktImportIndex(items))
+		shows, err := a.store.ShowTitleIndex(r.Context())
 		if err != nil {
 			return nil, err
 		}
+		entries, err := build(r.Context(), account.AccessToken, traktLiveScope{index: newTraktImportIndex(items), shows: shows})
+		if err != nil {
+			return nil, err
+		}
+		a.fillTMDbDetails(r.Context(), entries)
 		return traktLiveList{
 			Entries:   entries,
 			FetchedAt: time.Now().UTC().Format(time.RFC3339),
@@ -310,15 +365,18 @@ func matchedByID(reason string) bool {
 	return false
 }
 
-// A show is in the library if any episode of it is; the first one found is
-// enough to open the show.
-func matchTraktShow(entry *traktLiveEntry, index traktImportIndex) string {
-	item, reason := index.matchEpisode(entry.Title, entry.Year, traktIDsPayload{}, traktIDsPayload{}, 1, 1)
-	if item != nil {
-		entry.InLibrary = true
+// A show is in the library if the library holds episodes under that title.
+// Matching an episode by number missed anything whose first episode is not
+// S01E01 — which is why owned shows kept being recommended.
+func matchTraktShow(entry *traktLiveEntry, scope traktLiveScope) string {
+	if !scope.ownsShow(entry.Title) {
+		return ""
+	}
+	entry.InLibrary = true
+	if item, _ := scope.index.matchEpisode(entry.Title, entry.Year, traktIDsPayload{}, traktIDsPayload{}, 1, 1); item != nil {
 		entry.Item = item
 	}
-	return reason
+	return "show-title"
 }
 
 func matchTraktEpisode(entry *traktLiveEntry, index traktImportIndex) string {
@@ -442,4 +500,176 @@ func traktLiveCollectionKey(kind string) string {
 		return "shows"
 	}
 	return "movies"
+}
+
+// ── Covers and synopses for what the library does not have ──
+//
+// A library title has artwork on disk; a suggestion has nothing but ids. TMDb
+// fills that in, cached in tmdb_titles so a second look costs no requests, and
+// fetched a few at a time so a list of forty does not open forty connections.
+
+const (
+	tmdbPosterBase   = "https://image.tmdb.org/t/p/w342"
+	tmdbDetailWorker = 6
+)
+
+func (a *App) fillTMDbDetails(ctx context.Context, entries []traktLiveEntry) {
+	if !a.tmdbConfigured() {
+		return
+	}
+	wanted := map[string][]int{}
+	for _, entry := range entries {
+		id := artworkTMDbID(entry)
+		if entry.InLibrary || id <= 0 {
+			continue
+		}
+		wanted[tmdbKindFor(entry.Kind)] = append(wanted[tmdbKindFor(entry.Kind)], id)
+	}
+	if len(wanted) == 0 {
+		return
+	}
+
+	known := map[string]media.TMDbTitle{}
+	for kind, ids := range wanted {
+		cached, err := a.store.TMDbTitles(ctx, kind, ids)
+		if err != nil {
+			continue
+		}
+		for id, title := range cached {
+			known[tmdbCacheKey(kind, id)] = title
+		}
+	}
+
+	missing := []struct {
+		kind string
+		id   int
+	}{}
+	seen := map[string]bool{}
+	for kind, ids := range wanted {
+		for _, id := range ids {
+			key := tmdbCacheKey(kind, id)
+			if seen[key] || known[key].TMDbID > 0 {
+				continue
+			}
+			seen[key] = true
+			missing = append(missing, struct {
+				kind string
+				id   int
+			}{kind, id})
+		}
+	}
+
+	if len(missing) > 0 {
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		work := make(chan struct {
+			kind string
+			id   int
+		})
+		for worker := 0; worker < tmdbDetailWorker; worker++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for job := range work {
+					title, err := a.fetchTMDbTitle(ctx, job.kind, job.id)
+					if err != nil {
+						continue
+					}
+					_ = a.store.SaveTMDbTitle(ctx, title)
+					mu.Lock()
+					known[tmdbCacheKey(job.kind, job.id)] = title
+					mu.Unlock()
+				}
+			}()
+		}
+		for _, job := range missing {
+			select {
+			case work <- job:
+			case <-ctx.Done():
+			}
+		}
+		close(work)
+		wg.Wait()
+	}
+
+	for i := range entries {
+		entry := &entries[i]
+		id := artworkTMDbID(*entry)
+		if entry.InLibrary || id <= 0 {
+			continue
+		}
+		title, ok := known[tmdbCacheKey(tmdbKindFor(entry.Kind), id)]
+		if !ok {
+			continue
+		}
+		if title.PosterPath != "" {
+			entry.PosterURL = tmdbPosterBase + title.PosterPath
+		}
+		entry.Overview = title.Overview
+		entry.Rating = title.Rating
+		entry.Runtime = title.Runtime
+		entry.Genres = title.Genres
+	}
+}
+
+func (a *App) fetchTMDbTitle(ctx context.Context, kind string, id int) (media.TMDbTitle, error) {
+	path := "/3/movie/" + strconv.Itoa(id)
+	if kind == "show" {
+		path = "/3/tv/" + strconv.Itoa(id)
+	}
+	var res struct {
+		Title        string  `json:"title"`
+		Name         string  `json:"name"`
+		Overview     string  `json:"overview"`
+		PosterPath   string  `json:"poster_path"`
+		BackdropPath string  `json:"backdrop_path"`
+		VoteAverage  float64 `json:"vote_average"`
+		Runtime      int     `json:"runtime"`
+		EpisodeTimes []int   `json:"episode_run_time"`
+		Genres       []struct {
+			Name string `json:"name"`
+		} `json:"genres"`
+	}
+	if err := a.tmdbGet(ctx, path, nil, &res); err != nil {
+		return media.TMDbTitle{}, err
+	}
+	runtime := res.Runtime
+	if runtime == 0 && len(res.EpisodeTimes) > 0 {
+		runtime = res.EpisodeTimes[0]
+	}
+	names := make([]string, 0, len(res.Genres))
+	for _, genre := range res.Genres {
+		names = append(names, genre.Name)
+	}
+	return media.TMDbTitle{
+		Kind:         kind,
+		TMDbID:       id,
+		Title:        firstNonEmpty(res.Title, res.Name),
+		Overview:     res.Overview,
+		PosterPath:   res.PosterPath,
+		BackdropPath: res.BackdropPath,
+		Rating:       res.VoteAverage,
+		Runtime:      runtime,
+		Genres:       strings.Join(names, ", "),
+	}, nil
+}
+
+// An episode borrows its show's artwork and synopsis: the poster of a single
+// episode is not what a row wants to show, and often does not exist.
+func artworkTMDbID(entry traktLiveEntry) int {
+	if entry.Kind == "episode" {
+		return entry.ShowTMDbID
+	}
+	return entry.TMDbID
+}
+
+func tmdbKindFor(kind string) string {
+	if kind == "movie" {
+		return "movie"
+	}
+	return "show"
+}
+
+func tmdbCacheKey(kind string, id int) string {
+	return kind + ":" + strconv.Itoa(id)
 }

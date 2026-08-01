@@ -2940,3 +2940,97 @@ func (s *Store) DeleteTraktCollectionEntries(ctx context.Context, userID int64, 
 	}
 	return tx.Commit()
 }
+
+// TMDbTitle is what a title looks like when popcorn does not have the file:
+// enough to show a cover and say what it is about.
+type TMDbTitle struct {
+	Kind         string
+	TMDbID       int
+	Title        string
+	Overview     string
+	PosterPath   string
+	BackdropPath string
+	Rating       float64
+	Runtime      int
+	Genres       string
+}
+
+func (s *Store) TMDbTitles(ctx context.Context, kind string, ids []int) (map[int]TMDbTitle, error) {
+	out := map[int]TMDbTitle{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, 0, len(ids)+1)
+	args = append(args, kind)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT kind, tmdb_id, COALESCE(title, ''), COALESCE(overview, ''), COALESCE(poster_path, ''), COALESCE(backdrop_path, ''), COALESCE(rating, 0), COALESCE(runtime, 0), COALESCE(genres, '')
+FROM tmdb_titles
+WHERE kind = ? AND tmdb_id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var title TMDbTitle
+		if err := rows.Scan(&title.Kind, &title.TMDbID, &title.Title, &title.Overview, &title.PosterPath, &title.BackdropPath, &title.Rating, &title.Runtime, &title.Genres); err != nil {
+			return nil, err
+		}
+		out[title.TMDbID] = title
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SaveTMDbTitle(ctx context.Context, title TMDbTitle) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO tmdb_titles(kind, tmdb_id, title, overview, poster_path, backdrop_path, rating, runtime, genres)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(kind, tmdb_id) DO UPDATE SET
+	title = excluded.title,
+	overview = excluded.overview,
+	poster_path = excluded.poster_path,
+	backdrop_path = excluded.backdrop_path,
+	rating = excluded.rating,
+	runtime = excluded.runtime,
+	genres = excluded.genres,
+	fetched_at = CURRENT_TIMESTAMP`,
+		title.Kind, title.TMDbID, title.Title, title.Overview, title.PosterPath, title.BackdropPath, title.Rating, title.Runtime, title.Genres)
+	return err
+}
+
+// ShowTitleIndex is every title the library knows a show by — the folder title
+// and, where the NFO has one, the original title. A German library files Fringe
+// as "Fringe - Grenzfälle des FBI", so a source that says "Fringe" has to match
+// on more than string equality.
+func (s *Store) ShowTitleIndex(ctx context.Context) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT DISTINCT LOWER(TRIM(COALESCE(show_title, '')))
+FROM media_items
+WHERE kind = 'episode' AND COALESCE(show_title, '') != ''
+UNION
+SELECT DISTINCT LOWER(TRIM(COALESCE(original_title, '')))
+FROM media_shows
+WHERE COALESCE(original_title, '') != ''
+UNION
+SELECT DISTINCT LOWER(TRIM(COALESCE(show_title, '')))
+FROM media_shows
+WHERE COALESCE(show_title, '') != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var title string
+		if err := rows.Scan(&title); err != nil {
+			return nil, err
+		}
+		if title != "" {
+			out[title] = true
+		}
+	}
+	return out, rows.Err()
+}

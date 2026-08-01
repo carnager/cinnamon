@@ -26,9 +26,15 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,6 +72,7 @@ fun DiscoverPage(
     onHide: (TraktEntry) -> Unit,
     onArrived: (PopItem) -> Unit,
 ) {
+    var opened by remember { mutableStateOf<TraktEntry?>(null) }
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
@@ -105,9 +112,90 @@ fun DiscoverPage(
                         showHide = chip == DiscoverChip.ForYou,
                         onWant = { onWant(entry) },
                         onHide = { onHide(entry) },
+                        onOpen = { opened = it },
                         onArrived = onArrived,
                     )
                 }
+            }
+        }
+    }
+
+    opened?.let { entry ->
+        DiscoverSheet(
+            session = session,
+            entry = entry,
+            wanted = wantedKeys.contains(entry.key),
+            onWant = {
+                onWant(entry)
+                opened = null
+            },
+            onHide = {
+                onHide(entry)
+                opened = null
+            },
+            onDismiss = { opened = null },
+        )
+    }
+}
+
+// A synopsis before you decide you want it — the thing a row has no room for.
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DiscoverSheet(
+    session: Session,
+    entry: TraktEntry,
+    wanted: Boolean,
+    onWant: () -> Unit,
+    onHide: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = Surface1) {
+        Column(
+            Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Box(Modifier.width(96.dp)) {
+                    PosterImage(session, entry.posterUrl, Modifier.fillMaxWidth())
+                }
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        entry.displayTitle,
+                        color = TextColor,
+                        fontSize = 19.sp,
+                        lineHeight = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    val facts = listOfNotNull(
+                        entry.year.takeIf { it > 0 }?.toString(),
+                        entry.runtime.takeIf { it > 0 }?.let { "$it min" },
+                        entry.rating.takeIf { it > 0 }?.let { "★ %.1f".format(it) },
+                    )
+                    if (facts.isNotEmpty()) {
+                        Text(facts.joinToString(" · "), color = Muted, fontSize = 13.sp)
+                    }
+                    if (entry.genres.isNotBlank()) {
+                        Text(entry.genres, color = Teal.copy(alpha = .86f), fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                    if (entry.kind == "episode" && entry.season > 0) {
+                        Text("S%02dE%02d".format(entry.season, entry.episode), color = Muted, fontSize = 13.sp)
+                    }
+                }
+            }
+            Text(
+                entry.overview.ifBlank { "No description available." },
+                color = TextColor.copy(alpha = .82f),
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                DiscoverAction(
+                    if (wanted) "Wanted" else "Want it",
+                    if (wanted) Icons.Default.Check else Icons.Default.Add,
+                    primary = !wanted,
+                    onClick = onWant,
+                )
+                DiscoverAction("Not for me", Icons.Default.VisibilityOff, onClick = onHide)
             }
         }
     }
@@ -121,6 +209,7 @@ private fun DiscoverRow(
     showHide: Boolean,
     onWant: () -> Unit,
     onHide: () -> Unit,
+    onOpen: (TraktEntry) -> Unit,
     onArrived: (PopItem) -> Unit,
 ) {
     val arrived = entry.item
@@ -130,33 +219,17 @@ private fun DiscoverRow(
             .clip(RoundedCornerShape(12.dp))
             .background(Surface1.copy(alpha = .5f))
             .border(1.dp, Line.copy(alpha = .45f), RoundedCornerShape(12.dp))
-            .then(if (arrived != null) Modifier.clickable { onArrived(arrived) } else Modifier)
+            .clickable { if (arrived != null) onArrived(arrived) else onOpen(entry) }
             .padding(10.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Box(Modifier.width(74.dp)) {
-            if (arrived != null) {
-                PosterImage(session, imageUrl(session, arrived.id, arrived.posterMtimeUnix, width = ArtworkCard), Modifier.fillMaxWidth())
+            val poster = if (arrived != null) {
+                imageUrl(session, arrived.id, arrived.posterMtimeUnix, width = ArtworkCard)
             } else {
-                // Nothing to fetch a poster from until it is in the library, so
-                // the placeholder carries the year instead of a broken frame.
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(2f / 3f)
-                        .clip(RoundedCornerShape(9.dp))
-                        .background(Surface2)
-                        .border(1.dp, Line.copy(alpha = .65f), RoundedCornerShape(9.dp)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        entry.year.takeIf { it > 0 }?.toString() ?: "—",
-                        color = Muted,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
+                entry.posterUrl
             }
+            PosterImage(session, poster, Modifier.fillMaxWidth())
         }
         Column(Modifier.weight(1f)) {
             Text(

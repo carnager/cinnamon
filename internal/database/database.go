@@ -331,6 +331,19 @@ CREATE TABLE IF NOT EXISTS recommendation_exclusions (
 	updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 	PRIMARY KEY(user_id, exclusion_key)
 );
+CREATE TABLE IF NOT EXISTS tmdb_titles (
+	kind TEXT NOT NULL,
+	tmdb_id INTEGER NOT NULL,
+	title TEXT,
+	overview TEXT,
+	poster_path TEXT,
+	backdrop_path TEXT,
+	rating REAL,
+	runtime INTEGER,
+	genres TEXT,
+	fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY(kind, tmdb_id)
+);
 CREATE TABLE IF NOT EXISTS trakt_collection_entries (
 	user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 	entry_key TEXT NOT NULL,
@@ -555,6 +568,19 @@ CREATE TABLE IF NOT EXISTS app_updates (
 			PRIMARY KEY(user_id, exclusion_key)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_recommendation_exclusions_user ON recommendation_exclusions(user_id, updated_at)`,
+		`CREATE TABLE IF NOT EXISTS tmdb_titles (
+			kind TEXT NOT NULL,
+			tmdb_id INTEGER NOT NULL,
+			title TEXT,
+			overview TEXT,
+			poster_path TEXT,
+			backdrop_path TEXT,
+			rating REAL,
+			runtime INTEGER,
+			genres TEXT,
+			fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY(kind, tmdb_id)
+		)`,
 		`CREATE TABLE IF NOT EXISTS trakt_collection_entries (
 			user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			entry_key TEXT NOT NULL,

@@ -169,6 +169,8 @@ data class HomeSection(
     val title: String,
     val subtitle: String,
     val more: String,
+    // The parameters the shelf was built from, so a client can reproduce it.
+    val params: Map<String, String>,
     val items: List<PopItem>,
     val shows: List<ShowSummary>,
     val entries: List<Recommendation>,

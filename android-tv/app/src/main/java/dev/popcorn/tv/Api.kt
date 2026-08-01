@@ -168,6 +168,9 @@ private fun jsonToHomeSections(arr: JSONArray): List<HomeSection> = (0 until arr
         title = o.optString("title"),
         subtitle = o.optString("subtitle"),
         more = o.optString("more"),
+        params = (o.optJSONObject("params") ?: JSONObject()).let { params ->
+            params.keys().asSequence().associateWith { params.optString(it) }
+        },
         items = (0 until items.length()).map { jsonToItem(items.getJSONObject(it)) },
         shows = (0 until shows.length()).map { jsonToShow(shows.getJSONObject(it)) },
         entries = (0 until entries.length()).map { index ->

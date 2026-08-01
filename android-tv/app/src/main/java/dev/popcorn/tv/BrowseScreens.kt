@@ -1903,12 +1903,18 @@ fun CuratedLanding(
         }
         itemsIndexed(shelves, key = { _, section -> section.id }) { index, section ->
             val firstShelf = index == 0
-            val moreVisible = section.more.isNotBlank() && section.contentSize() > HomeShelfLimit
+            // The shelf holds what the server sent: the item count is the
+            // user's, set per shelf, and a LazyRow costs nothing for the cards
+            // that are off screen. More opens the whole set at once — offered
+            // when the shelf is full, because then there is likely more behind
+            // it, or when the section names a screen of its own.
+            val moreVisible = section.more.isNotBlank() ||
+                (section.items.isNotEmpty() && section.contentSize() >= section.configuredLimit())
             if (section.shows.isNotEmpty()) {
                 PosterShelf(
                     section.title,
                     section.subtitle,
-                    section.shows.take(HomeShelfLimit),
+                    section.shows,
                     key = { it.title },
                     autoFocusFirst = firstShelf,
                     moreVisible = moreVisible,
@@ -1924,7 +1930,7 @@ fun CuratedLanding(
                 PosterShelf(
                     section.title,
                     section.subtitle,
-                    section.items.take(HomeShelfLimit),
+                    section.items,
                     key = { it.id },
                     autoFocusFirst = firstShelf,
                     moreVisible = moreVisible,
@@ -1944,7 +1950,11 @@ private fun HomeSection.hasContent(): Boolean = items.isNotEmpty() || shows.isNo
 
 private fun HomeSection.contentSize(): Int = maxOf(items.size, shows.size, entries.size)
 
-private const val HomeShelfLimit = 10
+// What the shelf asked the server for; the server defaults to this too.
+private const val HomeSectionDefaultLimit = 24
+
+private fun HomeSection.configuredLimit(): Int =
+    params["limit"]?.trim()?.toIntOrNull()?.takeIf { it > 0 } ?: HomeSectionDefaultLimit
 
 @Composable
 fun ItemShelfView(

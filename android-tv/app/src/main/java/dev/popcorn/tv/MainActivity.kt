@@ -786,6 +786,41 @@ fun PopcornApp() {
     // The "More" chip on a shelf. Known targets open the screen that shows the
     // whole set; anything else falls back to a plain shelf of what the section
     // carries, so a section type this build predates still works.
+    // A filter shelf shows what fits; More should show the rest of it. The
+    // library page can reproduce the shelf when its filters are ones the page
+    // also has — otherwise it would quietly widen the result, so fall back to a
+    // grid of exactly what the shelf holds.
+    fun openSectionInLibrary(section: HomeSection, activeSession: Session) {
+        val unsupported = listOf("studio", "country", "certificate", "maxMinutes")
+        val widensResult = unsupported.any { section.params[it].orEmpty().isNotBlank() } ||
+            section.params["genreMatch"].equals("all", ignoreCase = true)
+        val library = if (section.params["kind"] == "tv" || section.shows.isNotEmpty()) {
+            libraries.firstOrNull { it.type == "tv" }
+        } else {
+            libraries.firstOrNull { it.type == "movies" || it.type == "movie" }
+        }
+        val genre = section.params["genre"].orEmpty()
+        val decades = section.params["decades"].orEmpty()
+        val reproducible = library != null && !widensResult && (genre.isNotBlank() || decades.isNotBlank())
+        if (reproducible) {
+            val seen = section.params["seen"].orEmpty().takeIf { it != "any" }.orEmpty()
+            val sort = section.params["sort"].orEmpty().takeIf { it != "title" }.orEmpty()
+            loadLibraryPage(
+                library!!,
+                activeSession,
+                page = 0,
+                genre = genre,
+                sort = sort,
+                minRating = section.params["minRating"]?.toDoubleOrNull() ?: 0.0,
+                seenStatus = seen,
+                decades = decades,
+                resetFiltersOnLibraryChange = false,
+            )
+            return
+        }
+        if (section.items.isNotEmpty()) screen = Screen.ItemShelf(section.title, section.items)
+    }
+
     fun openShelfTarget(section: HomeSection) {
         val active = session ?: return
         when (section.more) {
@@ -799,7 +834,7 @@ fun PopcornApp() {
                 refreshWatchlist(active)
                 screen = Screen.Watchlist
             }
-            else -> if (section.items.isNotEmpty()) screen = Screen.ItemShelf(section.title, section.items)
+            else -> openSectionInLibrary(section, active)
         }
     }
 

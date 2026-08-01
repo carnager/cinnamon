@@ -724,6 +724,22 @@ function traktSection(status) {
       description: "Pull watched history, watchlist, ratings, or hidden recommendations into Cinnamon.",
       control: [importSeen, importWatchlist, importRatings, importHidden],
     }));
+
+    const syncCollection = el("button", "secondary", "Sync library");
+    syncCollection.type = "button";
+    syncCollection.addEventListener("click", () => runSettingsAction(syncCollection, output, async () => {
+      const summary = await api("/api/trakt/sync-collection", { method: "POST" });
+      const parts = [];
+      if (summary.movies) parts.push(`${summary.movies} movies`);
+      if (summary.episodes) parts.push(`${summary.episodes} episodes from ${summary.shows} shows`);
+      if (!parts.length) return `Trakt already had everything${summary.alreadyCollected ? ` (${summary.alreadyCollected} titles)` : ""}.`;
+      return `Collected ${parts.join(" and ")}${summary.alreadyCollected ? ` · ${summary.alreadyCollected} already there` : ""}${summary.skipped ? ` · ${summary.skipped} could not be identified` : ""}.`;
+    }));
+    section.append(settingRow({
+      title: "Send your library to Trakt",
+      description: "Marks everything in your libraries as collected, so Trakt stops recommending films you already have.",
+      control: syncCollection,
+    }));
   }
 
   const exportInput = document.createElement("input");

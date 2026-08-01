@@ -197,6 +197,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/trakt/status", a.traktStatus)
 	mux.HandleFunc("POST /api/trakt/device", a.traktDeviceCode)
 	mux.HandleFunc("POST /api/trakt/device/token", a.traktDeviceToken)
+	mux.HandleFunc("POST /api/trakt/sync-collection", a.traktSyncCollectionEndpoint)
 	mux.HandleFunc("POST /api/trakt/import-watched", a.traktImportWatched)
 	mux.HandleFunc("POST /api/trakt/import-watchlist", a.traktImportWatchlist)
 	mux.HandleFunc("POST /api/trakt/import-ratings", a.traktImportRatings)

@@ -249,9 +249,15 @@ func homeSectionDefs() map[string]homeSectionDef {
 				Params: []media.HomeSectionParam{
 					{Name: "kind", Label: "Media", Type: "enum", Options: []string{"movies", "tv"}, Default: "movies"},
 					{Name: "genre", Label: "Genre", Type: "string", Multi: true},
+					// A title can carry several genres, studios and countries at
+					// once, so "all of them" is a question worth asking. It is
+					// not for a decade or a certificate: an item has one of each.
+					{Name: "genreMatch", Label: "Genres", Type: "enum", Options: []string{"any", "all"}, Default: "any"},
 					{Name: "decades", Label: "Decade", Type: "string", Multi: true},
 					{Name: "country", Label: "Country", Type: "string", Multi: true},
+					{Name: "countryMatch", Label: "Countries", Type: "enum", Options: []string{"any", "all"}, Default: "any"},
 					{Name: "studio", Label: "Studio", Type: "string", Multi: true},
+					{Name: "studioMatch", Label: "Studios", Type: "enum", Options: []string{"any", "all"}, Default: "any"},
 					{Name: "certificate", Label: "Rated", Type: "string", Multi: true},
 					{Name: "maxMinutes", Label: "Max length", Type: "int", Suffix: "min", Choices: []string{"", "45", "60", "75", "90", "105", "120", "150"}},
 					{Name: "minRating", Label: "Min rating", Type: "number", Suffix: "and up", Choices: []string{"", "5", "6", "6.5", "7", "7.5", "8", "8.5"}},
@@ -375,6 +381,9 @@ func buildFilterSection(scope homeSectionScope, cfg media.HomeLayoutSection) (me
 		Studio:         strings.TrimSpace(cfg.Params["studio"]),
 		Country:        strings.TrimSpace(cfg.Params["country"]),
 		ContentRatings: strings.TrimSpace(cfg.Params["certificate"]),
+		GenreMatch:     paramOrDefault(cfg, "genreMatch", "any"),
+		StudioMatch:    paramOrDefault(cfg, "studioMatch", "any"),
+		CountryMatch:   paramOrDefault(cfg, "countryMatch", "any"),
 		MaxDurationMS:  int64(maxMinutes) * 60_000,
 		Sort:           sortMode,
 		SeenStatus:     seen,
@@ -396,6 +405,9 @@ func buildFilterSection(scope homeSectionScope, cfg media.HomeLayoutSection) (me
 			Studio:         opts.Studio,
 			Country:        opts.Country,
 			ContentRatings: opts.ContentRatings,
+			GenreMatch:     opts.GenreMatch,
+			StudioMatch:    opts.StudioMatch,
+			CountryMatch:   opts.CountryMatch,
 			MaxDurationMS:  opts.MaxDurationMS,
 			Sort:           sortMode,
 			SeenStatus:     seen,
@@ -440,7 +452,12 @@ func filterSectionTitle(cfg media.HomeLayoutSection) string {
 			}
 			values[i] = entry
 		}
-		parts = append(parts, strings.Join(values, ", "))
+		// "Horror + Comedy" reads as both, "Horror, Thriller" as either.
+		separator := ", "
+		if strings.EqualFold(cfg.Params[name+"Match"], "all") {
+			separator = " + "
+		}
+		parts = append(parts, strings.Join(values, separator))
 	}
 	if len(parts) > 0 {
 		return strings.Join(parts, " · ")

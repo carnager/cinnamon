@@ -31,6 +31,10 @@ type SearchOptions struct {
 	Country        string
 	ContentRatings string
 	MaxDurationMS  int64
+	// Per-dimension match mode, "any" (default) or "all".
+	GenreMatch     string
+	StudioMatch    string
+	CountryMatch   string
 	Sort           string
 	SeenStatus     string
 	UserID         int64
@@ -53,6 +57,9 @@ type ShowOptions struct {
 	Country        string
 	ContentRatings string
 	MaxDurationMS  int64
+	GenreMatch     string
+	StudioMatch    string
+	CountryMatch   string
 	Sort           string
 	SeenStatus     string
 	UserID         int64
@@ -744,7 +751,7 @@ func (s *Store) AlphabetIndex(ctx context.Context, opts AlphabetOptions) ([]Alph
 	genres := splitFilterList(opts.Genre)
 	switch opts.Kind {
 	case "tv":
-		genreWhere, genreArgs := itemGenreFilterSQL("mi.genres", genres)
+		genreWhere, genreArgs := itemGenreFilterSQL("mi.genres", genres, "")
 		decadeHaving := decadeFilterSQL(showYearExpr, opts.Decades)
 		if decadeHaving != "" {
 			decadeHaving = "HAVING 1 = 1 " + decadeHaving
@@ -763,7 +770,7 @@ GROUP BY mi.library_id, mi.show_title
 `+decadeHaving+`
 ORDER BY sort_title`, args...)
 	default:
-		genreWhere, genreArgs := itemGenreFilterSQL("genres", genres)
+		genreWhere, genreArgs := itemGenreFilterSQL("genres", genres, "")
 		decadeWhere := decadeFilterSQL(itemYearExpr, opts.Decades)
 		args := []any{opts.LibraryID, opts.LibraryID}
 		args = append(args, genreArgs...)
@@ -871,11 +878,11 @@ func (s *Store) searchItems(ctx context.Context, opts SearchOptions) ([]Item, er
 	kind := opts.Kind
 	genre := opts.Genre
 	genres := splitFilterList(genre)
-	genreWhere, genreArgs := itemGenreFilterSQL("genres", genres)
+	genreWhere, genreArgs := itemGenreFilterSQL("genres", genres, opts.GenreMatch)
 	decadeWhere := decadeFilterSQL(itemYearExpr, opts.Decades)
 	nameStartsWith := strings.TrimSpace(opts.NameStartsWith)
-	studioWhere, studioArgs := likeAnyFilterSQL("studios", opts.Studio)
-	countryWhere, countryArgs := likeAnyFilterSQL("countries", opts.Country)
+	studioWhere, studioArgs := likeAnyFilterSQL("studios", opts.Studio, opts.StudioMatch)
+	countryWhere, countryArgs := likeAnyFilterSQL("countries", opts.Country, opts.CountryMatch)
 	contentRatingWhere, contentRatingArgs := contentRatingFilterSQL(opts.ContentRatings)
 	seenStatus := normalizedSeenStatus(opts.SeenStatus)
 	userID := opts.UserID
@@ -1114,7 +1121,7 @@ func decadeFilterSQL(yearExpr, decades string) string {
 // likeAnyFilterSQL matches a comma-separated column against any of the wanted
 // values, which is how studios and countries are stored: one row can read
 // "Vereinigtes Königreich, Vereinigte Staaten".
-func likeAnyFilterSQL(column, values string) (string, []any) {
+func likeAnyFilterSQL(column, values, mode string) (string, []any) {
 	wanted := splitFilterList(values)
 	if len(wanted) == 0 {
 		return "", nil
@@ -1125,7 +1132,7 @@ func likeAnyFilterSQL(column, values string) (string, []any) {
 		clauses = append(clauses, "COALESCE("+column+", '') LIKE '%' || ? || '%'")
 		args = append(args, value)
 	}
-	return "AND (" + strings.Join(clauses, " OR ") + ")", args
+	return "AND (" + strings.Join(clauses, matchJoiner(mode)) + ")", args
 }
 
 // contentRatingFilterSQL keeps a shelf to a set of certificates ("G,PG,FSK 6"),
@@ -1145,7 +1152,17 @@ func contentRatingFilterSQL(ratings string) (string, []any) {
 	return "AND (" + strings.Join(clauses, " OR ") + ")", args
 }
 
-func itemGenreFilterSQL(column string, genres []string) (string, []any) {
+// matchJoiner turns a match mode into the operator between the values of one
+// dimension: "all" wants every value present on the item, anything else wants
+// any of them. Dimensions always AND with each other regardless.
+func matchJoiner(mode string) string {
+	if strings.EqualFold(strings.TrimSpace(mode), "all") {
+		return " AND "
+	}
+	return " OR "
+}
+
+func itemGenreFilterSQL(column string, genres []string, mode string) (string, []any) {
 	if len(genres) == 0 {
 		return "", nil
 	}
@@ -1155,10 +1172,10 @@ func itemGenreFilterSQL(column string, genres []string) (string, []any) {
 		clauses = append(clauses, column+" LIKE '%' || ? || '%'")
 		args = append(args, genre)
 	}
-	return "AND (" + strings.Join(clauses, " OR ") + ")", args
+	return "AND (" + strings.Join(clauses, matchJoiner(mode)) + ")", args
 }
 
-func showGenreFilterSQL(genres []string) (string, []any) {
+func showGenreFilterSQL(genres []string, mode string) (string, []any) {
 	if len(genres) == 0 {
 		return "", nil
 	}
@@ -1168,7 +1185,7 @@ func showGenreFilterSQL(genres []string) (string, []any) {
 		clauses = append(clauses, "(mi.genres LIKE '%' || ? || '%' OR ms.genres LIKE '%' || ? || '%')")
 		args = append(args, genre, genre)
 	}
-	return "AND (" + strings.Join(clauses, " OR ") + ")", args
+	return "AND (" + strings.Join(clauses, matchJoiner(mode)) + ")", args
 }
 
 const itemSelectColumns = `SELECT id, library_id, path, kind, title, sort_title, COALESCE(original_title, ''), COALESCE(year, 0), COALESCE(duration_ms, 0),
@@ -1462,11 +1479,11 @@ func (s *Store) SearchShows(ctx context.Context, opts ShowOptions) ([]ShowSummar
 	nq := database.SearchNormalize(q)
 	genre := opts.Genre
 	genres := splitFilterList(genre)
-	genreWhere, genreArgs := showGenreFilterSQL(genres)
+	genreWhere, genreArgs := showGenreFilterSQL(genres, opts.GenreMatch)
 	decadeHaving := decadeFilterSQL(showYearExpr, opts.Decades)
 	nameStartsWith := strings.TrimSpace(opts.NameStartsWith)
-	studioWhere, studioArgs := likeAnyFilterSQL("mi.studios", opts.Studio)
-	countryWhere, countryArgs := likeAnyFilterSQL("mi.countries", opts.Country)
+	studioWhere, studioArgs := likeAnyFilterSQL("mi.studios", opts.Studio, opts.StudioMatch)
+	countryWhere, countryArgs := likeAnyFilterSQL("mi.countries", opts.Country, opts.CountryMatch)
 	contentRatingWhere, contentRatingArgs := contentRatingFilterSQL(opts.ContentRatings)
 	contentRatingWhere = strings.ReplaceAll(contentRatingWhere, "official_rating", "mi.official_rating")
 	seenStatus := normalizedSeenStatus(opts.SeenStatus)

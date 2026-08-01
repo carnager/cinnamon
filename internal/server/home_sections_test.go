@@ -475,3 +475,48 @@ func TestFilterShelfAcceptsSeveralValuesPerDimension(t *testing.T) {
 		t.Fatalf("title = %q, want both values", sections[0].Title)
 	}
 }
+
+func TestFilterShelfMatchesAnyOrAllOfADimension(t *testing.T) {
+	app, store, userID := newHomeSectionsApp(t)
+	ctx := context.Background()
+
+	for _, item := range []media.Item{
+		{LibraryID: "movies", Kind: "movie", Path: "/movies/both.mkv", Title: "Both Genres", SortTitle: "both", Genres: "Horror, Comedy", Rating: 8.0, MTimeUnix: 50},
+		{LibraryID: "movies", Kind: "movie", Path: "/movies/one.mkv", Title: "One Genre", SortTitle: "one", Genres: "Comedy", Rating: 7.0, MTimeUnix: 51},
+	} {
+		if err := store.UpsertItem(ctx, item); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	layout, err := validateHomeLayout(media.HomeLayoutDoc{Sections: []media.HomeLayoutSection{
+		{ID: "either", Type: "filter", Enabled: true, Params: map[string]string{"genre": "Horror,Comedy", "sort": "rating"}},
+		{ID: "both", Type: "filter", Enabled: true, Params: map[string]string{"genre": "Horror,Comedy", "genreMatch": "all", "sort": "rating"}},
+	}})
+	if err != nil {
+		t.Fatalf("validate layout: %v", err)
+	}
+	body, _ := json.Marshal(layout)
+	if err := store.SaveHomeLayout(ctx, userID, string(body)); err != nil {
+		t.Fatalf("save layout: %v", err)
+	}
+
+	sections := homeSectionsFor(t, app, userID)
+	if len(sections) != 2 {
+		t.Fatalf("sections = %#v", sectionTypes(sections))
+	}
+	either, both := sections[0], sections[1]
+	if len(either.Items) < 2 {
+		t.Fatalf("any-shelf matched %d items, want every title with either genre", len(either.Items))
+	}
+	if len(both.Items) != 1 || both.Items[0].Title != "Both Genres" {
+		titles := make([]string, 0, len(both.Items))
+		for _, item := range both.Items {
+			titles = append(titles, item.Title)
+		}
+		t.Fatalf("all-shelf matched %v, want only the title carrying both", titles)
+	}
+	if either.Title != "Horror, Comedy" || both.Title != "Horror + Comedy" {
+		t.Fatalf("titles = %q and %q", either.Title, both.Title)
+	}
+}

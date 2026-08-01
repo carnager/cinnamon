@@ -985,18 +985,22 @@ function homeLayoutParam(param, entry, redraw) {
   const wrap = el("label", "home-layout-param");
   wrap.append(el("span", null, param.label || param.name));
   let input;
-  if (param.type === "enum") {
+  // A parameter that declares options or choices is a list, not a free field —
+  // "any length" has to be selectable, not just an empty box.
+  const choices = param.options?.length ? param.options : param.choices;
+  if (choices?.length) {
     input = el("select");
-    for (const option of param.options || []) {
-      const node = el("option", null, option);
+    for (const option of choices) {
+      const node = el("option", null, option === "" ? "Any" : (param.suffix ? `${option} ${param.suffix}` : option));
       node.value = option;
       input.append(node);
     }
-    input.value = entry.params[param.name] || param.default || (param.options || [])[0] || "";
+    input.value = entry.params[param.name] || param.default || choices[0] || "";
   } else {
     input = el("input");
-    input.type = param.type === "int" ? "number" : "text";
+    input.type = param.type === "int" || param.type === "number" ? "number" : "text";
     if (param.type === "int") input.min = "1";
+    if (param.type === "number") { input.min = "0"; input.step = "0.5"; }
     input.value = entry.params[param.name] || param.default || "";
     if (param.required) input.placeholder = "required";
   }
@@ -1004,7 +1008,7 @@ function homeLayoutParam(param, entry, redraw) {
     const value = String(input.value || "").trim();
     if (value) entry.params[param.name] = value;
     else delete entry.params[param.name];
-    if (param.type === "enum") redraw();
+    if (choices?.length) redraw();
   });
   wrap.append(input);
   return wrap;

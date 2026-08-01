@@ -1509,15 +1509,11 @@ fun PopcornApp() {
                 title = "SHELF OPTIONS",
                 subtitle = sectionLabel(section, definition),
                 rows = definition.params.map { param ->
-                    val value = section.params[param.name]?.ifBlank { null } ?: param.default
+                    val value = section.params[param.name]?.ifBlank { null } ?: param.default.takeIf { param.required || param.type != "string" }.orEmpty()
                     TvOptionRow(
                         key = param.name,
                         label = param.label.ifBlank { param.name },
-                        value = when {
-                            param.name == "genre" -> value.ifBlank { "Choose…" }
-                            param.type == "int" -> "$value items"
-                            else -> value.ifBlank { "—" }
-                        },
+                        value = paramValueLabel(param, value),
                         onCycle = {
                             when {
                                 param.type == "string" && section.type == "genre" -> {

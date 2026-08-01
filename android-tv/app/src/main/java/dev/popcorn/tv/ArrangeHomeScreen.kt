@@ -487,14 +487,14 @@ private fun rowDetail(section: HomeLayoutSection, content: HomeSection?): String
 // The catalog says what a shelf's parameters mean, so the chips read the same
 // way whatever section types the server grows next.
 fun sectionParamChips(section: HomeLayoutSection, definition: HomeSectionType?): List<String> {
-    val order = definition?.params?.map { it.name } ?: section.params.keys.toList()
-    return order.mapNotNull { name ->
-        val value = section.params[name]?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-        if (name == "genre") return@mapNotNull null
-        when (name) {
-            "limit" -> "$value items"
-            "kind" -> if (value == "tv") "TV shows" else "Movies"
-            "seen" -> if (value == "unseen") "Unseen" else "Any"
+    val params = definition?.params ?: return emptyList()
+    return params.mapNotNull { param ->
+        if (param.name == "genre") return@mapNotNull null
+        val value = section.params[param.name]?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        when {
+            param.suffix.isNotBlank() -> "$value ${param.suffix}"
+            param.name == "kind" -> if (value == "tv") "TV shows" else "Movies"
+            param.name == "seen" -> if (value == "unseen") "Unseen" else "Any"
             else -> value.replaceFirstChar { it.uppercase() }
         }
     }

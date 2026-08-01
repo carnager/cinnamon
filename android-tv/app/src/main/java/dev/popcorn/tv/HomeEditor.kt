@@ -274,18 +274,29 @@ private fun TvOptionRowItem(row: TvOptionRow, focusRequester: FocusRequester?) {
     }
 }
 
-val homeLimitChoices = listOf("10", "16", "24", "40", "60")
+// The values a parameter can step through come from the catalog: enums list
+// their options, numbers list their choices. Nothing here knows what a
+// particular parameter means.
+fun paramChoices(param: HomeSectionParam): List<String> = when {
+    param.choices.isNotEmpty() -> param.choices
+    param.type == "enum" -> param.options
+    else -> emptyList()
+}
 
 fun cycleParam(section: HomeLayoutSection, param: HomeSectionParam): HomeLayoutSection {
-    val choices = when (param.type) {
-        "enum" -> param.options
-        "int" -> homeLimitChoices
-        else -> return section
-    }
+    val choices = paramChoices(param)
     if (choices.isEmpty()) return section
     val current = section.params[param.name] ?: param.default
     val next = choices[(choices.indexOf(current).takeIf { it >= 0 }?.plus(1) ?: 0) % choices.size]
-    return section.copy(params = section.params + (param.name to next))
+    val params = if (next.isBlank()) section.params - param.name else section.params + (param.name to next)
+    return section.copy(params = params)
+}
+
+// "90 min", "7.5 and up", "24 items" — or "Any" when the parameter is unset.
+fun paramValueLabel(param: HomeSectionParam, value: String): String {
+    if (value.isBlank()) return "Any"
+    if (param.suffix.isBlank()) return value
+    return "$value ${param.suffix}"
 }
 
 fun updateSection(

@@ -42,7 +42,11 @@ type homeSectionDef struct {
 }
 
 func homeSectionDefs() map[string]homeSectionDef {
-	limitParam := media.HomeSectionParam{Name: "limit", Label: "Items", Type: "int", Default: strconv.Itoa(homeSectionLimit)}
+	limitParam := media.HomeSectionParam{
+		Name: "limit", Label: "Items", Type: "int", Suffix: "items",
+		Choices: []string{"10", "16", "24", "40", "60"},
+		Default: strconv.Itoa(homeSectionLimit),
+	}
 	defs := []homeSectionDef{
 		{
 			HomeSectionType: media.HomeSectionType{
@@ -249,8 +253,8 @@ func homeSectionDefs() map[string]homeSectionDef {
 					{Name: "country", Label: "Country", Type: "string"},
 					{Name: "studio", Label: "Studio", Type: "string"},
 					{Name: "certificate", Label: "Rated", Type: "string"},
-					{Name: "maxMinutes", Label: "Max length", Type: "int"},
-					{Name: "minRating", Label: "Min rating", Type: "int"},
+					{Name: "maxMinutes", Label: "Max length", Type: "int", Suffix: "min", Choices: []string{"", "45", "60", "75", "90", "105", "120", "150"}},
+					{Name: "minRating", Label: "Min rating", Type: "number", Suffix: "and up", Choices: []string{"", "5", "6", "6.5", "7", "7.5", "8", "8.5"}},
 					{Name: "sort", Label: "Sort", Type: "enum", Options: []string{"rating", "mtime", "year_desc", "title", "random"}, Default: "rating"},
 					{Name: "seen", Label: "Watched", Type: "enum", Options: []string{"any", "unseen", "seen"}, Default: "unseen"},
 					limitParam,
@@ -700,6 +704,11 @@ func validateHomeSectionParams(def homeSectionDef, params map[string]string) (ma
 			number, err := strconv.Atoi(value)
 			if err != nil || number <= 0 {
 				return nil, fmt.Errorf("parameter %q must be a positive number", name)
+			}
+		case "number":
+			number, err := strconv.ParseFloat(value, 64)
+			if err != nil || number < 0 {
+				return nil, fmt.Errorf("parameter %q must be a number", name)
 			}
 		case "enum":
 			if !containsString(param.Options, value) {

@@ -387,11 +387,14 @@ class Api(private val session: Session) {
                 params = (0 until params.length()).map { paramIndex ->
                     val p = params.getJSONObject(paramIndex)
                     val options = p.optJSONArray("options") ?: JSONArray()
+                    val choices = p.optJSONArray("choices") ?: JSONArray()
                     HomeSectionParam(
                         name = p.optString("name"),
                         label = p.optString("label"),
                         type = p.optString("type"),
                         options = (0 until options.length()).map { options.optString(it) },
+                        choices = (0 until choices.length()).map { choices.optString(it) },
+                        suffix = p.optString("suffix"),
                         default = p.optString("default"),
                         required = p.optBoolean("required"),
                     )

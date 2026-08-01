@@ -48,10 +48,16 @@ type HomeSectionType struct {
 }
 
 type HomeSectionParam struct {
-	Name     string   `json:"name"`
-	Label    string   `json:"label"`
-	Type     string   `json:"type"`
-	Options  []string `json:"options,omitempty"`
+	Name    string   `json:"name"`
+	Label   string   `json:"label"`
+	Type    string   `json:"type"`
+	Options []string `json:"options,omitempty"`
+	// Choices are the values a picker should offer for a number, and Suffix is
+	// what they are measured in — without them a client has to guess that
+	// "limit" means items and "maxMinutes" does not. An empty choice clears the
+	// parameter. Unlike Options they are suggestions, not a constraint.
+	Choices  []string `json:"choices,omitempty"`
+	Suffix   string   `json:"suffix,omitempty"`
 	Default  string   `json:"default,omitempty"`
 	Required bool     `json:"required,omitempty"`
 }

@@ -189,6 +189,9 @@ data class HomeSectionParam(
     val label: String,
     val type: String,
     val options: List<String>,
+    // Values a picker should offer for a number, and what they are measured in.
+    val choices: List<String>,
+    val suffix: String,
     val default: String,
     val required: Boolean,
 )

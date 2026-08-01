@@ -731,8 +731,13 @@ function traktSection(status) {
       if (summary.movies) parts.push(`${summary.movies} movies`);
       if (summary.episodes) parts.push(`${summary.episodes} episodes from ${summary.shows} shows`);
       if (summary.removed) parts.push(`removed ${summary.removed} no longer here`);
-      if (!parts.length) return `Trakt already matched your library${summary.alreadyCollected ? ` (${summary.alreadyCollected} titles)` : ""}.`;
-      return `Collected ${parts.join(" · ")}${summary.alreadyCollected ? ` · ${summary.alreadyCollected} already there` : ""}${summary.skipped ? ` · ${summary.skipped} could not be identified` : ""}.`;
+      const limit = summary.limitReached
+        ? ` Trakt stopped accepting more — a free account caps how much it will hold${summary.upgradeUrl ? `, see ${summary.upgradeUrl}` : ""}.`
+        : "";
+      if (!parts.length) {
+        return `${summary.alreadyCollected ? `Trakt already had ${summary.alreadyCollected} of your titles.` : "Nothing to send."}${limit}`;
+      }
+      return `Collected ${parts.join(" · ")}${summary.alreadyCollected ? ` · ${summary.alreadyCollected} already there` : ""}${summary.skipped ? ` · ${summary.skipped} could not be identified` : ""}.${limit}`;
     });
     const syncCollection = el("button", "secondary", "Sync library");
     syncCollection.type = "button";

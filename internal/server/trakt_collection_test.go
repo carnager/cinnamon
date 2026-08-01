@@ -333,3 +333,71 @@ func TestTraktCollectionSyncReportsTheStatus(t *testing.T) {
 		t.Fatalf("error = %q, want the status in it", err)
 	}
 }
+
+func TestTraktCollectionStopsAtTheAccountLimit(t *testing.T) {
+	withoutTraktPacing(t)
+	db, err := database.Open(filepath.Join(t.TempDir(), "popcorn.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store := media.NewStore(db)
+	ctx := context.Background()
+	res, err := store.DB().Exec(`INSERT INTO users(username, display_name, password_hash, is_admin) VALUES ('alice', 'Alice', 'test', 0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userID, _ := res.LastInsertId()
+	if err := store.UpsertItem(ctx, media.Item{
+		LibraryID: "movies", Kind: "movie", Path: "/movies/one.mkv", Title: "One", SortTitle: "one", IMDbID: "tt0001",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	attempts := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/sync/collection/movies", "/sync/collection/shows":
+			_, _ = w.Write([]byte(`[]`))
+		case "/sync/collection":
+			attempts++
+			// Trakt answers an account limit with 420 and an upgrade link, not
+			// with a rate-limit response — retrying it can never work.
+			w.Header().Set("X-Upgrade-URL", "https://trakt.tv/vip")
+			w.WriteHeader(420)
+		default:
+			t.Errorf("unexpected trakt path %s", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	app := New(Options{
+		Config: config.Config{TraktClientID: "id", TraktClientSecret: "secret", TraktAPIURL: upstream.URL},
+		Store:  store,
+		Log:    slog.New(slog.DiscardHandler),
+	})
+	t.Cleanup(app.Close)
+
+	result, err := app.traktSyncCollection(ctx, userID, "token", false)
+	if err != nil {
+		t.Fatalf("account limit should be reported, not returned as an error: %v", err)
+	}
+	if !result.LimitReached || result.UpgradeURL != "https://trakt.tv/vip" {
+		t.Fatalf("result = %#v, want the limit reported with its upgrade link", result)
+	}
+	if attempts != 1 {
+		t.Fatalf("posted %d times, want no retry of an account limit", attempts)
+	}
+	if result.Movies != 0 {
+		t.Fatalf("counted %d movies as collected, want none", result.Movies)
+	}
+	// Nothing landed, so nothing may be recorded — a later prune must not take
+	// back entries that were never accepted.
+	entries, err := store.TraktCollectionEntries(ctx, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("recorded %#v despite the write failing", entries)
+	}
+}

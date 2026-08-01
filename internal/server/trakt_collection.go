@@ -35,6 +35,10 @@ const (
 // A var so a test does not have to wait out the pacing.
 var traktCollectionWriteDelay = 1100 * time.Millisecond
 
+// The key travels with the entry so a chunk that lands can be recorded; it is
+// removed again before the request goes out.
+const traktCollectionKeyField = "__key"
+
 type traktCollectionResult struct {
 	Movies       int `json:"movies"`
 	Shows        int `json:"shows"`
@@ -42,7 +46,15 @@ type traktCollectionResult struct {
 	AlreadyThere int `json:"alreadyCollected"`
 	Skipped      int `json:"skipped"`
 	Removed      int `json:"removed"`
+	// Trakt caps how much a free account may collect; the sync stops there and
+	// reports what it managed rather than failing outright.
+	LimitReached bool   `json:"limitReached,omitempty"`
+	UpgradeURL   string `json:"upgradeUrl,omitempty"`
 }
+
+// errTraktAccountLimit is Trakt's 420: not "slow down" but "this account may
+// not collect any more", which no amount of retrying will change.
+var errTraktAccountLimit = errors.New("trakt account collection limit reached")
 
 // A collected entry as popcorn sent it: enough to take it back once the file it
 // described is gone from the library.
@@ -95,7 +107,6 @@ func (a *App) traktSyncCollection(ctx context.Context, userID int64, bearer stri
 				result.Skipped++
 				continue
 			}
-			movies = append(movies, entry)
 			if key != "" {
 				record := traktCollectionRecord{Kind: "movie", Title: item.Title, Year: item.Year}
 				if ids := traktIDs(item); len(ids) > 0 {
@@ -103,7 +114,9 @@ func (a *App) traktSyncCollection(ctx context.Context, userID int64, bearer stri
 				}
 				posted[key] = mustJSON(record)
 				postedKinds[key] = "movie"
+				entry[traktCollectionKeyField] = key
 			}
+			movies = append(movies, entry)
 		case "episode":
 			if item.ShowTitle == "" || item.SeasonNumber <= 0 || item.EpisodeNumber <= 0 {
 				result.Skipped++
@@ -130,7 +143,7 @@ func (a *App) traktSyncCollection(ctx context.Context, userID int64, bearer stri
 				show.year = item.Year
 			}
 			show.seasons[item.SeasonNumber] = append(show.seasons[item.SeasonNumber], item.EpisodeNumber)
-			result.Episodes++
+
 		}
 	}
 
@@ -138,20 +151,48 @@ func (a *App) traktSyncCollection(ctx context.Context, userID int64, bearer stri
 	for _, key := range showOrder {
 		shows = append(shows, byShow[key].payload(collectedAt))
 	}
-	result.Movies = len(movies)
-	result.Shows = len(shows)
 
+	landed := map[string]string{}
 	for _, chunk := range chunkMaps(movies, traktCollectionMovieChunk) {
 		if err := a.traktPostCollection(ctx, bearer, map[string]any{"movies": chunk}); err != nil {
+			if errors.Is(err, errTraktAccountLimit) {
+				result.LimitReached = true
+				result.UpgradeURL = a.traktUpgradeURL
+				break
+			}
 			return result, err
 		}
-	}
-	for _, chunk := range chunkMaps(shows, traktCollectionShowChunk) {
-		if err := a.traktPostCollection(ctx, bearer, map[string]any{"shows": chunk}); err != nil {
-			return result, err
+		result.Movies += len(chunk)
+		for _, entry := range chunk {
+			if key, ok := entry[traktCollectionKeyField].(string); ok {
+				landed[key] = posted[key]
+				delete(entry, traktCollectionKeyField)
+			}
 		}
 	}
-	if err := a.store.SaveTraktCollectionEntries(ctx, userID, posted, postedKinds); err != nil {
+	if !result.LimitReached {
+		for _, chunk := range chunkMaps(shows, traktCollectionShowChunk) {
+			if err := a.traktPostCollection(ctx, bearer, map[string]any{"shows": chunk}); err != nil {
+				if errors.Is(err, errTraktAccountLimit) {
+					result.LimitReached = true
+					result.UpgradeURL = a.traktUpgradeURL
+					break
+				}
+				return result, err
+			}
+			result.Shows += len(chunk)
+			for _, show := range chunk {
+				for _, key := range showEpisodeKeys(show) {
+					landed[key] = posted[key]
+				}
+			}
+		}
+	}
+	result.Episodes = len(landed) - result.Movies
+	if result.Episodes < 0 {
+		result.Episodes = 0
+	}
+	if err := a.store.SaveTraktCollectionEntries(ctx, userID, landed, postedKinds); err != nil {
 		return result, err
 	}
 	if !prune {
@@ -350,6 +391,7 @@ func (a *App) traktRemoveCollection(ctx context.Context, bearer string, body map
 // Wait for as long as Trakt asks and try again; report the status when it is
 // something else.
 func (a *App) traktCollectionWrite(ctx context.Context, bearer, path string, body map[string]any) error {
+	a.traktUpgradeURL = ""
 	for attempt := 0; attempt < traktCollectionRetries; attempt++ {
 		// One write per second per user, counted from the previous one.
 		if wait := traktCollectionWriteDelay - time.Since(a.traktLastWrite); wait > 0 {
@@ -363,6 +405,7 @@ func (a *App) traktCollectionWrite(ctx context.Context, bearer, path string, bod
 		}
 		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
 		retryAfter := resp.Header.Get("Retry-After")
+		upgrade := resp.Header.Get("X-Upgrade-URL")
 		status := resp.StatusCode
 		resp.Body.Close()
 
@@ -370,7 +413,13 @@ func (a *App) traktCollectionWrite(ctx context.Context, bearer, path string, bod
 		case status >= 200 && status <= 299:
 			a.traktLastWrite = time.Now()
 			return nil
-		case status == http.StatusTooManyRequests || status == 420:
+		case status == 420:
+			if a.log != nil {
+				a.log.Warn("trakt account limit reached", "path", path, "upgrade", upgrade)
+			}
+			a.traktUpgradeURL = upgrade
+			return errTraktAccountLimit
+		case status == http.StatusTooManyRequests:
 			if a.log != nil {
 				a.log.Debug("trakt rate limited, waiting", "path", path, "retryAfter", retryAfter)
 			}
@@ -422,7 +471,9 @@ func (a *App) traktCollected(ctx context.Context, bearer string) (map[string]boo
 			} `json:"ids"`
 		} `json:"movie"`
 	}
-	if err := a.traktGetJSON(ctx, bearer, "/sync/collection/movies", &movieRows); err != nil {
+	// Paginated, 100 per page by default — reading one page made the sync
+	// think a thousand-title collection held a hundred, and re-post the rest.
+	if _, err := a.traktPaged(ctx, bearer, "/sync/collection/movies", &movieRows); err != nil {
 		return nil, nil, err
 	}
 	for _, row := range movieRows {
@@ -448,7 +499,7 @@ func (a *App) traktCollected(ctx context.Context, bearer string) (map[string]boo
 			} `json:"episodes"`
 		} `json:"seasons"`
 	}
-	if err := a.traktGetJSON(ctx, bearer, "/sync/collection/shows", &showRows); err != nil {
+	if _, err := a.traktPaged(ctx, bearer, "/sync/collection/shows", &showRows); err != nil {
 		return nil, nil, err
 	}
 	for _, row := range showRows {
@@ -460,23 +511,6 @@ func (a *App) traktCollected(ctx context.Context, bearer string) (map[string]boo
 		}
 	}
 	return movies, episodes, nil
-}
-
-func (a *App) traktGetJSON(ctx context.Context, bearer, path string, dest any) error {
-	resp, err := a.traktRequest(ctx, bearer, http.MethodGet, path, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
-		message := strings.TrimSpace(string(payload))
-		if message == "" {
-			message = http.StatusText(resp.StatusCode)
-		}
-		return fmt.Errorf("trakt %s failed (%d): %s", path, resp.StatusCode, message)
-	}
-	return json.NewDecoder(io.LimitReader(resp.Body, 32*1024*1024)).Decode(dest)
 }
 
 // A library movie matches a collected one by any id it has, or by title and
@@ -501,6 +535,25 @@ func traktCollectionTitleKey(title string, year int) string {
 
 func traktCollectionEpisodeKey(showKey string, season, episode int) string {
 	return fmt.Sprintf("%s:%d:%d", showKey, season, episode)
+}
+
+// showEpisodeKeys reads back the record keys a show payload covers, so the
+// entries it collected can be remembered.
+func showEpisodeKeys(show map[string]any) []string {
+	title, _ := show["title"].(string)
+	showKey := strings.ToLower(strings.TrimSpace(title))
+	seasons, _ := show["seasons"].([]map[string]any)
+	keys := []string{}
+	for _, season := range seasons {
+		number, _ := season["number"].(int)
+		episodes, _ := season["episodes"].([]map[string]any)
+		for _, episode := range episodes {
+			if episodeNumber, ok := episode["number"].(int); ok {
+				keys = append(keys, traktCollectionEpisodeKey(showKey, number, episodeNumber))
+			}
+		}
+	}
+	return keys
 }
 
 func chunkMaps(entries []map[string]any, size int) [][]map[string]any {

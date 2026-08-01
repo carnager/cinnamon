@@ -169,7 +169,8 @@ private fun DiscoverSheet(
                     val facts = listOfNotNull(
                         entry.year.takeIf { it > 0 }?.toString(),
                         entry.runtime.takeIf { it > 0 }?.let { "$it min" },
-                        entry.rating.takeIf { it > 0 }?.let { "★ %.1f".format(it) },
+                        entry.scoreLabel,
+                        entry.rottenTomatoes.takeIf { it > 0 }?.let { "RT $it%" },
                     )
                     if (facts.isNotEmpty()) {
                         Text(facts.joinToString(" · "), color = Muted, fontSize = 13.sp)
@@ -244,6 +245,14 @@ private fun DiscoverRow(
             val detail = discoverDetail(entry)
             if (detail.isNotBlank()) {
                 Text(detail, color = Muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            entry.scoreLabel?.let { score ->
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(score, color = Gold, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                    if (entry.rottenTomatoes > 0) {
+                        Text("RT ${entry.rottenTomatoes}%", color = Muted, fontSize = 12.sp)
+                    }
+                }
             }
             Spacer(Modifier.height(9.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {

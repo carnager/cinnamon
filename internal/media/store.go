@@ -3088,3 +3088,53 @@ func (s *Store) TraktLiveCacheNames(ctx context.Context, userID int64) ([]string
 	}
 	return out, rows.Err()
 }
+
+// IMDbRating is what the outside world thinks of a title popcorn does not have
+// a file for. Keyed by IMDb id, because that is the only handle such a title
+// reliably carries.
+type IMDbRating struct {
+	IMDbID         string
+	Rating         float64
+	RottenTomatoes int
+	Metacritic     int
+}
+
+func (s *Store) IMDbRatings(ctx context.Context, ids []string) (map[string]IMDbRating, error) {
+	out := map[string]IMDbRating{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, strings.ToLower(id))
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT imdb_id, COALESCE(rating, 0), COALESCE(rotten_tomatoes, 0), COALESCE(metacritic, 0)
+FROM imdb_ratings WHERE imdb_id IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rating IMDbRating
+		if err := rows.Scan(&rating.IMDbID, &rating.Rating, &rating.RottenTomatoes, &rating.Metacritic); err != nil {
+			return nil, err
+		}
+		out[rating.IMDbID] = rating
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SaveIMDbRating(ctx context.Context, rating IMDbRating) error {
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO imdb_ratings(imdb_id, rating, rotten_tomatoes, metacritic)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(imdb_id) DO UPDATE SET
+	rating = excluded.rating,
+	rotten_tomatoes = excluded.rotten_tomatoes,
+	metacritic = excluded.metacritic,
+	fetched_at = CURRENT_TIMESTAMP`,
+		strings.ToLower(rating.IMDbID), rating.Rating, rating.RottenTomatoes, rating.Metacritic)
+	return err
+}

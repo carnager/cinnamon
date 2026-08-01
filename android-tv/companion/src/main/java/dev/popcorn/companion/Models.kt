@@ -299,6 +299,8 @@ data class TraktEntry(
     val posterUrl: String,
     val overview: String,
     val rating: Double,
+    val imdbRating: Double,
+    val rottenTomatoes: Int,
     val runtime: Int,
     val genres: String,
     val listedAt: String,
@@ -308,6 +310,15 @@ data class TraktEntry(
     val item: PopItem?,
 ) {
     val displayTitle: String get() = if (kind == "episode") showTitle.ifBlank { title } else title
+
+    // IMDb is the number people recognise; TMDb stands in when OMDb has not
+    // been configured or has nothing on this title.
+    val scoreLabel: String?
+        get() = when {
+            imdbRating > 0 -> "IMDb %.1f".format(imdbRating)
+            rating > 0 -> "TMDb %.1f".format(rating)
+            else -> null
+        }
     val key: String get() = listOfNotNull(
         kind, imdbId.ifBlank { null }, tmdbId.takeIf { it > 0 }?.toString(),
         displayTitle, season.takeIf { it > 0 }?.toString(), episode.takeIf { it > 0 }?.toString(),

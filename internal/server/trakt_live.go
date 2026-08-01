@@ -62,8 +62,12 @@ type traktLiveEntry struct {
 	PosterURL string  `json:"posterUrl,omitempty"`
 	Overview  string  `json:"overview,omitempty"`
 	Rating    float64 `json:"rating,omitempty"`
-	Runtime   int     `json:"runtime,omitempty"`
-	Genres    string  `json:"genres,omitempty"`
+	// What IMDb says, which is the number people actually recognise. Comes
+	// from OMDb, cached by IMDb id.
+	IMDbRating     float64 `json:"imdbRating,omitempty"`
+	RottenTomatoes int     `json:"rottenTomatoes,omitempty"`
+	Runtime        int     `json:"runtime,omitempty"`
+	Genres         string  `json:"genres,omitempty"`
 }
 
 // traktLiveScope is what a builder needs to say whether a row is on the shelf:
@@ -377,6 +381,7 @@ func (a *App) buildTraktLive(ctx context.Context, userID int64, name string) (tr
 		return traktLiveList{}, err
 	}
 	a.fillTMDbDetails(ctx, entries)
+	a.fillIMDbRatings(ctx, entries)
 	list := traktLiveList{
 		Entries:   entries,
 		FetchedAt: time.Now().UTC().Format(time.RFC3339),
@@ -817,6 +822,88 @@ func artworkTMDbID(entry traktLiveEntry) int {
 		return entry.ShowTMDbID
 	}
 	return entry.TMDbID
+}
+
+// fillIMDbRatings adds the score people recognise. OMDb is one request per
+// title, so it is cached permanently by id — a film's IMDb score moves in the
+// third decimal, not in a day.
+func (a *App) fillIMDbRatings(ctx context.Context, entries []traktLiveEntry) {
+	if strings.TrimSpace(a.cfg.OMDbAPIKey) == "" {
+		return
+	}
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.InLibrary || strings.TrimSpace(entry.IMDbID) == "" {
+			continue
+		}
+		ids = append(ids, entry.IMDbID)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	known, err := a.store.IMDbRatings(ctx, ids)
+	if err != nil {
+		return
+	}
+
+	missing := []string{}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		key := strings.ToLower(id)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if _, ok := known[key]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 {
+		var mu sync.Mutex
+		var wg sync.WaitGroup
+		work := make(chan string)
+		for worker := 0; worker < tmdbDetailWorker; worker++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for id := range work {
+					ratings := externalRatings{}
+					a.fillRatingsFromOMDb(ctx, id, &ratings)
+					if ratings.IMDbRating == 0 && ratings.RottenTomatoesRating == 0 && ratings.MetacriticRating == 0 {
+						continue
+					}
+					stored := media.IMDbRating{
+						IMDbID:         id,
+						Rating:         ratings.IMDbRating,
+						RottenTomatoes: ratings.RottenTomatoesRating,
+						Metacritic:     ratings.MetacriticRating,
+					}
+					_ = a.store.SaveIMDbRating(ctx, stored)
+					mu.Lock()
+					known[strings.ToLower(id)] = stored
+					mu.Unlock()
+				}
+			}()
+		}
+		for _, id := range missing {
+			select {
+			case work <- id:
+			case <-ctx.Done():
+			}
+		}
+		close(work)
+		wg.Wait()
+	}
+
+	for i := range entries {
+		entry := &entries[i]
+		rating, ok := known[strings.ToLower(entry.IMDbID)]
+		if !ok {
+			continue
+		}
+		entry.IMDbRating = rating.Rating
+		entry.RottenTomatoes = rating.RottenTomatoes
+	}
 }
 
 func tmdbKindFor(kind string) string {

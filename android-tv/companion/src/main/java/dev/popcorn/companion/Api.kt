@@ -194,6 +194,8 @@ class Api(private val session: Session) {
                 posterUrl = o.optString("posterUrl"),
                 overview = o.optString("overview"),
                 rating = o.optDouble("rating", 0.0),
+                imdbRating = o.optDouble("imdbRating", 0.0),
+                rottenTomatoes = o.optInt("rottenTomatoes"),
                 runtime = o.optInt("runtime"),
                 genres = o.optString("genres"),
                 listedAt = o.optString("listedAt"),

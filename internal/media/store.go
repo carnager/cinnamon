@@ -43,10 +43,16 @@ type SearchOptions struct {
 }
 
 type ShowOptions struct {
-	Query          string
-	LibraryID      string
-	Genre          string
-	Decades        string
+	Query     string
+	LibraryID string
+	Genre     string
+	Decades   string
+	// Matched against the episodes that make up the show, the same columns the
+	// item search filters on.
+	Studio         string
+	Country        string
+	ContentRatings string
+	MaxDurationMS  int64
 	Sort           string
 	SeenStatus     string
 	UserID         int64
@@ -1444,6 +1450,10 @@ func (s *Store) SearchShows(ctx context.Context, opts ShowOptions) ([]ShowSummar
 	genreWhere, genreArgs := showGenreFilterSQL(genres)
 	decadeHaving := decadeFilterSQL(showYearExpr, opts.Decades)
 	nameStartsWith := strings.TrimSpace(opts.NameStartsWith)
+	studio := strings.TrimSpace(opts.Studio)
+	country := strings.TrimSpace(opts.Country)
+	contentRatingWhere, contentRatingArgs := contentRatingFilterSQL(opts.ContentRatings)
+	contentRatingWhere = strings.ReplaceAll(contentRatingWhere, "official_rating", "mi.official_rating")
 	seenStatus := normalizedSeenStatus(opts.SeenStatus)
 	userID := opts.UserID
 	limit := opts.Limit
@@ -1535,6 +1545,10 @@ WHERE mi.kind = 'episode'
 AND (? = '' OR mi.library_id = ?)
 `+genreWhere+`
 AND mi.show_title IS NOT NULL AND mi.show_title != ''
+AND (? = '' OR COALESCE(mi.studios, '') LIKE '%' || ? || '%')
+AND (? = '' OR COALESCE(mi.countries, '') LIKE '%' || ? || '%')
+AND (? <= 0 OR (COALESCE(mi.duration_ms, 0) > 0 AND mi.duration_ms <= ?))
+`+contentRatingWhere+`
 AND (
 	? = ''
 	OR (? = '#' AND LOWER(COALESCE(NULLIF(ms.sort_title, ''), mi.show_title, '')) NOT GLOB '[a-z]*')
@@ -1551,7 +1565,7 @@ AND (
 	OR (? = 'started' AND ? > 0 AND `+showStartedEpisodes+` > 0 AND `+showCompletedEpisodes+` < COUNT(*))
 )
 `+orderBy+`
-LIMIT ? OFFSET ?`, append(append(append([]any{userID, libraryID, libraryID}, genreArgs...), nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith), append(textArgs, opts.MinRating, opts.MinRating, seenStatus, seenStatus, userID, seenStatus, userID, seenStatus, userID, limit, offset)...)...)
+LIMIT ? OFFSET ?`, append(append(append(append(append([]any{userID, libraryID, libraryID}, genreArgs...), studio, studio, country, country, opts.MaxDurationMS, opts.MaxDurationMS), contentRatingArgs...), nameStartsWith, nameStartsWith, nameStartsWith, nameStartsWith), append(textArgs, opts.MinRating, opts.MinRating, seenStatus, seenStatus, userID, seenStatus, userID, seenStatus, userID, limit, offset)...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -2760,4 +2774,69 @@ LIMIT ?`, userID, userID, limit)
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+// ListFacetValues returns the distinct values of one filterable column, most
+// common first, so a picker can offer them instead of asking a remote control
+// to spell "Vereinigtes Königreich". Multi-valued columns (studios, countries)
+// are split the same way genres are.
+func (s *Store) ListFacetValues(ctx context.Context, libraryID, facet string, limit int) ([]string, error) {
+	column := ""
+	split := true
+	switch facet {
+	case "studio":
+		column = "studios"
+	case "country":
+		column = "countries"
+	case "certificate":
+		column = "official_rating"
+		split = false
+	default:
+		return []string{}, nil
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT COALESCE(`+column+`, '')
+FROM media_items
+WHERE (? = '' OR library_id = ?)
+AND `+column+` IS NOT NULL AND `+column+` != ''`, libraryID, libraryID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := map[string]int{}
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, err
+		}
+		if !split {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				counts[trimmed]++
+			}
+			continue
+		}
+		for _, part := range splitGenreList(value) {
+			counts[part]++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(counts))
+	for value := range counts {
+		out = append(out, value)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if counts[out[i]] != counts[out[j]] {
+			return counts[out[i]] > counts[out[j]]
+		}
+		return out[i] < out[j]
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }

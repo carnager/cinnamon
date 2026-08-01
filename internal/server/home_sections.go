@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"popcorn/internal/config"
 	"popcorn/internal/media"
@@ -382,9 +383,22 @@ func buildFilterSection(scope homeSectionScope, cfg media.HomeLayoutSection) (me
 		if scope.tvLib == nil {
 			return media.HomeSection{}, nil
 		}
-		// Shows carry no columns of their own for studio, country or runtime;
-		// those filters would silently match nothing, so they are dropped here.
-		shows, err := scope.app.store.ListShowsForUser(scope.ctx, scope.tvLib.ID, "", opts.Genre, opts.Decades, sortMode, seen, scope.userID, minRating, opts.Limit, 0)
+		// A show has no studio or certificate of its own; these match the
+		// episodes it is made of, which is where that metadata lives.
+		shows, err := scope.app.store.SearchShows(scope.ctx, media.ShowOptions{
+			LibraryID:      scope.tvLib.ID,
+			Genre:          opts.Genre,
+			Decades:        opts.Decades,
+			Studio:         opts.Studio,
+			Country:        opts.Country,
+			ContentRatings: opts.ContentRatings,
+			MaxDurationMS:  opts.MaxDurationMS,
+			Sort:           sortMode,
+			SeenStatus:     seen,
+			UserID:         scope.userID,
+			MinRating:      minRating,
+			Limit:          opts.Limit,
+		})
 		if err != nil {
 			return media.HomeSection{}, err
 		}
@@ -769,6 +783,53 @@ func (a *App) homeSectionCatalogGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sections": homeSectionCatalog()})
+}
+
+// homeFacets lists the values a filter shelf's text parameters can take, so a
+// client with no keyboard can offer them as a list.
+func (a *App) homeFacets(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
+	movieLib := firstLibraryOfType(a.cfg.Libraries, "movies", "movie")
+	tvLib := firstLibraryOfType(a.cfg.Libraries, "tv")
+	libraryID := ""
+	if movieLib != nil {
+		libraryID = movieLib.ID
+	}
+	if r.URL.Query().Get("kind") == "tv" && tvLib != nil {
+		libraryID = tvLib.ID
+	}
+	a.writeCachedJSON(w, r, cacheKey(r, "home-facets", user.ID), 5*time.Minute, func() (any, error) {
+		out := map[string]any{}
+		genres, err := a.store.ListGenres(r.Context(), libraryID)
+		if err != nil {
+			return nil, err
+		}
+		out["genre"] = genres
+		kind := "movies"
+		if r.URL.Query().Get("kind") == "tv" {
+			kind = "tv"
+		}
+		decades, err := a.store.ListDecades(r.Context(), libraryID, kind)
+		if err != nil {
+			return nil, err
+		}
+		decadeValues := make([]string, 0, len(decades))
+		for i := len(decades) - 1; i >= 0; i-- {
+			decadeValues = append(decadeValues, strconv.Itoa(decades[i]))
+		}
+		out["decades"] = decadeValues
+		for _, facet := range []string{"studio", "country", "certificate"} {
+			values, err := a.store.ListFacetValues(r.Context(), libraryID, facet, 120)
+			if err != nil {
+				return nil, err
+			}
+			out[facet] = values
+		}
+		return out, nil
+	})
 }
 
 func (a *App) homeLayoutGet(w http.ResponseWriter, r *http.Request) {

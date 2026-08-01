@@ -110,6 +110,9 @@ fun PopcornApp() {
     var homeGenreTarget by remember { mutableStateOf<Int?>(null) }
     var homeOptionsIndex by remember { mutableStateOf<Int?>(null) }
     var homeGenres by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    // facet name -> values, per media kind, for the filter shelf's pickers.
+    var homeFacets by remember { mutableStateOf<Map<String, Map<String, List<String>>>>(emptyMap()) }
+    var homeFacetPicker by remember { mutableStateOf<Triple<Int, String, String>?>(null) }
     var recommendationExclusionKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
     var completedItems by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var resumeFractionById by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
@@ -829,12 +832,21 @@ fun PopcornApp() {
         homeShelvesOpen = false
         homeGenrePicker = false
         homeGenreTarget = null
+        homeFacetPicker = null
         homeOptionsIndex = null
         screen = Screen.Home
         scope.launch {
             runCatching { Api(activeSession).saveHomeLayout(draft) }
                 .onSuccess { loadHome(activeSession, libraries) }
                 .onFailure { error = it.message ?: "Could not save the layout" }
+        }
+    }
+
+    fun loadHomeFacets(activeSession: Session, kind: String) {
+        if (homeFacets.containsKey(kind)) return
+        scope.launch {
+            runCatching { Api(activeSession).homeFacets(kind) }
+                .onSuccess { homeFacets = homeFacets + (kind to it) }
         }
     }
 
@@ -938,6 +950,7 @@ fun PopcornApp() {
     // a held shelf — and only then saves and returns home.
     BackHandler(enabled = screen is Screen.ArrangeHome) {
         when {
+            homeFacetPicker != null -> homeFacetPicker = null
             homeGenrePicker -> {
                 homeGenrePicker = false
                 homeGenreTarget = null
@@ -1459,10 +1472,7 @@ fun PopcornApp() {
         TvCheckListShelf(
             title = "SHELVES",
             subtitle = "What home shows",
-            // A shelf whose parameters need typing cannot be set up with a
-            // D-pad. The genre shelf has a picker; anything with more free text
-            // than that is built in the browser and only reordered here.
-            rows = homeCatalog.filterNot { it.layout == "hero" || it.params.count { param -> param.type == "string" } > 1 }.map { type ->
+            rows = homeCatalog.filterNot { it.layout == "hero" }.map { type ->
                 if (type.type == genreType?.type) {
                     val count = homeEditDraft.count { it.type == type.type }
                     TvCheckRow(
@@ -1509,17 +1519,63 @@ fun PopcornApp() {
                             else -> value.ifBlank { "—" }
                         },
                         onCycle = {
-                            if (param.name == "genre") {
-                                session?.let { loadHomeGenres(it) }
-                                homeGenreTarget = optionsIndex
-                                homeGenrePicker = true
-                            } else {
-                                homeEditDraft = updateSection(homeEditDraft, optionsIndex) { cycleParam(it, param) }
+                            when {
+                                param.type == "string" && section.type == "genre" -> {
+                                    session?.let { loadHomeGenres(it) }
+                                    homeGenreTarget = optionsIndex
+                                    homeGenrePicker = true
+                                }
+                                param.type == "string" -> {
+                                    val kind = section.params["kind"] ?: "movies"
+                                    session?.let { loadHomeFacets(it, kind) }
+                                    homeFacetPicker = Triple(optionsIndex, param.name, kind)
+                                }
+                                else -> homeEditDraft = updateSection(homeEditDraft, optionsIndex) { cycleParam(it, param) }
                             }
                         },
                     )
                 },
                 onDismiss = { homeOptionsIndex = null },
+            )
+        }
+    }
+
+    homeFacetPicker?.let { (index, facet, kind) ->
+        val section = homeEditDraft.getOrNull(index)
+        val definition = section?.let { current -> homeCatalog.firstOrNull { it.type == current.type } }
+        val param = definition?.params?.firstOrNull { it.name == facet }
+        val values = homeFacets[kind]?.get(facet).orEmpty()
+        if (section == null || param == null) {
+            homeFacetPicker = null
+        } else {
+            val current = section.params[facet].orEmpty()
+            TvCheckListShelf(
+                title = param.label.ifBlank { facet }.uppercase(),
+                subtitle = if (values.isEmpty()) "Nothing to choose from" else "Pick a value",
+                rows = listOf(
+                    TvCheckRow(
+                        key = "__any__",
+                        label = "Any",
+                        description = "No filter on this",
+                        checked = current.isBlank(),
+                        onToggle = {
+                            homeEditDraft = updateSection(homeEditDraft, index) { it.copy(params = it.params - facet) }
+                            homeFacetPicker = null
+                        },
+                    )
+                ) + values.map { value ->
+                    TvCheckRow(
+                        key = value,
+                        label = if (facet == "decades") "${value}s" else value,
+                        description = "",
+                        checked = current == value,
+                        onToggle = {
+                            homeEditDraft = updateSection(homeEditDraft, index) { it.copy(params = it.params + (facet to value)) }
+                            homeFacetPicker = null
+                        },
+                    )
+                },
+                onDismiss = { homeFacetPicker = null },
             )
         }
     }

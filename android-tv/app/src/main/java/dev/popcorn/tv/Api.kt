@@ -400,6 +400,16 @@ class Api(private val session: Session) {
         }
     }
 
+    // The values a filter shelf's text parameters can take, so the TV can offer
+    // a list where the browser offers a text field.
+    suspend fun homeFacets(kind: String): Map<String, List<String>> = withContext(Dispatchers.IO) {
+        val o = request("/api/home/facets?kind=${enc(kind)}")
+        o.keys().asSequence().associateWith { key ->
+            val arr = o.optJSONArray(key) ?: JSONArray()
+            (0 until arr.length()).map { arr.optString(it) }.filter { it.isNotBlank() }
+        }
+    }
+
     suspend fun homeLayout(): HomeLayout = withContext(Dispatchers.IO) {
         jsonToHomeLayout(request("/api/home/layout"))
     }

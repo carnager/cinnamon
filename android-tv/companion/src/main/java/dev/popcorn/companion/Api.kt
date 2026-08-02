@@ -178,33 +178,35 @@ class Api(private val session: Session) {
 
     // Discover reads Trakt through popcornd: the phone never talks to Trakt
     // and never holds a token.
-    suspend fun traktLive(path: String): List<TraktEntry> = withContext(Dispatchers.IO) {
-        val arr = request("/api/trakt/live/$path").optJSONArray("entries") ?: JSONArray()
-        (0 until arr.length()).map { index ->
-            val o = arr.getJSONObject(index)
+    suspend fun traktLive(path: String): TraktList = withContext(Dispatchers.IO) {
+        val o = request("/api/trakt/live/$path")
+        val arr = o.optJSONArray("entries") ?: JSONArray()
+        val entries = (0 until arr.length()).map { index ->
+            val row = arr.getJSONObject(index)
             TraktEntry(
-                kind = o.optString("kind"),
-                title = o.optString("title"),
-                year = o.optInt("year"),
-                showTitle = o.optString("showTitle"),
-                season = o.optInt("season"),
-                episode = o.optInt("episode"),
-                imdbId = o.optString("imdbId"),
-                tmdbId = o.optInt("tmdbId"),
-                posterUrl = o.optString("posterUrl"),
-                overview = o.optString("overview"),
-                rating = o.optDouble("rating", 0.0),
-                imdbRating = o.optDouble("imdbRating", 0.0),
-                rottenTomatoes = o.optInt("rottenTomatoes"),
-                runtime = o.optInt("runtime"),
-                genres = o.optString("genres"),
-                listedAt = o.optString("listedAt"),
-                watchedAt = o.optString("watchedAt"),
-                airedAt = o.optString("airedAt"),
-                inLibrary = o.optBoolean("inLibrary"),
-                item = o.optJSONObject("item")?.let(::jsonToItem),
+                kind = row.optString("kind"),
+                title = row.optString("title"),
+                year = row.optInt("year"),
+                showTitle = row.optString("showTitle"),
+                season = row.optInt("season"),
+                episode = row.optInt("episode"),
+                imdbId = row.optString("imdbId"),
+                tmdbId = row.optInt("tmdbId"),
+                posterUrl = row.optString("posterUrl"),
+                overview = row.optString("overview"),
+                rating = row.optDouble("rating", 0.0),
+                imdbRating = row.optDouble("imdbRating", 0.0),
+                rottenTomatoes = row.optInt("rottenTomatoes"),
+                runtime = row.optInt("runtime"),
+                genres = row.optString("genres"),
+                listedAt = row.optString("listedAt"),
+                watchedAt = row.optString("watchedAt"),
+                airedAt = row.optString("airedAt"),
+                inLibrary = row.optBoolean("inLibrary"),
+                item = row.optJSONObject("item")?.let(::jsonToItem),
             )
         }
+        TraktList(entries = entries, fetchedAt = o.optString("fetchedAt"), stale = o.optBoolean("stale"))
     }
 
     suspend fun traktWatchlistAdd(entry: TraktEntry) = withContext(Dispatchers.IO) {

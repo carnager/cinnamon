@@ -350,6 +350,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     var discoverEntries by remember { mutableStateOf<List<TraktEntry>>(emptyList()) }
     var discoverLoading by remember { mutableStateOf(false) }
     var discoverError by remember { mutableStateOf("") }
+    var discoverFetchedAt by remember { mutableStateOf("") }
     var wantedKeys by remember { mutableStateOf<Set<String>>(emptySet()) }
     // Set only by a watchlist change: home refreshes for that, and otherwise
     // shows what it showed when you opened it.
@@ -471,17 +472,20 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
 
     // One request per chip, read live. An empty answer and a failed one are
     // different states here, which is the entire point of not keeping a copy.
-    fun loadDiscover(chip: DiscoverChip, kind: String) {
+    fun loadDiscover(chip: DiscoverChip, kind: String, force: Boolean = false) {
         discoverLoading = true
         discoverError = ""
         scope.launch {
-            val path = when (chip) {
+            val base = when (chip) {
                 DiscoverChip.ForYou -> "recommendations?kind=$kind"
-                DiscoverChip.Wanted -> "watchlist"
+                DiscoverChip.Wanted -> "watchlist?"
                 DiscoverChip.AiringSoon -> "upcoming?days=21"
             }
+            val path = if (force) "$base&refresh=1" else base
             runCatching { api.traktLive(path) }
-                .onSuccess { entries ->
+                .onSuccess { list ->
+                    discoverFetchedAt = list.fetchedAt
+                    val entries = list.entries
                     discoverEntries = when (chip) {
                         // The library half of the watchlist already has a page
                         // of its own; this one is what is not on the shelf.
@@ -1496,7 +1500,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                         onDiscover = {
                             page = Page.Discover
                             backStack = emptyList()
-                            if (discoverEntries.isEmpty()) loadDiscover(discoverChip, discoverKind)
+                            loadDiscover(discoverChip, discoverKind)
                         },
                     )
                 }
@@ -1651,6 +1655,8 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 entries = discoverEntries,
                                 loading = discoverLoading,
                                 error = discoverError,
+                                fetchedAt = discoverFetchedAt,
+                                onRefresh = { loadDiscover(discoverChip, discoverKind, force = true) },
                                 wantedKeys = wantedKeys,
                                 onWant = ::setWanted,
                                 onHide = ::hideSuggestion,

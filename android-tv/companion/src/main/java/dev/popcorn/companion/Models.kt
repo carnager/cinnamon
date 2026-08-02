@@ -325,6 +325,10 @@ data class TraktEntry(
     ).joinToString(":")
 }
 
+// The list plus when the server last heard it, so the tab can say how fresh it
+// is instead of leaving you to guess.
+data class TraktList(val entries: List<TraktEntry>, val fetchedAt: String, val stale: Boolean)
+
 enum class DiscoverChip(val label: String) {
     ForYou("For you"),
     Wanted("Wanted"),

@@ -67,6 +67,8 @@ fun DiscoverPage(
     entries: List<TraktEntry>,
     loading: Boolean,
     error: String,
+    fetchedAt: String,
+    onRefresh: () -> Unit,
     wantedKeys: Set<String>,
     onWant: (TraktEntry) -> Unit,
     onHide: (TraktEntry) -> Unit,
@@ -81,6 +83,18 @@ fun DiscoverPage(
             DiscoverChip.entries.forEach { entry ->
                 DiscoverPill(entry.label, entry == chip) { onChip(entry) }
             }
+            Spacer(Modifier.weight(1f))
+            DiscoverPill("↻", false, small = true, onClick = onRefresh)
+        }
+        // Say how old the answer is rather than leaving you to wonder why the
+        // same films are still here.
+        freshnessLabel(fetchedAt)?.let { label ->
+            Text(
+                label,
+                color = Muted,
+                fontSize = 11.sp,
+                modifier = Modifier.padding(start = 18.dp, bottom = 6.dp),
+            )
         }
         if (chip != DiscoverChip.AiringSoon) {
             Row(
@@ -345,6 +359,19 @@ private fun discoverDetail(entry: TraktEntry): String {
     }
     airsIn(entry.airedAt)?.let { parts.add(it) }
     return parts.joinToString(" · ")
+}
+
+// "updated just now" / "updated 3 hours ago".
+private fun freshnessLabel(fetchedAt: String): String? {
+    if (fetchedAt.isBlank()) return null
+    val at = runCatching { OffsetDateTime.parse(fetchedAt) }.getOrNull() ?: return null
+    val minutes = Duration.between(at, OffsetDateTime.now()).toMinutes()
+    return when {
+        minutes < 2 -> "updated just now"
+        minutes < 60 -> "updated $minutes minutes ago"
+        minutes < 120 -> "updated an hour ago"
+        else -> "updated ${minutes / 60} hours ago"
+    }
 }
 
 private fun airsIn(airedAt: String): String? {

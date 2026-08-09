@@ -114,6 +114,7 @@ func New(opts Options) *App {
 	app.cleanThumbCache()
 	go app.reapIdleHLSSessions()
 	go app.recommendationPrebuildWorker()
+	go app.artworkHashWorker()
 	go app.traktCollectionWorker()
 	go app.traktLiveWorker()
 	return app

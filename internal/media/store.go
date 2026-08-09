@@ -1192,6 +1192,7 @@ func showGenreFilterSQL(genres []string, mode string) (string, []any) {
 const itemSelectColumns = `SELECT id, library_id, path, kind, title, sort_title, COALESCE(original_title, ''), COALESCE(year, 0), COALESCE(duration_ms, 0),
 COALESCE(container, ''), COALESCE(video_codec, ''), COALESCE(audio_codec, ''), COALESCE(imdb_id, ''), COALESCE(tmdb_id, ''), COALESCE(tvdb_id, ''), COALESCE(width, 0),
 COALESCE(height, 0), COALESCE(bit_rate, 0), size_bytes, mtime_unix, COALESCE(nfo_path, ''), COALESCE(nfo_mtime_unix, 0), COALESCE(poster_path, ''), COALESCE(poster_mtime_unix, 0), COALESCE(backdrop_path, ''), COALESCE(backdrop_mtime_unix, 0),
+COALESCE(poster_thumbhash, ''), COALESCE(backdrop_thumbhash, ''),
 COALESCE(overview, ''), COALESCE(tagline, ''), COALESCE(official_rating, ''), COALESCE(genres, ''), COALESCE(tags, ''),
 COALESCE(studios, ''), COALESCE(directors, ''), COALESCE(writers, ''), COALESCE(countries, ''), COALESCE(rating, 0), COALESCE(premiered, ''),
 COALESCE(show_title, ''), COALESCE(season_number, 0), COALESCE(episode_number, 0), COALESCE(episode_title, ''),`
@@ -1205,6 +1206,7 @@ EXISTS(SELECT 1 FROM media_streams ms WHERE ms.item_id = id LIMIT 1)`
 const itemSelectMIColumns = `SELECT mi.id, mi.library_id, mi.path, mi.kind, mi.title, mi.sort_title, COALESCE(mi.original_title, ''), COALESCE(mi.year, 0), COALESCE(mi.duration_ms, 0),
 COALESCE(mi.container, ''), COALESCE(mi.video_codec, ''), COALESCE(mi.audio_codec, ''), COALESCE(mi.imdb_id, ''), COALESCE(mi.tmdb_id, ''), COALESCE(mi.tvdb_id, ''), COALESCE(mi.width, 0),
 COALESCE(mi.height, 0), COALESCE(mi.bit_rate, 0), mi.size_bytes, mi.mtime_unix, COALESCE(mi.nfo_path, ''), COALESCE(mi.nfo_mtime_unix, 0), COALESCE(mi.poster_path, ''), COALESCE(mi.poster_mtime_unix, 0), COALESCE(mi.backdrop_path, ''), COALESCE(mi.backdrop_mtime_unix, 0),
+COALESCE(mi.poster_thumbhash, ''), COALESCE(mi.backdrop_thumbhash, ''),
 COALESCE(mi.overview, ''), COALESCE(mi.tagline, ''), COALESCE(mi.official_rating, ''), COALESCE(mi.genres, ''), COALESCE(mi.tags, ''),
 COALESCE(mi.studios, ''), COALESCE(mi.directors, ''), COALESCE(mi.writers, ''), COALESCE(mi.countries, ''), COALESCE(mi.rating, 0), COALESCE(mi.premiered, ''),
 COALESCE(mi.show_title, ''), COALESCE(mi.season_number, 0), COALESCE(mi.episode_number, 0), COALESCE(mi.episode_title, ''),`
@@ -1567,6 +1569,10 @@ SELECT mi.library_id,
 	COALESCE(MAX(mi.poster_mtime_unix), 0),
 	COALESCE(MIN(CASE WHEN mi.backdrop_path IS NOT NULL AND mi.backdrop_path != '' THEN mi.id END), 0),
 	COALESCE(MAX(mi.backdrop_mtime_unix), 0),
+	-- Every episode of a show points at the same show artwork, so the one
+	-- distinct non-null hash in the group is that artwork's. MAX just picks it.
+	COALESCE(MAX(CASE WHEN mi.poster_path IS NOT NULL AND mi.poster_path != '' THEN mi.poster_thumbhash END), ''),
+	COALESCE(MAX(CASE WHEN mi.backdrop_path IS NOT NULL AND mi.backdrop_path != '' THEN mi.backdrop_thumbhash END), ''),
 	COALESCE(ms.overview, MAX(NULLIF(mi.overview, '')), ''),
 	COALESCE(ms.genres, MAX(NULLIF(mi.genres, '')), ''),
 	COALESCE(ms.rating, MAX(mi.rating), 0),
@@ -1606,7 +1612,7 @@ LIMIT ? OFFSET ?`, append(append(append(append(append(append(append([]any{userID
 	shows := []ShowSummary{}
 	for rows.Next() {
 		var show ShowSummary
-		if err := rows.Scan(&show.LibraryID, &show.Title, &show.SortTitle, &show.OriginalTitle, &show.Year, &show.EndYear, &show.EpisodeCount, &show.SeasonCount, &show.PosterItemID, &show.PosterMTimeUnix, &show.BackdropItemID, &show.BackdropMTimeUnix, &show.Overview, &show.Genres, &show.Rating, &show.Premiered); err != nil {
+		if err := rows.Scan(&show.LibraryID, &show.Title, &show.SortTitle, &show.OriginalTitle, &show.Year, &show.EndYear, &show.EpisodeCount, &show.SeasonCount, &show.PosterItemID, &show.PosterMTimeUnix, &show.BackdropItemID, &show.BackdropMTimeUnix, &show.PosterThumbhash, &show.BackdropThumbhash, &show.Overview, &show.Genres, &show.Rating, &show.Premiered); err != nil {
 			return nil, err
 		}
 		shows = append(shows, show)
@@ -2093,6 +2099,7 @@ func scanItem(row rowScanner) (Item, error) {
 		&item.OriginalTitle, &item.Year, &item.DurationMS, &item.Container, &item.VideoCodec, &item.AudioCodec,
 		&item.IMDbID, &item.TMDbID, &item.TVDbID, &item.Width, &item.Height, &item.BitRate, &item.SizeBytes, &item.MTimeUnix, &item.NFOPath,
 		&item.NFOMTimeUnix, &item.PosterPath, &item.PosterMTimeUnix, &item.BackdropPath, &item.BackdropMTimeUnix,
+		&item.PosterThumbhash, &item.BackdropThumbhash,
 		&item.Overview, &item.Tagline, &item.OfficialRating, &item.Genres, &item.Tags,
 		&item.Studios, &item.Directors, &item.Writers, &item.Countries,
 		&item.Rating, &item.Premiered, &item.ShowTitle, &item.SeasonNumber,
@@ -2558,6 +2565,10 @@ SELECT mi.library_id,
 	COALESCE(MAX(mi.poster_mtime_unix), 0),
 	COALESCE(MIN(CASE WHEN mi.backdrop_path IS NOT NULL AND mi.backdrop_path != '' THEN mi.id END), 0),
 	COALESCE(MAX(mi.backdrop_mtime_unix), 0),
+	-- Every episode of a show points at the same show artwork, so the one
+	-- distinct non-null hash in the group is that artwork's. MAX just picks it.
+	COALESCE(MAX(CASE WHEN mi.poster_path IS NOT NULL AND mi.poster_path != '' THEN mi.poster_thumbhash END), ''),
+	COALESCE(MAX(CASE WHEN mi.backdrop_path IS NOT NULL AND mi.backdrop_path != '' THEN mi.backdrop_thumbhash END), ''),
 	COALESCE(ms.overview, MAX(NULLIF(mi.overview, '')), ''),
 	COALESCE(ms.genres, MAX(NULLIF(mi.genres, '')), ''),
 	COALESCE(ms.rating, MAX(mi.rating), 0),
@@ -2578,7 +2589,7 @@ LIMIT ?`, userID, limit)
 	for rows.Next() {
 		var show ShowSummary
 		var updatedAt string
-		if err := rows.Scan(&show.LibraryID, &show.Title, &show.SortTitle, &show.OriginalTitle, &show.Year, &show.EndYear, &show.EpisodeCount, &show.SeasonCount, &show.PosterItemID, &show.PosterMTimeUnix, &show.BackdropItemID, &show.BackdropMTimeUnix, &show.Overview, &show.Genres, &show.Rating, &show.Premiered, &updatedAt); err != nil {
+		if err := rows.Scan(&show.LibraryID, &show.Title, &show.SortTitle, &show.OriginalTitle, &show.Year, &show.EndYear, &show.EpisodeCount, &show.SeasonCount, &show.PosterItemID, &show.PosterMTimeUnix, &show.BackdropItemID, &show.BackdropMTimeUnix, &show.PosterThumbhash, &show.BackdropThumbhash, &show.Overview, &show.Genres, &show.Rating, &show.Premiered, &updatedAt); err != nil {
 			return nil, err
 		}
 		shows = append(shows, show)

@@ -1,32 +1,38 @@
 package media
 
 type Item struct {
-	ID                int64           `json:"id"`
-	LibraryID         string          `json:"libraryId"`
-	Path              string          `json:"-"`
-	Kind              string          `json:"kind"`
-	Title             string          `json:"title"`
-	SortTitle         string          `json:"sortTitle"`
-	OriginalTitle     string          `json:"originalTitle,omitempty"`
-	Year              int             `json:"year,omitempty"`
-	DurationMS        int64           `json:"durationMs,omitempty"`
-	Container         string          `json:"container,omitempty"`
-	VideoCodec        string          `json:"videoCodec,omitempty"`
-	AudioCodec        string          `json:"audioCodec,omitempty"`
-	IMDbID            string          `json:"imdbId,omitempty"`
-	TMDbID            string          `json:"tmdbId,omitempty"`
-	TVDbID            string          `json:"tvdbId,omitempty"`
-	Width             int             `json:"width,omitempty"`
-	Height            int             `json:"height,omitempty"`
-	BitRate           int64           `json:"bitRate,omitempty"`
-	SizeBytes         int64           `json:"sizeBytes"`
-	MTimeUnix         int64           `json:"mtimeUnix"`
-	NFOPath           string          `json:"-"`
-	NFOMTimeUnix      int64           `json:"nfoMtimeUnix,omitempty"`
-	PosterPath        string          `json:"posterPath,omitempty"`
-	PosterMTimeUnix   int64           `json:"posterMtimeUnix,omitempty"`
-	BackdropPath      string          `json:"backdropPath,omitempty"`
-	BackdropMTimeUnix int64           `json:"backdropMtimeUnix,omitempty"`
+	ID                int64  `json:"id"`
+	LibraryID         string `json:"libraryId"`
+	Path              string `json:"-"`
+	Kind              string `json:"kind"`
+	Title             string `json:"title"`
+	SortTitle         string `json:"sortTitle"`
+	OriginalTitle     string `json:"originalTitle,omitempty"`
+	Year              int    `json:"year,omitempty"`
+	DurationMS        int64  `json:"durationMs,omitempty"`
+	Container         string `json:"container,omitempty"`
+	VideoCodec        string `json:"videoCodec,omitempty"`
+	AudioCodec        string `json:"audioCodec,omitempty"`
+	IMDbID            string `json:"imdbId,omitempty"`
+	TMDbID            string `json:"tmdbId,omitempty"`
+	TVDbID            string `json:"tvdbId,omitempty"`
+	Width             int    `json:"width,omitempty"`
+	Height            int    `json:"height,omitempty"`
+	BitRate           int64  `json:"bitRate,omitempty"`
+	SizeBytes         int64  `json:"sizeBytes"`
+	MTimeUnix         int64  `json:"mtimeUnix"`
+	NFOPath           string `json:"-"`
+	NFOMTimeUnix      int64  `json:"nfoMtimeUnix,omitempty"`
+	PosterPath        string `json:"posterPath,omitempty"`
+	PosterMTimeUnix   int64  `json:"posterMtimeUnix,omitempty"`
+	BackdropPath      string `json:"backdropPath,omitempty"`
+	BackdropMTimeUnix int64  `json:"backdropMtimeUnix,omitempty"`
+	// Base64 thumbhash previews. Clients decode these to a blurry placeholder
+	// painted under the real artwork while it loads. Empty until the
+	// background artwork pass reaches the item; clients must degrade to a
+	// plain background rather than assume one is present.
+	PosterThumbhash   string          `json:"posterThumbhash,omitempty"`
+	BackdropThumbhash string          `json:"backdropThumbhash,omitempty"`
 	Overview          string          `json:"overview,omitempty"`
 	Tagline           string          `json:"tagline,omitempty"`
 	OfficialRating    string          `json:"officialRating,omitempty"`
@@ -140,6 +146,8 @@ type ShowSummary struct {
 	PosterMTimeUnix   int64   `json:"posterMtimeUnix,omitempty"`
 	BackdropItemID    int64   `json:"backdropItemId,omitempty"`
 	BackdropMTimeUnix int64   `json:"backdropMtimeUnix,omitempty"`
+	PosterThumbhash   string  `json:"posterThumbhash,omitempty"`
+	BackdropThumbhash string  `json:"backdropThumbhash,omitempty"`
 	Overview          string  `json:"overview,omitempty"`
 	Genres            string  `json:"genres,omitempty"`
 	Rating            float64 `json:"rating,omitempty"`

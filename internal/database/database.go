@@ -454,6 +454,19 @@ CREATE TABLE IF NOT EXISTS app_updates (
 		`ALTER TABLE media_items ADD COLUMN season_number INTEGER`,
 		`ALTER TABLE media_items ADD COLUMN episode_number INTEGER`,
 		`ALTER TABLE media_items ADD COLUMN episode_title TEXT`,
+		// Thumbhash placeholders. Written only by the background artwork pass,
+		// never by the scanner's upsert, so a rescan cannot wipe them. The
+		// _src columns record the artwork mtime each hash was derived from,
+		// which is what makes the pass notice replaced artwork and recompute.
+		`ALTER TABLE media_items ADD COLUMN poster_thumbhash TEXT`,
+		`ALTER TABLE media_items ADD COLUMN poster_thumbhash_src INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE media_items ADD COLUMN backdrop_thumbhash TEXT`,
+		`ALTER TABLE media_items ADD COLUMN backdrop_thumbhash_src INTEGER NOT NULL DEFAULT 0`,
+		// Partial index over just the rows the backfill still owes work for,
+		// so its polling query stays cheap on a fully-hashed library.
+		`CREATE INDEX IF NOT EXISTS idx_media_thumbhash_pending ON media_items(id)
+			WHERE (poster_path IS NOT NULL AND poster_path != '' AND (poster_thumbhash IS NULL OR poster_thumbhash_src != poster_mtime_unix))
+			   OR (backdrop_path IS NOT NULL AND backdrop_path != '' AND (backdrop_thumbhash IS NULL OR backdrop_thumbhash_src != backdrop_mtime_unix))`,
 		`CREATE INDEX IF NOT EXISTS idx_media_show ON media_items(library_id, show_title, season_number, episode_number)`,
 		`CREATE INDEX IF NOT EXISTS idx_media_library_kind_sort ON media_items(library_id, kind, sort_title, season_number, episode_number)`,
 		`CREATE INDEX IF NOT EXISTS idx_media_library_kind_updated ON media_items(library_id, kind, updated_at)`,

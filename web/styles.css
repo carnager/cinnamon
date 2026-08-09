@@ -149,7 +149,7 @@ button, input, select { font: inherit; }
   background: rgba(8, 9, 12, .78);
   backdrop-filter: blur(18px);
   border-bottom: 1px solid rgba(255,255,255,.06);
-  padding: 0 46px;
+  padding: 0 var(--gutter);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -738,7 +738,7 @@ button, input, select { font: inherit; }
   gap: 14px;
   width: min(100%, var(--page-max));
   margin: 0 auto;
-  padding: 0 46px;
+  padding: 0 var(--gutter);
 }
 
 .view-header h1 {
@@ -774,7 +774,7 @@ button, input, select { font: inherit; }
   display: flex;
   align-items: baseline;
   gap: 10px;
-  padding: 0 46px;
+  padding: 0 var(--gutter);
 }
 
 .shelf-header h2 {
@@ -818,7 +818,7 @@ button, input, select { font: inherit; }
   width: min(100%, var(--page-max));
   margin: 0 auto;
   overflow-x: auto;
-  padding: 0 46px 4px;
+  padding: 0 var(--gutter) 4px;
   scrollbar-width: none;
 }
 
@@ -882,7 +882,7 @@ button, input, select { font: inherit; }
   gap: 26px 20px;
   width: min(100%, var(--page-max));
   margin: 0 auto;
-  padding: 0 46px;
+  padding: 0 var(--gutter);
 }
 
 .show-grid { align-items: start; }
@@ -1216,7 +1216,21 @@ button, input, select { font: inherit; }
    detail block so the artwork bleeds up behind the translucent top bar and
    fades into the page background — same treatment as the companion app's
    DetailHero scrim. */
-.view { position: relative; }
+.view {
+  position: relative;
+  /* Establishes a stacking context, which .page-backdrop depends on: it sits
+     at z-index -1 so it paints behind the detail content, and without a
+     stacking context here that negative index drops it behind .shell's opaque
+     background instead — a black hero on every detail page.
+
+     This used to work by accident. The old .view-fade animation left a
+     transform on .view, and a transform creates a stacking context as a side
+     effect. Once the entrance animation moved onto .view's children rather
+     than .view itself, that side effect disappeared and took the backdrop
+     with it. isolation states the requirement outright so it cannot be lost
+     again by changing an animation. */
+  isolation: isolate;
+}
 
 .page-backdrop {
   position: absolute;
@@ -1361,7 +1375,7 @@ button, input, select { font: inherit; }
 }
 
 .overview {
-  max-width: 850px;
+  max-width: var(--prose-max);
   color: #d8deea;
   line-height: 1.55;
   font-size: 15px;
@@ -1412,7 +1426,7 @@ button, input, select { font: inherit; }
   gap: 20px;
   width: min(100%, var(--page-max));
   margin: 0 auto;
-  padding: 0 46px;
+  padding: 0 var(--gutter);
 }
 
 .season-browser .section-header {
@@ -1487,7 +1501,7 @@ button, input, select { font: inherit; }
 .season-episode-list {
   width: min(100%, var(--page-max));
   margin: 0 auto;
-  padding: 0 46px 32px;
+  padding: 0 var(--gutter) 32px;
 }
 
 .season-nav {
@@ -1667,7 +1681,7 @@ button, input, select { font: inherit; }
 .cast-shelf {
   width: min(100%, var(--page-max));
   margin: 4px auto 0;
-  padding: 0 46px;
+  padding: 0 var(--gutter);
 }
 
 .cast-shelf .section-header {
@@ -1749,11 +1763,11 @@ button, input, select { font: inherit; }
 
 .actor-page {
   display: grid;
-  grid-template-columns: 180px minmax(0, 820px);
+  grid-template-columns: clamp(180px, 14vw, 300px) minmax(0, 1fr);
   gap: 30px;
-  width: min(100%, var(--detail-max));
+  width: min(100%, var(--page-max));
   margin: 0 auto;
-  padding: 22px 34px 6px;
+  padding: 22px var(--gutter) 6px;
 }
 
 .actor-page-avatar {
@@ -2790,7 +2804,7 @@ img.user-menu-avatar {
   align-items: center;
   gap: 30px;
   height: var(--topbar-height);
-  padding: 0 46px;
+  padding: 0 var(--gutter);
   background: var(--bg2);
   border-bottom: 1px solid var(--line);
 }
@@ -2873,7 +2887,7 @@ img.user-menu-avatar {
 /* ── Headings ── */
 .view-header {
   display: flex; align-items: baseline; justify-content: space-between; gap: 14px;
-  width: min(100%, var(--page-max)); margin: 0 auto; padding: 0 46px;
+  width: min(100%, var(--page-max)); margin: 0 auto; padding: 0 var(--gutter);
 }
 .view-header h1 { font-size: 38px; }
 .view-header span { color: var(--text-secondary); font-size: 14px; }
@@ -2887,7 +2901,7 @@ img.user-menu-avatar {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
   gap: 30px 22px;
-  width: min(100%, var(--page-max)); margin: 0 auto; padding: 0 46px;
+  width: min(100%, var(--page-max)); margin: 0 auto; padding: 0 var(--gutter);
 }
 .item { border: 0; background: none; color: var(--text); text-align: left; padding: 0; cursor: pointer; position: relative; }
 .item .poster, .poster {
@@ -2929,7 +2943,7 @@ img.user-menu-avatar {
 /* ── Home rails ── */
 .home-shelves { display: flex; flex-direction: column; gap: 40px; padding: 30px 0 80px; }
 .shelf { display: flex; flex-direction: column; gap: 16px; }
-.shelf-header { display: flex; align-items: baseline; gap: 13px; padding: 0 46px; }
+.shelf-header { display: flex; align-items: baseline; gap: 13px; padding: 0 var(--gutter); }
 .shelf-header h2 { font-size: 24px; }
 .shelf-header span { color: var(--text-secondary); font-size: 14px; }
 .shelf-row {
@@ -2967,7 +2981,7 @@ img.user-menu-avatar {
   min-height: clamp(440px, 82vh, 760px);
   display: flex;
   align-items: flex-end;
-  padding: 0 46px 54px;
+  padding: 0 var(--gutter) 54px;
   margin-bottom: 6px;
   overflow: hidden;
 }
@@ -3606,8 +3620,19 @@ img.user-menu-avatar {
   --radius: 8px;
   --radius-lg: 12px;
   --radius-xl: 18px;
-  --page-max: 1440px;
-  --detail-max: 1200px;
+  /* ── Layout contract ──────────────────────────────────────────────
+     One content width, one gutter, one reading measure. Everything
+     structural fills --page-max and is inset by --gutter; only prose gets
+     --prose-max, because that is a readability limit rather than a layout
+     one. This replaced five competing width systems (1440px, 1200px, a
+     hard-coded 780px and 800px column, and uncapped shelves), which is why
+     a grid used to sit at 64% of the window while the shelf below it ran
+     edge to edge. --detail-max is kept as an alias so any rule still
+     referencing it resolves to the same single width. */
+  --page-max: 100%;
+  --detail-max: var(--page-max);
+  --gutter: clamp(18px, 3vw, 46px);
+  --prose-max: 70ch;
   --topbar-height: 72px;
   --shadow-card: 0 12px 30px rgba(0, 0, 0, .42);
   --shadow-hover: 0 22px 52px rgba(0, 0, 0, .62);
@@ -3657,7 +3682,7 @@ body {
 
 /* App chrome */
 .topnav {
-  height: var(--topbar-height); gap: 28px; padding: 0 clamp(18px, 3vw, 44px);
+  height: var(--topbar-height); gap: 28px; padding: 0 var(--gutter);
   background: rgba(5,11,15,.86); border-bottom: 1px solid rgba(43,57,66,.72);
   backdrop-filter: blur(20px) saturate(130%);
 }
@@ -3725,7 +3750,7 @@ body {
 
 .content { padding-top: var(--topbar-height); }
 .view { gap: 24px; min-height: calc(100vh - var(--topbar-height)); }
-.filter-bar { padding: 18px clamp(18px, 3vw, 44px) 0; gap: 8px; }
+.filter-bar { padding: 18px var(--gutter) 0; gap: 8px; }
 .topbar-filter-trigger {
   min-height: 40px; border-radius: 999px; background: var(--surface-2); border-color: var(--line);
   padding: 0 12px; gap: 7px; backdrop-filter: none;
@@ -3758,7 +3783,7 @@ body {
 .secondary.active { border-color: rgba(244,123,53,.48); background: rgba(244,123,53,.12); color: var(--accent); }
 .home-hero-actions .primary, .home-hero-actions .secondary { border-radius: 9px; min-height: 48px; }
 .home-shelves { margin-top: -18px; }
-.shelf-header, .shelf-row, .view-header, .section-header, .grid { padding-left: clamp(18px, 3vw, 44px); padding-right: clamp(18px, 3vw, 44px); }
+.shelf-header, .shelf-row, .view-header, .section-header, .grid { padding-left: var(--gutter); padding-right: var(--gutter); }
 .shelf-header h2, .section-header h2 { font-size: 20px; }
 .shelf-row { gap: 16px; }
 .shelf-row .item { width: 166px; }
@@ -3796,12 +3821,12 @@ body {
     linear-gradient(to top, var(--bg) 1%, rgba(5,11,15,.82) 30%, rgba(5,11,15,.2) 70%),
     linear-gradient(to right, rgba(5,11,15,.94) 0%, rgba(5,11,15,.52) 43%, rgba(5,11,15,.1) 78%);
 }
-.breadcrumb { padding: 20px clamp(18px, 3vw, 44px) 0; color: var(--text-secondary); }
+.breadcrumb { padding: 20px var(--gutter) 0; color: var(--text-secondary); }
 .breadcrumb-sep { color: var(--line); }
 .view.has-backdrop .detail, .view.has-backdrop .show-detail { padding-top: clamp(110px, 22vh, 220px); }
 .detail, .show-detail {
-  width: min(100%, var(--detail-max)); grid-template-columns: 190px minmax(0, 780px); gap: 28px;
-  padding: 28px clamp(18px, 3vw, 44px) 0; margin-left: clamp(0px, 3vw, 50px);
+  width: min(100%, var(--page-max)); grid-template-columns: clamp(190px, 14vw, 300px) minmax(0, 1fr); gap: 28px;
+  padding: 28px var(--gutter) 0; margin-left: 0;
 }
 .detail-poster.poster { border-radius: 8px; }
 .detail-body { gap: 10px; }
@@ -3817,14 +3842,14 @@ body {
 .source-rating:first-child .source-rating-label::before { content: "★ "; }
 .genre-pill { padding: 4px 10px; border-radius: 999px; background: rgba(244,123,53,.11); border-color: rgba(244,123,53,.28); color: var(--accent); font-size: 10px; }
 .overview {
-  max-width: 740px; padding: 13px 15px; border-radius: 7px; background: rgba(5,11,15,.54);
+  max-width: var(--prose-max); padding: 13px 15px; border-radius: 7px; background: rgba(5,11,15,.54);
   border-color: rgba(153,165,173,.18); color: #d6dcde; font-size: 14px; backdrop-filter: blur(8px);
 }
 .detail-actions { gap: 8px; }
 .detail-play { min-width: 126px; min-height: 46px; }
 .stream-selectors { gap: 8px; }
 .stream-field select { background-color: rgba(5,11,15,.75); }
-.season-browser, .cast-shelf { padding-left: clamp(18px, 3vw, 44px); padding-right: clamp(18px, 3vw, 44px); }
+.season-browser, .cast-shelf { padding-left: var(--gutter); padding-right: var(--gutter); }
 .season-selector { gap: 7px; }
 .season-pill { border-radius: 7px; background: var(--surface-2); }
 .season-pill.active { color: var(--accent); border-color: rgba(244,123,53,.45); background: rgba(244,123,53,.11); }
@@ -3833,12 +3858,12 @@ body {
 .cast-row { grid-auto-columns: 104px; gap: 15px; }
 .cast-avatar { width: 86px; height: 86px; color: var(--accent); border-color: var(--line); }
 .cast-card:hover .cast-avatar, .cast-card:focus-visible .cast-avatar { box-shadow: 0 0 0 2px var(--accent), var(--shadow-hover); }
-.actor-page { width: min(100%, var(--detail-max)); grid-template-columns: 160px minmax(0, 800px); padding: 34px clamp(18px, 3vw, 44px) 12px; }
+.actor-page { width: min(100%, var(--page-max)); grid-template-columns: clamp(160px, 14vw, 300px) minmax(0, 1fr); padding: 34px var(--gutter) 12px; }
 .actor-page-avatar { width: 160px; height: 160px; border-color: var(--line); }
 .actor-page-copy h1 { font-size: clamp(38px, 5vw, 64px); }
 
 /* Search */
-.search-page-head { display: flex; flex-direction: column; gap: 10px; padding: 34px clamp(18px, 3vw, 44px) 4px; }
+.search-page-head { display: flex; flex-direction: column; gap: 10px; padding: 34px var(--gutter) 4px; }
 .search-page-head h1 { font-family: var(--display); font-size: clamp(34px, 4vw, 50px); line-height: 1; }
 .search-option-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .search-option-label { width: 76px; color: var(--text-secondary); font-size: 9px; font-weight: 900; letter-spacing: .13em; }
@@ -3848,7 +3873,7 @@ body {
 }
 .search-chip:hover { color: var(--text); }
 .search-chip.active { color: var(--accent); border-color: rgba(244,123,53,.46); background: rgba(244,123,53,.11); }
-.search-result-count { padding: 0 clamp(18px, 3vw, 44px); color: var(--text-secondary); font-size: 11px; }
+.search-result-count { padding: 0 var(--gutter); color: var(--text-secondary); font-size: 11px; }
 .search-state { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 100px 24px; text-align: center; }
 .search-state strong { font-family: var(--display); font-size: 21px; }
 .search-state span { color: var(--text-secondary); }
@@ -3856,7 +3881,7 @@ body {
 /* History */
 .history-header { padding-top: 34px !important; align-items: flex-end; }
 .history-header > div { display: flex; flex-direction: column; gap: 5px; }
-.history-list { width: min(100%, 1000px); padding: 0 clamp(18px, 3vw, 44px) 50px; display: flex; flex-direction: column; }
+.history-list { width: min(100%, 1000px); padding: 0 var(--gutter) 50px; display: flex; flex-direction: column; }
 .history-row {
   display: grid; grid-template-columns: 54px minmax(0,1fr) auto auto; align-items: center; gap: 14px;
   width: 100%; min-height: 74px; padding: 9px 4px; border: 0; border-bottom: 1px solid rgba(43,57,66,.72);
@@ -3989,4 +4014,175 @@ body {
   .home-hero-actions > * { flex: 1 1 auto; }
   .topbar-filter-trigger { padding-inline: 10px; }
   .topbar-filter-label { display: none; }
+}
+
+/* ── Artwork images ──────────────────────────────────────────────────
+   Media artwork is a real <img> layered over its host's decoded thumbhash
+   background (see artworkInto in views.js), rather than a CSS background on
+   the host itself. That buys lazy loading and async decoding, and lets the
+   image fade in over the artwork's own colours instead of snapping in over
+   flat grey. A poster whose image 404s simply keeps showing the placeholder. */
+
+/* Hosts must clip the image they contain. Deliberately does NOT set
+   position: this selector has the same specificity as a plain class but sits
+   later in the file, so setting it here silently overrode .home-hero-bg's
+   position: absolute, collapsing the hero backdrop to zero height. Hosts
+   that need positioning declare it themselves, just below. */
+:has(> .artwork-img) {
+  overflow: hidden;
+}
+
+/* The two artwork hosts that are otherwise statically positioned. Everything
+   else (.poster, .ep-thumb, .ep-still, .home-hero-bg) already establishes a
+   containing block of its own. */
+.page-backdrop-img,
+.history-art {
+  position: relative;
+}
+
+.artwork-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 300ms cubic-bezier(.4, 0, .2, 1);
+  /* Under the badges, ratings and hover overlays the callers append. */
+  z-index: 0;
+}
+
+.artwork-img.is-loaded { opacity: 1; }
+
+/* The placeholder is a 32px-wide PNG stretched over the whole card; letting
+   the browser smooth it is the difference between a soft blur and visible
+   blocks. */
+.has-thumbhash {
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  image-rendering: auto;
+}
+
+/* The page backdrop crops from the upper third so faces are not cut off; the
+   host rule above would otherwise centre it. */
+.page-backdrop-img .artwork-img { object-position: center 20%; }
+
+@media (prefers-reduced-motion: reduce) {
+  .artwork-img { transition: none; }
+}
+
+/* ── View transitions ────────────────────────────────────────────────
+   setView() runs its DOM swap inside document.startViewTransition, so the
+   browser cross-fades the previous page into the next one rather than
+   hard-cutting. Kept faster than the 250ms default: this fires on every
+   navigation, and anything slower starts to feel like waiting rather than
+   like motion. */
+/* Only the outgoing page is animated. The incoming one is shown at once and
+   draws itself in via the card stagger below — cross-fading it as well would
+   multiply the two opacity ramps together (0.5 x 0.5 = 0.25 at the midpoint)
+   and read as a slow murky wash rather than as motion. */
+::view-transition-old(root) {
+  animation: view-transition-leave 120ms cubic-bezier(.4, 0, .2, 1) both;
+}
+
+::view-transition-new(root) {
+  animation: none;
+}
+
+/* Captured at root only, deliberately.
+
+   Naming .content gave it its own ::view-transition-group, and a group
+   interpolates its box from the old state to the new one. Movies (grid plus
+   filter bar) and Home (hero plus shelves) have wildly different content
+   boxes, so the outgoing snapshot was slid and resized while it faded — the
+   heading visibly drifting down mid-transition. Trading a jump for a slide.
+
+   At root there is no morph to begin with: the captured box is the viewport,
+   and the viewport does not change between pages. Old and new simply
+   cross-fade in place, so a layout difference like the filter bar appearing
+   or disappearing dissolves instead of moving. */
+::view-transition-group(root) {
+  animation-duration: 200ms;
+  animation-timing-function: cubic-bezier(.4, 0, .2, 1);
+}
+
+::view-transition-old(root) {
+  animation: view-transition-leave 140ms cubic-bezier(.4, 0, .2, 1) both;
+}
+
+/* Both sides cross-fade. Leaving this unanimated was the original hard cut:
+   the new page appeared at full opacity in a single frame while only the old
+   one faded. */
+::view-transition-new(root) {
+  animation: view-transition-enter 200ms cubic-bezier(.4, 0, .2, 1) both;
+}
+
+@keyframes view-transition-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Entrance movement during a navigation is transform-only: the root
+   cross-fade above already owns opacity, and a second ramp over the same
+   pixels multiplies into a murky wash. */
+@keyframes view-enter-block {
+  from {
+    transform: translateY(10px);
+  }
+  to {
+    transform: none;
+  }
+}
+
+.view-enter > * {
+  animation: view-enter-block 190ms cubic-bezier(.4, 0, .2, 1) both;
+  animation-delay: calc(var(--enter-b, 0) * 22ms);
+}
+
+/* Content that arrives *after* a page is committed — the episode list — is
+   outside the root cross-fade, so nothing else would ever fade it in. This
+   variant owns its opacity for exactly that reason. */
+@keyframes view-appear-block {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.view-appear > * {
+  animation: view-appear-block 260ms cubic-bezier(.4, 0, .2, 1) both;
+  animation-delay: calc(var(--enter-b, 0) * 35ms);
+}
+
+@keyframes view-enter-card {
+  from {
+    transform: translateY(4px);
+  }
+  to {
+    transform: none;
+  }
+}
+
+.view-enter .item,
+.view-enter .card,
+.view-enter .shelf-card,
+.view-enter .ep-still {
+  animation: view-enter-card 170ms cubic-bezier(.4, 0, .2, 1) both;
+  animation-delay: calc(var(--enter-i, 0) * 6ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .view-enter > *,
+  .view-appear > *,
+  .view-enter .item,
+  .view-enter .card,
+  .view-enter .shelf-card,
+  .view-enter .ep-still {
+    animation: none;
+  }
 }

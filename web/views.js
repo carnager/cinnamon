@@ -1,7 +1,50 @@
+/* artworkInto layers real artwork over a thumbhash placeholder inside host.
+
+   Artwork used to be a CSS background on the host element, which meant the
+   browser could not lazy-load it, the element stayed empty until the full
+   image arrived, and every card popped from flat grey to full art. A real
+   <img> gets lazy loading and async decoding for free, and painting the
+   decoded thumbhash underneath means the gap is filled with the artwork's own
+   colours instead of a hole.
+
+   Falls back to the plain host background when the server has not hashed this
+   artwork yet — the background pass runs behind the scanner, so a freshly
+   scanned library is browsable before any hash exists.
+
+   host must be positioned (the .artwork-img rule pins the image to its box). */
+function artworkInto(host, item, kind, width, { eager = false } = {}) {
+  const hash = kind === "backdrop" ? item?.backdropThumbhash : item?.posterThumbhash;
+  const placeholder = thumbhashDataURL(hash);
+  if (placeholder) {
+    host.style.backgroundImage = `url(${placeholder})`;
+    host.classList.add("has-thumbhash");
+  }
+
+  const img = el("img", "artwork-img");
+  /* Above-the-fold artwork must not wait for the lazy-load heuristic: the
+     hero is the first thing on screen and deferring it is what makes a page
+     look half-built. */
+  img.loading = eager ? "eager" : "lazy";
+  if (eager) img.fetchPriority = "high";
+  img.decoding = "async";
+  /* Decorative: the accessible name always comes from the surrounding card
+     title or the control's own label, so announcing the filename here would
+     just double it up. */
+  img.alt = "";
+  img.addEventListener("load", () => img.classList.add("is-loaded"), { once: true });
+  img.src = imageURL(item, kind, width);
+  /* A memory-cached image can already be complete before the listener above
+     ever fires, which would strand it at zero opacity. */
+  if (img.complete && img.naturalWidth > 0) img.classList.add("is-loaded");
+  /* Prepended so badges and overlays appended by callers stay above it. */
+  host.prepend(img);
+  return img;
+}
+
 function posterBlock(item, fallbackTitle, badges = {}, width = 400) {
   const poster = el("div", "poster");
   if (hasPosterImage(item)) {
-    poster.style.backgroundImage = `url(${imageURL(item, "poster", width)})`;
+    artworkInto(poster, item, "poster", width);
   } else {
     poster.textContent = (fallbackTitle || "?").slice(0, 1).toUpperCase();
   }
@@ -130,7 +173,7 @@ function pageBackdrop(source) {
   if (!source?.backdropItemId && !source?.backdropPath) return null;
   const wrap = el("div", "page-backdrop");
   const img = el("div", "page-backdrop-img");
-  img.style.backgroundImage = `url(${imageURL(source, "backdrop")})`;
+  artworkInto(img, source, "backdrop");
   wrap.append(img);
   return wrap;
 }
@@ -217,6 +260,7 @@ function showPosterSource(show) {
     id: show.posterItemId || show.posterItem?.id,
     posterItemId: show.posterItemId,
     posterMtimeUnix: show.posterMtimeUnix || show.posterItem?.posterMtimeUnix,
+    posterThumbhash: show.posterThumbhash || show.posterItem?.posterThumbhash,
     rating: showRating(show),
   };
 }
@@ -226,6 +270,7 @@ function showBackdropSource(show) {
     id: show.backdropItemId,
     backdropItemId: show.backdropItemId,
     backdropMtimeUnix: show.backdropMtimeUnix,
+    backdropThumbhash: show.backdropThumbhash,
   };
 }
 
@@ -273,9 +318,12 @@ function homeHero(item, kick) {
   const bg = el("div", "home-hero-bg");
   const backdropSrc = isShow ? showBackdropSource(item) : item;
   if (backdropSrc.backdropItemId || backdropSrc.backdropPath) {
-    const img = document.createElement("img");
-    img.src = imageURL(backdropSrc, "backdrop");
-    bg.append(img);
+    /* Was a bare <img>: it appeared at full opacity the instant it decoded,
+       which is the most jarring pop on the whole page because it is the
+       largest thing on screen. Routed through artworkInto so it fades up
+       over its thumbhash like every other piece of artwork. Eager, because
+       the hero is always above the fold. */
+    artworkInto(bg, backdropSrc, "backdrop", 0, { eager: true });
   }
   hero.append(bg);
 
@@ -1344,9 +1392,9 @@ function episodeRow(episode) {
   // Thumbnail with episode number badge
   const thumb = el("div", "ep-thumb");
   if (episode.backdropPath) {
-    thumb.style.backgroundImage = `url(${imageURL(episode, "backdrop", 400)})`;
+    artworkInto(thumb, episode, "backdrop", 400);
   } else if (episode.posterPath) {
-    thumb.style.backgroundImage = `url(${imageURL(episode, "poster", 400)})`;
+    artworkInto(thumb, episode, "poster", 400);
   }
   const epNum = String(episode.episodeNumber || 0).padStart(2, "0");
   thumb.append(el("span", "ep-thumb-badge", epNum));
@@ -1380,9 +1428,9 @@ function episodeCard(episode) {
   still.type = "button";
   still.addEventListener("click", open);
   if (episode.backdropPath) {
-    still.style.backgroundImage = `url(${imageURL(episode, "backdrop", 800)})`;
+    artworkInto(still, episode, "backdrop", 800);
   } else if (episode.posterPath) {
-    still.style.backgroundImage = `url(${imageURL(episode, "poster", 800)})`;
+    artworkInto(still, episode, "poster", 800);
   }
   still.append(el("span", "ep-still-badge", `E${String(episode.episodeNumber || 0).padStart(2, "0")}`));
   if (episode.rating) still.append(ratingBadge(episode.rating, "poster-rating"));
@@ -1787,6 +1835,10 @@ async function loadShowEpisodes(show, seasonNumber, container) {
   const libraryId = show.libraryId || activeLibraryId;
   const episodes = await api(`/api/tv/episodes?libraryId=${encodeURIComponent(libraryId)}&showTitle=${encodeURIComponent(show.title)}&season=${encodeURIComponent(String(seasonNumber))}`).catch(() => []);
   container.innerHTML = "";
+  /* Episodes are fetched after the page has already been committed, so they
+     land outside the view's entrance animation and would otherwise appear
+     fully formed in a single frame. */
+  stageEnterAnimation(container, "appear");
   const seasonLabel = seasonNumber ? `Season ${seasonNumber}` : "Specials";
   const header = el("div", "section-header");
   const allSeen = episodes.length > 0 && episodes.every((e) => itemSeen(e));

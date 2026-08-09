@@ -66,12 +66,47 @@ async function api(path, options) {
   const headers = new Headers(init.headers || {});
   if (authToken) headers.set("Authorization", `Bearer ${authToken}`);
   init.headers = headers;
+  const method = (init.method || "GET").toUpperCase();
   const res = await fetch(path, init);
   if (!res.ok) throw new Error(await res.text());
+  /* Anything that writes can invalidate any cached read — marking an episode
+     seen changes item lists, watchlists, progress and home shelves at once.
+     Rather than track which reads a given write affects, drop the lot; reads
+     are cheap and this keeps the cache from ever serving something the user
+     just changed. */
+  if (method !== "GET") clearAPICache();
   if (res.status === 204) return null;
   const text = await res.text();
   if (!text.trim()) return null;
   return JSON.parse(text);
+}
+
+/* ── Read cache ──────────────────────────────────────────────────────
+   Navigating between libraries used to re-issue every request each time,
+   so returning to a view you had just left cost a full round of fetches
+   even though nothing could have changed in the meantime.
+
+   Within the TTL a cached response is returned as-is and no request is
+   made. Past it, the fetch happens normally. Deliberately not
+   stale-while-revalidate: serving stale data and swapping it out underneath
+   the user needs every render path to be re-entrant, which this UI's
+   build-the-DOM-once render functions are not. */
+const API_CACHE_TTL_MS = 60_000;
+const apiCache = new Map();
+
+function clearAPICache() {
+  apiCache.clear();
+}
+
+/* apiCached is for idempotent GETs whose staleness for up to a minute is
+   harmless. Never use it for anything a write should be visible in
+   immediately without going through api() — writes clear the whole cache. */
+async function apiCached(path, ttl = API_CACHE_TTL_MS) {
+  const hit = apiCache.get(path);
+  if (hit && Date.now() - hit.at < ttl) return hit.data;
+  const data = await api(path);
+  apiCache.set(path, { at: Date.now(), data });
+  return data;
 }
 
 function setAuthenticated(user, token) {
@@ -475,9 +510,9 @@ async function refreshMediaState() {
   if (!authToken) return;
   const [progress, showProgress, watchlist, ratings] = await Promise.all([
     loadAllProgress().catch(() => []),
-    api("/api/progress/tv").catch(() => []),
-    api("/api/watchlist?limit=1000").catch(() => ({ items: [], shows: [] })),
-    api("/api/ratings/user").catch(() => []),
+    apiCached("/api/progress/tv").catch(() => []),
+    apiCached("/api/watchlist?limit=1000").catch(() => ({ items: [], shows: [] })),
+    apiCached("/api/ratings/user").catch(() => []),
   ]);
   applyUserRatings(ratings);
 
@@ -501,7 +536,7 @@ async function loadAllProgress() {
   const out = [];
   const limit = 500;
   for (let offset = 0; ; offset += limit) {
-    const page = await api(`/api/progress?limit=${limit}&offset=${offset}`);
+    const page = await apiCached(`/api/progress?limit=${limit}&offset=${offset}`);
     out.push(...(page || []));
     if (!page || page.length < limit) break;
   }
@@ -570,7 +605,12 @@ async function setShowWatchlisted(show, watchlisted) {
 
 function renderNav() {
   appShell.classList.toggle("settings-mode", activeView === "settings" || activeView === "users");
-  appShell.classList.toggle("home-mode", activeView === "home");
+  /* home-mode is NOT set here. renderNav() runs at the start of a navigation,
+     while the previous page is still on screen, so toggling it on intent
+     stripped the view header's top padding and yanked the outgoing content
+     up ~24px before the transition had even begun. setView() owns this: it
+     derives the flag from whether the committed content actually contains a
+     hero, and applies it in the same frame as the content itself. */
   libraryNav.innerHTML = "";
 
   const navLink = (label, active, onClick) => {
@@ -602,6 +642,24 @@ function renderNav() {
     renderWatchlist().catch(console.error);
   }));
 
+  markTopbarDirty();
+}
+
+/* The filter bar is chrome, and chrome must change in the same frame as the
+   content it belongs to. renderNav() runs at the start of a navigation and
+   the new view lands ~90ms later, so rebuilding the bar there left the old
+   page on screen with its filter bar already collapsed to zero height — the
+   page visibly jumped, then changed. Marking it dirty instead lets setView()
+   commit both together. */
+let topbarDirty = false;
+
+function markTopbarDirty() {
+  topbarDirty = true;
+}
+
+function flushTopbarControls() {
+  if (!topbarDirty) return;
+  topbarDirty = false;
   renderTopbarControls();
 }
 
@@ -828,7 +886,7 @@ async function fetchItemsPage(libraryId, { limit = perPage, offset = 0, sort = "
   if (seen) params.set("seen", seen);
   if (minRating) params.set("minRating", String(minRating));
   if (decades) params.set("decades", decades);
-  return api(`/api/items?${params}`);
+  return apiCached(`/api/items?${params}`);
 }
 
 async function fetchItem(itemId) {
@@ -842,16 +900,16 @@ async function fetchShowsPage(libraryId, { limit = perPage, offset = 0, sort = "
   if (seen) params.set("seen", seen);
   if (minRating) params.set("minRating", String(minRating));
   if (decades) params.set("decades", decades);
-  return api(`/api/tv/shows?${params}`);
+  return apiCached(`/api/tv/shows?${params}`);
 }
 
 async function fetchLibraryGenres(libraryId) {
-  return api(`/api/genres?libraryId=${encodeURIComponent(libraryId)}`).catch(() => []);
+  return apiCached(`/api/genres?libraryId=${encodeURIComponent(libraryId)}`).catch(() => []);
 }
 
 async function fetchLibraryDecades(library) {
   const kind = library.type === "tv" ? "tv" : "movie";
-  return api(`/api/decades?libraryId=${encodeURIComponent(library.id)}&kind=${kind}`).catch(() => []);
+  return apiCached(`/api/decades?libraryId=${encodeURIComponent(library.id)}&kind=${kind}`).catch(() => []);
 }
 
 async function fetchWatchlist() {
@@ -863,9 +921,30 @@ async function fetchWatchlist() {
   return list;
 }
 
+/* How long a navigation may take before it is worth telling the user
+   anything. Measured on a real library, a library switch completes in
+   ~110-180ms, so the old unconditional placeholder meant every navigation
+   flashed content -> "Loading…" -> content. Blanking the page you are
+   looking at, to show a word, for a tenth of a second, is what made
+   browsing feel heavy. Past this threshold the wait is real and silence
+   would feel broken instead. */
+const LOADING_PLACEHOLDER_DELAY_MS = 250;
+let pendingLoadingTimer = null;
+
+function cancelPendingLoading() {
+  if (pendingLoadingTimer !== null) {
+    clearTimeout(pendingLoadingTimer);
+    pendingLoadingTimer = null;
+  }
+}
+
 function setLoading(label = "Loading...") {
-  view.innerHTML = "";
-  view.append(el("div", "empty", label));
+  cancelPendingLoading();
+  pendingLoadingTimer = setTimeout(() => {
+    pendingLoadingTimer = null;
+    view.innerHTML = "";
+    view.append(el("div", "empty", label));
+  }, LOADING_PLACEHOLDER_DELAY_MS);
 }
 
 async function loadCurrentView(skipHistory = false) {
@@ -919,7 +998,7 @@ function render(skipHistory) {
   const library = activeLibrary();
   currentShow = null;
   currentSeason = null;
-  renderTopbarControls();
+  markTopbarDirty();
   if (!skipHistory) pushState({ view: "library", libraryId: library?.id, page: currentPage, genre: currentGenre, sort: currentSort, seen: currentSeenStatus, minRating: currentMinRating, decades: currentDecades });
 
   if (!library) {
@@ -1135,7 +1214,7 @@ async function renderHistory(skipHistory) {
       row.addEventListener("click", () => openDetail(entry.item).catch(console.error));
     }
     const art = el("div", "history-art");
-    if (entry.item && hasPosterImage(entry.item)) art.style.backgroundImage = `url(${imageURL(entry.item, "poster", 160)})`;
+    if (entry.item && hasPosterImage(entry.item)) artworkInto(art, entry.item, "poster", 160);
     else art.textContent = entry.kind === "episode" ? "TV" : "FILM";
     const copy = el("div", "history-copy");
     copy.append(el("strong", null, entry.title), el("span", null, [entry.subtitle, entry.year].filter(Boolean).join(" · ")));
@@ -1469,7 +1548,7 @@ async function fetchAlphabet(library) {
   if (library.type === "tv") params.set("kind", "tv");
   if (currentGenre) params.set("genre", currentGenre);
   if (currentDecades) params.set("decades", currentDecades);
-  return api(`/api/alphabet?${params}`).catch(() => []);
+  return apiCached(`/api/alphabet?${params}`).catch(() => []);
 }
 
 async function jumpToLetter(entry) {

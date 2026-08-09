@@ -9,19 +9,97 @@ function el(tag, className, children) {
 }
 
 function setView(content) {
+  /* A deferred "Loading…" placeholder may still be queued from the
+     navigation that produced this content; letting it fire now would blank
+     the page immediately after filling it. */
+  if (typeof cancelPendingLoading === "function") cancelPendingLoading();
+
+  /* Unmounted here rather than inside swap(), and this ordering matters.
+     The rail lives on <body>, and callers re-mount it on the line *after*
+     setView() returns. swap() runs later — inside the view transition
+     callback — so unmounting there would run after the caller had already
+     put the rail back, silently removing it on every navigation. */
   mountAlphabetRail(null);
-  view.innerHTML = "";
-  if (typeof content === "string") view.innerHTML = content;
-  else if (content) view.append(content);
-  // Nav goes translucent only when a full-bleed hero is on screen.
-  if (typeof appShell !== "undefined" && appShell) {
-    appShell.classList.toggle("home-mode", Boolean(view.querySelector(".home-hero")));
+
+  const swap = () => {
+    /* Committed here so the filter bar and the content it belongs to change
+       in the same frame, instead of the bar collapsing at the start of the
+       navigation and the content arriving ~90ms later. */
+    if (typeof flushTopbarControls === "function") flushTopbarControls();
+    view.innerHTML = "";
+    if (typeof content === "string") view.innerHTML = content;
+    else if (content) view.append(content);
+    // Nav goes translucent only when a full-bleed hero is on screen.
+    if (typeof appShell !== "undefined" && appShell) {
+      appShell.classList.toggle("home-mode", Boolean(view.querySelector(".home-hero")));
+    }
+    view.classList.toggle("has-backdrop", Boolean(view.querySelector(".page-backdrop")));
+    stageEnterAnimation(view);
+    window.scrollTo({ top: 0, behavior: "instant" });
+  };
+
+  /* Cross-fade the old view into the new one instead of hard-cutting. The
+     browser snapshots the page, applies the swap, then animates between the
+     two — so this replaces the old manual .view-fade class dance, which could
+     only fade the incoming content in and always showed a blank frame first.
+
+     Falls back to a plain synchronous swap where the API is missing. */
+  if (!document.startViewTransition || prefersReducedMotion()) {
+    swap();
+    view.classList.remove("view-fade");
+    void view.offsetWidth;
+    view.classList.add("view-fade");
+    return;
   }
-  view.classList.toggle("has-backdrop", Boolean(view.querySelector(".page-backdrop")));
-  view.classList.remove("view-fade");
-  void view.offsetWidth;
-  view.classList.add("view-fade");
-  window.scrollTo({ top: 0, behavior: "instant" });
+  document.startViewTransition(swap);
+}
+
+function prefersReducedMotion() {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+}
+
+/* How many cards get an individually delayed entrance. Past this the stagger
+   is not only invisible (those cards are below the fold) but harmful — card
+   200 would sit blank for four seconds waiting its turn. Everything beyond
+   the cap animates with no delay. */
+const ENTER_STAGGER_LIMIT = 14;
+
+/* Top-level blocks are far larger than cards, so only the first few are on
+   screen at once and a longer stagger would just delay visible content. */
+const ENTER_BLOCK_LIMIT = 4;
+
+/* stageEnterAnimation numbers the first cards in a freshly rendered view so
+   CSS can wash them in as a diagonal wave rather than snapping the whole grid
+   into place at once.
+
+   Done here, in the one place every view passes through, instead of in each
+   of the render functions that build cards. */
+function stageEnterAnimation(root, mode = "enter") {
+  if (prefersReducedMotion()) return;
+
+  /* Top-level blocks first — hero, shelves, headings. These carry the fade;
+     without them everything that is not a card appeared fully formed in the
+     first frame. Capped because blocks past the fold gain nothing from a
+     delay and would only hold the last one back. */
+  const blocks = root.children;
+  const blockCount = Math.min(blocks.length, ENTER_BLOCK_LIMIT);
+  for (let i = 0; i < blockCount; i++) {
+    blocks[i].style.setProperty("--enter-b", String(i));
+  }
+
+  const cards = root.querySelectorAll(".item, .card, .shelf-card, .ep-still");
+  const count = Math.min(cards.length, ENTER_STAGGER_LIMIT);
+  for (let i = 0; i < count; i++) {
+    cards[i].style.setProperty("--enter-i", String(i));
+  }
+  /* "appear" owns its own opacity, for content inserted after a page is
+     already committed and therefore outside the root cross-fade. */
+  const cls = mode === "appear" ? "view-appear" : "view-enter";
+  root.classList.remove("view-enter", "view-appear");
+  /* Forces the removed class to take effect before it is re-added, so the
+     animation restarts on every navigation instead of only the first. */
+  void root.offsetWidth;
+  root.classList.add(cls);
 }
 
 /* ── Player elements ── */

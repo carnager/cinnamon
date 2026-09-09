@@ -1,0 +1,531 @@
+#!/usr/bin/env python3
+"""Find and fix Matroska files whose Cues index omits their subtitle track.
+
+popcornd serves embedded text subtitles by seeking to the offsets in the file's
+own Cues index. A file that does not index its subtitle track falls back to
+demuxing the whole file — a minute on a large remux — which is slow enough to
+deadlock playback on the TV app. See SUBTITLES.md.
+
+    scripts/subtitle-index scan /mnt/nas/Videos
+    scripts/subtitle-index fix                    # remuxes what scan found
+    scripts/subtitle-index check FILE...          # classify individual files
+
+scan writes three lists into the current directory (override with --out-dir):
+
+    needs-fix.txt         text subtitles, not indexed -> fix these
+    bitmap-subs.txt       PGS/VobSub only; popcornd cannot use these at all
+    no-subtitle-blocks.txt   a text track that carries no cues; nothing to index
+
+fix remuxes with mkvmerge, which rewrites the container without re-encoding, and
+re-checks each file afterwards so a remux that did not help is reported rather
+than assumed.
+"""
+
+import argparse
+import collections
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+# EBML element IDs, canonical form (length marker included).
+ID_EBML_HEADER = 0x1A45DFA3
+ID_SEGMENT = 0x18538067
+ID_SEEK_HEAD = 0x114D9B74
+ID_SEEK = 0x4DBB
+ID_SEEK_ID = 0x53AB
+ID_SEEK_POSITION = 0x53AC
+ID_TRACKS = 0x1654AE6B
+ID_TRACK_ENTRY = 0xAE
+ID_TRACK_NUMBER = 0xD7
+ID_TRACK_TYPE = 0x83
+ID_CODEC_ID = 0x86
+ID_CUES = 0x1C53BB6B
+ID_CUE_POINT = 0xBB
+ID_CUE_TRACK_POSITIONS = 0xB7
+ID_CUE_TRACK = 0xF7
+ID_CLUSTER = 0x1F43B675
+
+TRACK_TYPE_SUBTITLE = 17
+
+# Kept in step with isTextSubtitleCodec() in internal/server/hls.go.
+TEXT_CODECS = ("S_TEXT/UTF8", "S_TEXT/ASCII", "S_TEXT/ASS", "S_TEXT/SSA",
+               "S_TEXT/WEBVTT")
+
+FAST = "fast"
+NEEDS_FIX = "needs-fix"
+BITMAP = "bitmap-subs"
+NO_BLOCKS = "no-subtitle-blocks"
+NO_SUBS = "no-subs"
+UNREADABLE = "unreadable"
+
+
+class Bail(Exception):
+    """The file cannot be classified through its index."""
+
+
+def read_id(f):
+    b = f.read(1)
+    if not b:
+        raise Bail("eof")
+    first = b[0]
+    width = 0
+    for i in range(4):
+        if first & (0x80 >> i):
+            width = i + 1
+            break
+    if width == 0:
+        raise Bail("bad id")
+    value = first
+    for c in f.read(width - 1):
+        value = (value << 8) | c
+    return value
+
+
+def read_size(f):
+    b = f.read(1)
+    if not b:
+        raise Bail("eof")
+    first = b[0]
+    width = 0
+    for i in range(8):
+        if first & (0x80 >> i):
+            width = i + 1
+            break
+    if width == 0:
+        raise Bail("bad size")
+    value = first & (0xFF >> width)
+    unknown = (1 << (width * 7)) - 1
+    for c in f.read(width - 1):
+        value = (value << 8) | c
+    if value == unknown:
+        raise Bail("unknown size")
+    return value
+
+
+def read_uint(f, n):
+    value = 0
+    for c in f.read(n):
+        value = (value << 8) | c
+    return value
+
+
+def read_element(f):
+    return read_id(f), read_size(f)
+
+
+def parse_seek_head(f, end):
+    """Return {target id: position relative to the segment payload}."""
+    found = {}
+    while f.tell() < end:
+        eid, size = read_element(f)
+        if eid != ID_SEEK:
+            f.seek(size, 1)
+            continue
+        stop = f.tell() + size
+        target = position = None
+        while f.tell() < stop:
+            sid, ssize = read_element(f)
+            if sid == ID_SEEK_ID:
+                target = 0
+                for c in f.read(ssize):
+                    target = (target << 8) | c
+            elif sid == ID_SEEK_POSITION:
+                position = read_uint(f, ssize)
+            else:
+                f.seek(ssize, 1)
+        if target is not None and position is not None:
+            found.setdefault(target, position)
+    return found
+
+
+def scan_top_level(f, base):
+    """Walk the Segment's top-level elements for files whose SeekHead is
+    incomplete. Stops at the first Cluster — Tracks always precedes it, and
+    walking further would read the whole file."""
+    found = {}
+    f.seek(base)
+    while True:
+        try:
+            position = f.tell()
+            eid, size = read_element(f)
+        except Bail:
+            break
+        if eid == ID_CLUSTER:
+            break
+        found.setdefault(eid, position - base)
+        try:
+            f.seek(size, 1)
+        except OSError:
+            break
+    return found
+
+
+def read_tracks(f, at):
+    """Return {track number: (codec id, ffmpeg stream index)} for subtitle
+    tracks. ffmpeg numbers streams in Tracks order, so a track's ordinal
+    position here is the index ffprobe reports."""
+    f.seek(at)
+    eid, size = read_element(f)
+    if eid != ID_TRACKS:
+        raise Bail("not tracks")
+    end = f.tell() + size
+    subtitles = {}
+    ordinal = -1
+    while f.tell() < end:
+        eid, size = read_element(f)
+        if eid != ID_TRACK_ENTRY:
+            f.seek(size, 1)
+            continue
+        ordinal += 1
+        stop = f.tell() + size
+        number = track_type = None
+        codec = ""
+        while f.tell() < stop:
+            tid, tsize = read_element(f)
+            if tid == ID_TRACK_NUMBER:
+                number = read_uint(f, tsize)
+            elif tid == ID_TRACK_TYPE:
+                track_type = read_uint(f, tsize)
+            elif tid == ID_CODEC_ID:
+                codec = f.read(tsize).decode("ascii", "replace").rstrip("\x00")
+            else:
+                f.seek(tsize, 1)
+        if track_type == TRACK_TYPE_SUBTITLE and number is not None:
+            subtitles[number] = (codec.upper(), ordinal)
+    return subtitles
+
+
+def read_cue_tracks(f, at):
+    """Return a Counter of track numbers the Cues index has entries for."""
+    f.seek(at)
+    eid, size = read_element(f)
+    if eid != ID_CUES:
+        raise Bail("not cues")
+    end = f.tell() + size
+    per_track = collections.Counter()
+    while f.tell() < end:
+        eid, size = read_element(f)
+        if eid != ID_CUE_POINT:
+            f.seek(size, 1)
+            continue
+        stop = f.tell() + size
+        while f.tell() < stop:
+            cid, csize = read_element(f)
+            if cid != ID_CUE_TRACK_POSITIONS:
+                f.seek(csize, 1)
+                continue
+            inner = f.tell() + csize
+            while f.tell() < inner:
+                pid, psize = read_element(f)
+                if pid == ID_CUE_TRACK:
+                    per_track[read_uint(f, psize)] += 1
+                else:
+                    f.seek(psize, 1)
+    return per_track
+
+
+def has_subtitle_blocks(path, stream_indexes):
+    """Ask ffprobe whether the *text* tracks carry any cues. Only called for
+    files that would otherwise be reported as needing a fix, so that a track
+    with nothing in it is not blamed on the index.
+
+    Each track is asked about separately. Selecting every subtitle stream at
+    once counts the bitmap tracks too, and a file whose empty text track sits
+    beside a full VobSub one then looks fixable when no muxer could ever index
+    it — it lands on the fix list and comes back as NO HELP."""
+    if not shutil.which("ffprobe"):
+        return True
+    for index in stream_indexes:
+        try:
+            out = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", str(index),
+                 "-show_entries", "packet=pts_time", "-of", "csv=p=0", path],
+                capture_output=True, text=True, timeout=600)
+        except (subprocess.SubprocessError, OSError):
+            return True
+        # A probe that failed says nothing about the track. Treat it as "might
+        # have cues" so the file stays on the fix list rather than being
+        # quietly written off.
+        if out.returncode != 0:
+            return True
+        if out.stdout.strip():
+            return True
+    return False
+
+
+def classify(path, probe_empty=True):
+    """Return (verdict, detail)."""
+    try:
+        with open(path, "rb") as f:
+            if f.read(4) != b"\x1a\x45\xdf\xa3":
+                return UNREADABLE, "not matroska"
+            f.seek(0)
+            _, header_size = read_element(f)
+            f.seek(header_size, 1)
+            eid = read_id(f)
+            read_size_permissive(f)
+            if eid != ID_SEGMENT:
+                return UNREADABLE, "no segment"
+            base = f.tell()
+
+            eid, size = read_element(f)
+            located = {}
+            if eid == ID_SEEK_HEAD:
+                located = parse_seek_head(f, f.tell() + size)
+            if ID_TRACKS not in located or ID_CUES not in located:
+                located = {**scan_top_level(f, base), **located}
+
+            if ID_TRACKS not in located:
+                return UNREADABLE, "no tracks element"
+            subtitles = read_tracks(f, base + located[ID_TRACKS])
+            if not subtitles:
+                return NO_SUBS, ""
+            text_tracks = {n: (c, o) for n, (c, o) in subtitles.items()
+                           if any(c.startswith(t) for t in TEXT_CODECS)}
+            if not text_tracks:
+                codecs = ",".join(sorted({c for c, _ in subtitles.values()}))
+                return BITMAP, codecs
+
+            if ID_CUES not in located:
+                verdict, detail = NEEDS_FIX, "no cues element"
+            else:
+                per_track = read_cue_tracks(f, base + located[ID_CUES])
+                indexed = sum(per_track[n] for n in text_tracks)
+                if indexed > 0:
+                    return FAST, "%d cue entries" % indexed
+                verdict, detail = NEEDS_FIX, "cues omit the subtitle track"
+    except Bail as ex:
+        return UNREADABLE, str(ex)
+    except OSError as ex:
+        return UNREADABLE, type(ex).__name__
+
+    # A track with no cues in it cannot be indexed by any muxer; remuxing would
+    # not change the verdict, so do not put it on the fix list.
+    if probe_empty and not has_subtitle_blocks(path, [o for _, o in text_tracks.values()]):
+        return NO_BLOCKS, "text track carries no cues"
+    return verdict, detail
+
+
+def read_size_permissive(f):
+    """Segment size may be unknown in a streamed file; the payload still starts
+    right here either way."""
+    try:
+        return read_size(f)
+    except Bail:
+        return 0
+
+
+def iter_media(roots):
+    for root in roots:
+        if os.path.isfile(root):
+            yield root
+            continue
+        for dirpath, _, filenames in os.walk(root):
+            for name in sorted(filenames):
+                if name.lower().endswith(".mkv"):
+                    yield os.path.join(dirpath, name)
+
+
+def cmd_scan(args):
+    out_dir = args.out_dir
+    os.makedirs(out_dir, exist_ok=True)
+    paths = {
+        NEEDS_FIX: os.path.join(out_dir, "needs-fix.txt"),
+        BITMAP: os.path.join(out_dir, "bitmap-subs.txt"),
+        NO_BLOCKS: os.path.join(out_dir, "no-subtitle-blocks.txt"),
+    }
+    handles = {k: open(v, "w") for k, v in paths.items()}
+    totals = collections.Counter()
+    scanned = 0
+    try:
+        for path in iter_media(args.roots):
+            verdict, detail = classify(path, probe_empty=not args.fast)
+            totals[verdict] += 1
+            scanned += 1
+            if verdict in handles:
+                handles[verdict].write(path + "\n")
+                handles[verdict].flush()
+            if args.verbose:
+                print("%-18s %s" % (verdict, path))
+            elif scanned % 250 == 0:
+                print("  scanned %d..." % scanned, file=sys.stderr, flush=True)
+    finally:
+        for h in handles.values():
+            h.close()
+
+    print("\nscanned %d files" % scanned)
+    for verdict, count in totals.most_common():
+        print("  %6d  %s" % (count, verdict))
+    print()
+    for verdict, path in paths.items():
+        if totals[verdict]:
+            print("  %-22s -> %s" % (verdict, path))
+    if totals[NEEDS_FIX]:
+        print("\nrun 'scripts/subtitle-index fix' to remux them")
+    return 0
+
+
+def cmd_fix(args):
+    if not shutil.which("mkvmerge"):
+        print("error: mkvmerge not found (install mkvtoolnix)", file=sys.stderr)
+        return 1
+    list_path = args.list or os.path.join(args.out_dir, "needs-fix.txt")
+    try:
+        with open(list_path) as f:
+            targets = [line.rstrip("\n") for line in f if line.strip()]
+    except OSError as ex:
+        print("error: cannot read %s: %s" % (list_path, ex), file=sys.stderr)
+        return 1
+    if not targets:
+        print("nothing to do — %s is empty" % list_path)
+        return 0
+
+    print("%d file(s) to remux%s\n" % (len(targets),
+                                       " (dry run)" if args.dry_run else ""))
+    fixed = skipped = failed = already = 0
+    # What a later run could still act on. Anything fixed, already fast, or
+    # unfixable drops out, so the list shrinks as the work gets done and an
+    # interrupted run resumes instead of remuxing everything again.
+    remaining = []
+    interrupted = False
+    processed = 0
+    try:
+        for path in targets:
+            name = os.path.basename(path)
+            if not os.path.isfile(path):
+                print("MISSING  %s" % name)
+                failed += 1
+                processed += 1
+                continue
+            if args.dry_run:
+                print("would fix %s" % name)
+                remaining.append(path)
+                processed += 1
+                continue
+
+            # Cheap next to a remux, and it makes the command idempotent: a
+            # re-run skips whatever is already done.
+            verdict, detail = classify(path, probe_empty=False)
+            if verdict == FAST:
+                already += 1
+                processed += 1
+                print("already  %s (%s)" % (name, detail))
+                continue
+
+            directory = os.path.dirname(path) or "."
+            tmp = None
+            try:
+                fd, tmp = tempfile.mkstemp(dir=directory, prefix=".subidx-",
+                                           suffix=".mkv")
+                os.close(fd)
+                result = subprocess.run(["mkvmerge", "-q", "-o", tmp, path],
+                                        capture_output=True, text=True)
+                # mkvmerge exits 1 for warnings and still writes a good file.
+                if result.returncode > 1 or not os.path.getsize(tmp):
+                    print("FAILED   %s: %s" % (name, (result.stderr or
+                                                      result.stdout).strip()[:120]))
+                    failed += 1
+                    remaining.append(path)
+                    processed += 1
+                    continue
+                verdict, detail = classify(tmp, probe_empty=False)
+                if verdict != FAST:
+                    # Say *why* it did not help. Usually a text track with no
+                    # cues in it, which no muxer can index — so it is dropped
+                    # from the list rather than retried forever.
+                    _, reason = classify(tmp, probe_empty=True)
+                    print("NO HELP  %s: %s — left untouched"
+                          % (name, reason or detail))
+                    skipped += 1
+                    processed += 1
+                    continue
+                shutil.copymode(path, tmp)
+                os.replace(tmp, path)
+                tmp = None
+                fixed += 1
+                print("fixed    %s (%s)" % (name, detail))
+            except OSError as ex:
+                print("FAILED   %s: %s" % (name, ex))
+                failed += 1
+                remaining.append(path)
+            finally:
+                if tmp and os.path.exists(tmp):
+                    os.unlink(tmp)
+            processed += 1
+    except KeyboardInterrupt:
+        interrupted = True
+        print("\ninterrupted")
+
+    # Everything not reached yet stays on the list.
+    remaining.extend(targets[processed:])
+
+    if not args.dry_run:
+        try:
+            with open(list_path, "w") as f:
+                for path in remaining:
+                    f.write(path + "\n")
+        except OSError as ex:
+            print("warning: could not update %s: %s" % (list_path, ex),
+                  file=sys.stderr)
+
+    print("\nfixed %d, already-ok %d, no-help %d, failed %d"
+          % (fixed, already, skipped, failed))
+    if not args.dry_run:
+        if remaining:
+            print("%d entry(s) left in %s" % (len(remaining), list_path))
+        else:
+            print("%s is now empty" % list_path)
+    if fixed:
+        print("these files changed size, so popcornd will re-probe them on the "
+              "next scan")
+    return 1 if (failed or interrupted) else 0
+
+
+def cmd_check(args):
+    for path in iter_media(args.roots):
+        verdict, detail = classify(path)
+        print("%-18s %s%s" % (verdict, path, "  (%s)" % detail if detail else ""))
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__.split("\n")[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="See SUBTITLES.md for what makes extraction fast and why.")
+    default_out = os.getcwd()
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("scan", help="classify a library and write the lists")
+    p.add_argument("roots", nargs="+", help="directories or files to scan")
+    p.add_argument("--out-dir", default=default_out,
+                   help="where to write the lists (default: current directory)")
+    p.add_argument("--fast", action="store_true",
+                   help="skip the ffprobe check that separates an unindexed "
+                        "track from an empty one; quicker, less accurate")
+    p.add_argument("--verbose", action="store_true", help="print every file")
+    p.set_defaults(func=cmd_scan)
+
+    p = sub.add_parser("fix", help="remux the files scan flagged")
+    p.add_argument("--list", help="file listing paths (default: needs-fix.txt)")
+    p.add_argument("--out-dir", default=default_out,
+                   help="where to look for needs-fix.txt")
+    p.add_argument("--dry-run", action="store_true",
+                   help="print what would be remuxed and stop")
+    p.set_defaults(func=cmd_fix)
+
+    p = sub.add_parser("check", help="classify individual files")
+    p.add_argument("roots", nargs="+")
+    p.set_defaults(func=cmd_check)
+
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

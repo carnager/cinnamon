@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+"""OCR PGS subtitle tracks to SRT and mux them back into the file.
+
+popcornd cannot use bitmap subtitles at all — `isTextSubtitleCodec` rejects
+them and the endpoint returns 415 — so a file whose only subtitles are PGS has
+no subtitles as far as the apps are concerned. OCR is preferable to fetching
+them: the timings come from the release itself, so there is nothing to
+synchronise and no provider to depend on. See SUBTITLES.md.
+
+    scripts/subtitle-ocr run --dry-run        # what it would do
+    scripts/subtitle-ocr run                  # OCR and mux, in place
+
+Reads bitmap-subs.txt from `scripts/subtitle-index scan`. Files whose only
+bitmap tracks are VobSub are skipped: pgsrip does not read them, and they need
+a different tool.
+
+Muxing keeps every existing track, PGS included. The bitmap tracks can be
+dropped later once the OCR has been spot-checked; doing it here would not be
+reversible.
+"""
+
+import argparse
+import glob
+import importlib.machinery
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+# The classifier lives in the sibling script, which has no .py extension.
+# Loading it directly keeps one EBML parser rather than two that can drift.
+_loader = importlib.machinery.SourceFileLoader(
+    "subtitle_index", os.path.join(HERE, "subtitle-index"))
+_spec = importlib.util.spec_from_loader("subtitle_index", _loader)
+sidx = importlib.util.module_from_spec(_spec)
+_loader.exec_module(sidx)
+
+PGS_CODEC = "hdmv_pgs_subtitle"
+TEXT_CODECS = ("subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text")
+
+# pgsrip takes IETF codes; Matroska tracks are usually ISO 639-2. Map both onto
+# one key so "ger", "deu" and "de" are recognised as the same language — a file
+# tagged "deu" would otherwise look like it had no German at all.
+LANGUAGES = {
+    "de": {"aliases": ("de", "deu", "ger"), "mkv": "ger", "name": "Deutsch"},
+    "en": {"aliases": ("en", "eng"), "mkv": "eng", "name": "English"},
+}
+
+
+def normalize_language(tag):
+    tag = (tag or "").strip().lower()
+    for key, spec in LANGUAGES.items():
+        if tag in spec["aliases"]:
+            return key
+    return None
+
+
+def subtitle_streams(path):
+    """Return [(codec, normalized language, raw language)] for subtitle tracks."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "s", "-show_streams",
+             "-of", "json", path],
+            capture_output=True, text=True, timeout=300)
+    except (subprocess.SubprocessError, OSError) as ex:
+        raise RuntimeError("ffprobe failed: %s" % ex)
+    if out.returncode != 0:
+        raise RuntimeError("ffprobe failed: %s" % out.stderr.strip()[:120])
+    try:
+        streams = json.loads(out.stdout).get("streams", [])
+    except ValueError as ex:
+        raise RuntimeError("unreadable ffprobe output: %s" % ex)
+    result = []
+    for s in streams:
+        raw = (s.get("tags") or {}).get("language", "")
+        result.append((s.get("codec_name", ""), normalize_language(raw), raw))
+    return result
+
+
+def wanted_languages(streams, languages):
+    """Languages that have a PGS track but no text track yet."""
+    pgs = {lang for codec, lang, _ in streams
+           if codec == PGS_CODEC and lang in languages}
+    have_text = {lang for codec, lang, _ in streams if codec in TEXT_CODECS}
+    return sorted(pgs - have_text)
+
+
+def sidecar_snapshot(path):
+    base = os.path.splitext(path)[0]
+    return set(glob.glob(glob.escape(base) + "*.srt"))
+
+
+def run_pgsrip(path, languages, timeout):
+    cmd = ["pgsrip"]
+    for lang in languages:
+        cmd += ["-l", lang]
+    cmd.append(path)
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("pgsrip timed out")
+    except OSError as ex:
+        raise RuntimeError("pgsrip failed: %s" % ex)
+    if out.returncode != 0:
+        raise RuntimeError("pgsrip exited %d: %s"
+                           % (out.returncode, (out.stderr or out.stdout).strip()[:160]))
+
+
+def language_of_sidecar(path, video):
+    """pgsrip names its output "<base>.<lang>.srt". Read the language back from
+    the name rather than assuming the order matches what was requested."""
+    base = os.path.basename(os.path.splitext(video)[0])
+    name = os.path.basename(path)
+    if not name.startswith(base) or not name.endswith(".srt"):
+        return None
+    middle = name[len(base):-len(".srt")].strip(".")
+    for part in middle.split("."):
+        lang = normalize_language(part)
+        if lang:
+            return lang
+    return None
+
+
+def process(path, args):
+    """Return (status, detail). status is one of ok/skip/fail."""
+    name = os.path.basename(path)
+    if not os.path.isfile(path):
+        return "fail", "missing"
+
+    try:
+        streams = subtitle_streams(path)
+    except RuntimeError as ex:
+        return "fail", str(ex)
+
+    if not any(codec == PGS_CODEC for codec, _, _ in streams):
+        others = sorted({c for c, _, _ in streams if c})
+        return "skip", "no PGS track (%s)" % (",".join(others) or "no subtitles")
+
+    todo = wanted_languages(streams, args.languages)
+    if not todo:
+        return "skip", "already has text subtitles for every PGS language"
+
+    if args.dry_run:
+        return "dry", "would OCR " + ",".join(todo)
+
+    before = sidecar_snapshot(path)
+    try:
+        run_pgsrip(path, todo, args.timeout)
+    except RuntimeError as ex:
+        return "fail", str(ex)
+    produced = sorted(sidecar_snapshot(path) - before)
+    if not produced:
+        return "fail", "pgsrip produced no subtitles"
+
+    cleanup = list(produced)
+    directory = os.path.dirname(path) or "."
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(dir=directory, prefix=".subocr-", suffix=".mkv")
+        os.close(fd)
+        cmd = ["mkvmerge", "-q", "-o", tmp, path]
+        added = []
+        for srt in produced:
+            lang = language_of_sidecar(srt, path)
+            if lang is None:
+                continue
+            spec = LANGUAGES[lang]
+            title = spec["name"]
+            if args.mark_ocr:
+                title += " (OCR)"
+            cmd += ["--language", "0:" + spec["mkv"], "--track-name", "0:" + title, srt]
+            added.append(lang)
+        if not added:
+            return "fail", "could not tell which language pgsrip produced"
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        # mkvmerge exits 1 for warnings and still writes a good file.
+        if result.returncode > 1 or not os.path.getsize(tmp):
+            return "fail", "mkvmerge: %s" % (result.stderr or result.stdout).strip()[:160]
+
+        verdict, detail = sidx.classify(tmp, probe_empty=False)
+        if verdict != sidx.FAST:
+            return "fail", "result is %s (%s), original left alone" % (verdict, detail)
+
+        shutil.copymode(path, tmp)
+        os.replace(tmp, path)
+        tmp = None
+    except OSError as ex:
+        return "fail", str(ex)
+    finally:
+        if tmp and os.path.exists(tmp):
+            os.unlink(tmp)
+        if not args.keep_srt:
+            for srt in cleanup:
+                try:
+                    os.unlink(srt)
+                except OSError:
+                    pass
+
+    return "ok", "%s (%s)" % (",".join(added), detail)
+
+
+def cmd_run(args):
+    for tool in ("pgsrip", "mkvmerge", "ffprobe"):
+        if not shutil.which(tool):
+            print("error: %s not found" % tool, file=sys.stderr)
+            return 1
+
+    list_path = args.list or os.path.join(args.out_dir, "bitmap-subs.txt")
+    try:
+        with open(list_path) as f:
+            targets = [line.rstrip("\n") for line in f if line.strip()]
+    except OSError as ex:
+        print("error: cannot read %s: %s" % (list_path, ex), file=sys.stderr)
+        return 1
+    if not targets:
+        print("nothing to do — %s is empty" % list_path)
+        return 0
+
+    print("%d file(s)%s\n" % (len(targets), " (dry run)" if args.dry_run else ""))
+    counts = {"ok": 0, "skip": 0, "fail": 0, "dry": 0}
+    remaining = []
+    processed = 0
+    interrupted = False
+    try:
+        for path in targets:
+            name = os.path.basename(path)
+            status, detail = process(path, args)
+            counts[status] += 1
+            processed += 1
+            if status == "ok":
+                print("ocr      %s: %s" % (name, detail))
+            elif status == "skip":
+                # Nothing here will change on a later run.
+                print("skip     %s: %s" % (name, detail))
+            elif status == "dry":
+                print("would    %s: %s" % (name, detail))
+                remaining.append(path)
+            else:
+                print("FAILED   %s: %s" % (name, detail))
+                remaining.append(path)
+    except KeyboardInterrupt:
+        interrupted = True
+        print("\ninterrupted")
+
+    remaining.extend(targets[processed:])
+
+    if not args.dry_run:
+        try:
+            with open(list_path, "w") as f:
+                for path in remaining:
+                    f.write(path + "\n")
+        except OSError as ex:
+            print("warning: could not update %s: %s" % (list_path, ex),
+                  file=sys.stderr)
+
+    print("\nocr'd %d, skipped %d, failed %d"
+          % (counts["ok"], counts["skip"], counts["fail"]))
+    if not args.dry_run:
+        print("%d entry(s) left in %s" % (len(remaining), list_path))
+    if counts["ok"]:
+        print("these files changed, so popcornd will re-probe them on the next scan")
+    return 1 if (counts["fail"] or interrupted) else 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__.split("\n")[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="See SUBTITLES.md.")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("run", help="OCR PGS tracks and mux the result back in")
+    p.add_argument("--list", help="file listing paths (default: bitmap-subs.txt)")
+    p.add_argument("--out-dir", default=os.getcwd(),
+                   help="where to look for bitmap-subs.txt (default: cwd)")
+    p.add_argument("-l", "--language", dest="languages", action="append",
+                   choices=sorted(LANGUAGES), metavar="LANG",
+                   help="language to OCR, repeatable (default: de en)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="report what would be done and stop")
+    p.add_argument("--keep-srt", action="store_true",
+                   help="leave the intermediate .srt files next to the video")
+    p.add_argument("--no-mark-ocr", dest="mark_ocr", action="store_false",
+                   help="title the new track without the '(OCR)' suffix")
+    p.add_argument("--timeout", type=int, default=3600,
+                   help="seconds to allow pgsrip per file (default: 3600)")
+    p.set_defaults(func=cmd_run, mark_ocr=True)
+
+    args = parser.parse_args()
+    if getattr(args, "languages", None) is None:
+        args.languages = sorted(LANGUAGES)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

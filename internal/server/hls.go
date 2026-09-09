@@ -191,8 +191,22 @@ func (a *App) subtitle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "media unavailable", http.StatusNotFound)
 		return
 	}
-	// Extracting an embedded subtitle demuxes the entire file, which can take
-	// well over the client's ~8s HTTP read timeout on big files. Stream the
+	// Most files index their own subtitle blocks, which turns the extraction
+	// into a handful of seeks instead of a full demux. It matters most for the
+	// TV app's sideloaded track: ExoPlayer merges that source with the HLS one
+	// and reports the merged buffer as the minimum of the two, so playback
+	// cannot start until the whole VTT has arrived. A minute of demuxing there
+	// outlasts the client's stall watchdog, which replans, cancels this
+	// request and starts the wait over — a loop that never converges.
+	if body, ok := a.indexedSubtitle(path, index, start, asSSA); ok {
+		a.log.Info("subtitle served from index", "item", item.ID, "subtitle", index, "start", start, "bytes", len(body))
+		writeSubtitleHeaders(w, asSSA, start)
+		_, _ = w.Write(body)
+		return
+	}
+
+	// Without a usable index the track has to be demuxed, which can take well
+	// over the client's ~8s HTTP read timeout on big files. Stream the
 	// conversion instead of buffering it: -flush_packets pushes each cue
 	// through ffmpeg's output buffer immediately (a whole movie's VTT is
 	// smaller than that buffer), and flushing per chunk keeps bytes moving so
@@ -213,13 +227,7 @@ func (a *App) subtitle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "subtitle conversion failed", http.StatusInternalServerError)
 		return
 	}
-	if asSSA {
-		w.Header().Set("Content-Type", "text/x-ssa; charset=utf-8")
-	} else {
-		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Popcorn-Start", strconv.FormatFloat(start, 'f', 3, 64))
+	writeSubtitleHeaders(w, asSSA, start)
 	flusher, _ := w.(http.Flusher)
 	if flusher != nil {
 		flusher.Flush()
@@ -261,6 +269,41 @@ func stripNULs(b []byte) []byte {
 		}
 	}
 	return out
+}
+
+func writeSubtitleHeaders(w http.ResponseWriter, asSSA bool, start float64) {
+	if asSSA {
+		w.Header().Set("Content-Type", "text/x-ssa; charset=utf-8")
+	} else {
+		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Popcorn-Start", strconv.FormatFloat(start, 'f', 3, 64))
+}
+
+// indexedSubtitle renders a track straight from the container's own index,
+// reporting false when the file cannot be read that way: the subtitle track
+// may lack cue entries, or the file may use a different container.
+// The caller then falls back to the streamed conversion.
+func (a *App) indexedSubtitle(path string, index int, start float64, asSSA bool) ([]byte, bool) {
+	cues, track, err := matroskaSubtitleCues(path, index)
+	if err != nil {
+		return nil, false
+	}
+	_, ssa, ok := subtitleTextCodec(track.CodecID)
+	if !ok {
+		return nil, false
+	}
+	// Styling only survives when the source carries it; asking for ".ass" from
+	// a plain-text track is a conversion, so leave that to ffmpeg.
+	if asSSA && !ssa {
+		return nil, false
+	}
+	startMS := int64(start * 1000)
+	if asSSA {
+		return renderASS(track.CodecPrivate, cues, startMS), true
+	}
+	return renderWebVTT(cues, ssa, startMS), true
 }
 
 // subtitleTranscodeArgs seeks at the input, which both rebases cues to zero and

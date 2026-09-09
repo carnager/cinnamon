@@ -1,0 +1,456 @@
+#!/usr/bin/env python3
+"""Extract image subtitle tracks for batch OCR, then mux the results back.
+
+Subtitle Edit's good OCR engines — Binary Image Compare and nOCR — are only
+reachable from its GUI; `seconv` hard-codes Tesseract (SubtitleEdit#4943). But
+its Batch Convert can take a folder of image subtitles at once, so the practical
+route is: extract every track to a folder here, OCR the folder there, bring the
+SRTs back.
+
+    scripts/subtitle-sup extract --out-dir /data/sups     # -> .sup / .idx+.sub
+    #   ... batch-OCR the folder in Subtitle Edit, writing .srt beside each ...
+    scripts/subtitle-sup mux --out-dir /data/sups         # -> back into the mkv
+
+Tracks are grouped into per-language subfolders, because Batch Convert applies
+one OCR language to the whole run. Names carry the film and track so they stay
+recognisable in the GUI, and a manifest maps each one back to its source — the
+SRT that comes out is matched by filename, so keep the basenames intact.
+
+Handles PGS (.sup) and VobSub (.idx/.sub); Subtitle Edit reads both.
+"""
+
+import argparse
+import collections
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+_loader = importlib.machinery.SourceFileLoader(
+    "subtitle_index", os.path.join(HERE, "subtitle-index"))
+_spec = importlib.util.spec_from_loader("subtitle_index", _loader)
+sidx = importlib.util.module_from_spec(_spec)
+_loader.exec_module(sidx)
+
+MANIFEST = "manifest.json"
+PGS = "hdmv_pgs_subtitle"
+VOBSUB = "dvd_subtitle"
+
+LANGUAGE_ALIASES = {
+    "de": ("de", "deu", "ger"),
+    "en": ("en", "eng"),
+}
+MKV_LANGUAGE = {"de": "ger", "en": "eng"}
+LANGUAGE_NAME = {"de": "Deutsch", "en": "English"}
+
+
+def normalize_language(tag):
+    tag = (tag or "").strip().lower()
+    for key, aliases in LANGUAGE_ALIASES.items():
+        if tag in aliases:
+            return key
+    return tag or "und"
+
+
+def safe_name(text, limit=60):
+    text = re.sub(r"[^\w\s.-]", "", text, flags=re.UNICODE).strip()
+    text = re.sub(r"\s+", "_", text)
+    return text[:limit].strip("._-") or "untitled"
+
+
+def subtitle_tracks(path):
+    """Return [{index, codec, language, forced, title}] for image subtitles."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "s", "-show_streams",
+         "-of", "json", path],
+        capture_output=True, text=True, timeout=300)
+    if out.returncode != 0:
+        raise RuntimeError((out.stderr or "ffprobe failed").strip()[:120])
+    tracks = []
+    for s in json.loads(out.stdout).get("streams", []):
+        codec = s.get("codec_name", "")
+        if codec not in (PGS, VOBSUB):
+            continue
+        tags = s.get("tags") or {}
+        disp = s.get("disposition") or {}
+        title = tags.get("title", "") or ""
+        tracks.append({
+            "index": s["index"],
+            "codec": codec,
+            "language": normalize_language(tags.get("language")),
+            # The disposition is not reliable — some files only say "forced" in
+            # the title, which is what commit 5561862 works around.
+            "forced": bool(disp.get("forced")) or "forced" in title.lower(),
+            "title": title,
+        })
+    return tracks
+
+
+def cmd_extract(args):
+    for tool in ("ffprobe", "mkvextract"):
+        if not shutil.which(tool):
+            print("error: %s not found" % tool, file=sys.stderr)
+            return 1
+
+    list_path = args.list or os.path.join(os.getcwd(), "bitmap-subs.txt")
+    try:
+        with open(list_path) as f:
+            targets = [line.rstrip("\n") for line in f if line.strip()]
+    except OSError as ex:
+        print("error: cannot read %s: %s" % (list_path, ex), file=sys.stderr)
+        return 1
+
+    os.makedirs(args.out_dir, exist_ok=True)
+    manifest = []
+    counts = collections.Counter()
+    serial = 0
+
+    for path in targets:
+        name = os.path.basename(path)
+        if not os.path.isfile(path):
+            print("MISSING  %s" % name)
+            counts["missing"] += 1
+            continue
+        try:
+            tracks = subtitle_tracks(path)
+        except (RuntimeError, ValueError, subprocess.SubprocessError) as ex:
+            print("FAILED   %s: %s" % (name, ex))
+            counts["failed"] += 1
+            continue
+        if not tracks:
+            counts["no-image-tracks"] += 1
+            continue
+
+        if args.languages:
+            tracks = [t for t in tracks if t["language"] in args.languages]
+        if args.skip_forced:
+            tracks = [t for t in tracks if not t["forced"]]
+        if args.only_forced:
+            tracks = [t for t in tracks if t["forced"]]
+        if not tracks:
+            counts["no-wanted-tracks"] += 1
+            continue
+
+        title = safe_name(os.path.splitext(name)[0])
+        for track in tracks:
+            serial += 1
+            lang_dir = os.path.join(args.out_dir, track["language"])
+            os.makedirs(lang_dir, exist_ok=True)
+            suffix = "_forced" if track["forced"] else ""
+            base = "%04d_%s_t%d%s" % (serial, title, track["index"], suffix)
+            ext = ".sup" if track["codec"] == PGS else ".idx"
+            target = os.path.join(lang_dir, base + ext)
+
+            if os.path.exists(target) and not args.force:
+                counts["already-extracted"] += 1
+                manifest.append(_entry(target, path, track, base))
+                continue
+            if args.dry_run:
+                print("would extract %s <- %s#%d" % (os.path.join(track["language"], base + ext), name, track["index"]))
+                counts["dry"] += 1
+                continue
+
+            result = subprocess.run(
+                ["mkvextract", "tracks", path, "%d:%s" % (track["index"], target)],
+                capture_output=True, text=True)
+            if result.returncode > 1 or not os.path.exists(target):
+                print("FAILED   %s#%d: %s" % (name, track["index"],
+                                              (result.stderr or result.stdout).strip()[:120]))
+                counts["failed"] += 1
+                continue
+            counts["extracted"] += 1
+            manifest.append(_entry(target, path, track, base))
+            if args.verbose:
+                print("extracted %s" % os.path.join(track["language"], base + ext))
+
+    if not args.dry_run:
+        manifest_path = os.path.join(args.out_dir, MANIFEST)
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+    print()
+    for key, value in counts.most_common():
+        print("  %6d  %s" % (value, key))
+    if not args.dry_run and manifest:
+        by_lang = collections.Counter(e["language"] for e in manifest)
+        print("\nper language:")
+        for lang, n in by_lang.most_common():
+            print("  %6d  %s/" % (n, lang))
+        print("\nmanifest: %s" % os.path.join(args.out_dir, MANIFEST))
+        print("OCR each language folder separately in Subtitle Edit's Batch "
+              "Convert (Binary Image Compare), writing .srt beside each input,")
+        print("then run: scripts/subtitle-sup mux --out-dir %s" % args.out_dir)
+    return 0
+
+
+def _entry(target, video, track, base):
+    return {
+        "base": base,
+        "file": os.path.relpath(target, os.path.dirname(os.path.dirname(target))),
+        "video": video,
+        "track": track["index"],
+        "codec": track["codec"],
+        "language": track["language"],
+        "forced": track["forced"],
+        "title": track["title"],
+    }
+
+
+TEXT_CODECS = ("subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text")
+
+
+def existing_text_tracks(path):
+    """Text subtitle tracks already in a file, as [(title, language)]. Used to
+    avoid stacking duplicates on a second run, and to check a language is not
+    about to be stripped to nothing."""
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "s", "-show_streams",
+             "-of", "json", path],
+            capture_output=True, text=True, timeout=300)
+        if out.returncode != 0:
+            return None
+        streams = json.loads(out.stdout).get("streams", [])
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return None
+    result = []
+    for st in streams:
+        if st.get("codec_name") not in TEXT_CODECS:
+            continue
+        tags = st.get("tags") or {}
+        result.append(((tags.get("title") or "").strip(),
+                       normalize_language(tags.get("language"))))
+    return result
+
+
+def track_title(entry, mark_ocr):
+    title = LANGUAGE_NAME.get(entry["language"], entry["language"].upper())
+    if entry["forced"]:
+        title += " (forced)"
+    if mark_ocr:
+        title += " (OCR)"
+    return title
+
+
+def clean_extracted(out_dir, entry):
+    """Remove the extracted image subtitle for one muxed track. The .srt is
+    kept — it is the OCR result, and cheap to hold on to."""
+    stem = os.path.join(out_dir, entry["language"], entry["base"])
+    removed = []
+    for ext in (".sup", ".idx", ".sub"):
+        path = stem + ext
+        if os.path.isfile(path):
+            try:
+                os.unlink(path)
+                removed.append(os.path.basename(path))
+            except OSError:
+                pass
+    return removed
+
+
+def cmd_mux(args):
+    if not shutil.which("mkvmerge"):
+        print("error: mkvmerge not found", file=sys.stderr)
+        return 1
+    manifest_path = os.path.join(args.out_dir, MANIFEST)
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except (OSError, ValueError) as ex:
+        print("error: cannot read %s: %s" % (manifest_path, ex), file=sys.stderr)
+        return 1
+
+    # One video can gain several tracks (a full and a forced, or two
+    # languages); collect them so the file is rewritten once, not once per SRT.
+    all_by_video = collections.defaultdict(list)
+    for entry in manifest:
+        all_by_video[entry["video"]].append(entry)
+    by_video = collections.OrderedDict()
+    missing_srt = 0
+    already = 0
+    for entry in manifest:
+        srt = os.path.join(args.out_dir, entry["language"], entry["base"] + ".srt")
+        if not os.path.isfile(srt):
+            missing_srt += 1
+            continue
+        if os.path.getsize(srt) == 0:
+            print("empty    %s.srt — skipped" % entry["base"])
+            continue
+        present = existing_text_tracks(entry["video"])
+        if present is not None and track_title(entry, args.mark_ocr) in {t for t, _ in present}:
+            already += 1
+            continue
+        by_video.setdefault(entry["video"], []).append((entry, srt))
+
+    if missing_srt:
+        print("%d track(s) have no .srt yet — not OCR'd, skipping" % missing_srt)
+    if already:
+        print("%d track(s) already muxed in — skipping" % already)
+    if missing_srt or already:
+        print()
+    if not by_video:
+        print("nothing to mux")
+        return 0
+
+    print("%d file(s) to update%s\n" % (len(by_video),
+                                        " (dry run)" if args.dry_run else ""))
+    fixed = failed = 0
+    skipped_unsafe = []
+    for video, items in by_video.items():
+        name = os.path.basename(video)
+        if not os.path.isfile(video):
+            print("MISSING  %s" % name)
+            failed += 1
+            continue
+        if args.dry_run:
+            print("would add %d track(s) to %s"
+                  % (len(items), name))
+            continue
+
+        directory = os.path.dirname(video) or "."
+        tmp = None
+        try:
+            fd, tmp = tempfile.mkstemp(dir=directory, prefix=".subsup-", suffix=".mkv")
+            os.close(fd)
+            drop = {e["track"] for e, _ in items} if args.drop_replaced else set()
+            # A language listed here is being retired wholesale: tracks left
+            # un-OCR'd in it were skipped deliberately, so they go too rather
+            # than lingering as dead weight Cinnamon cannot read anyway.
+            retired = []
+            for entry in all_by_video.get(video, []):
+                if entry["language"] in (args.drop_image_language or ()) \
+                        and entry["track"] not in drop:
+                    drop.add(entry["track"])
+                    retired.append(entry)
+
+            # Never strip a language to nothing. A language is safe if an SRT
+            # is arriving for it, or the file already carries text in it.
+            arriving = {e["language"] for e, _ in items}
+            existing = existing_text_tracks(video) or []
+            have_text = {lang for _, lang in existing}
+            losing = {e["language"] for e in all_by_video.get(video, [])
+                      if e["track"] in drop}
+            unsafe = sorted(losing - arriving - have_text)
+            if unsafe:
+                print("skipped  %s: dropping %s image track(s) would leave no "
+                      "%s subtitles at all" % (name, "/".join(unsafe), "/".join(unsafe)))
+                skipped_unsafe.append(name)
+                continue
+
+            cmd = ["mkvmerge", "-q", "-o", tmp]
+            if drop:
+                cmd += ["--subtitle-tracks", "!" + ",".join(str(t) for t in sorted(drop))]
+            cmd.append(video)
+            for entry, srt in items:
+                lang = MKV_LANGUAGE.get(entry["language"], entry["language"])
+                title = track_title(entry, args.mark_ocr)
+                cmd += ["--language", "0:" + lang, "--track-name", "0:" + title]
+                if entry["forced"]:
+                    cmd += ["--forced-display-flag", "0:1"]
+                # Never let a new track steal default selection from whatever
+                # the file already prefers.
+                cmd += ["--default-track-flag", "0:0", srt]
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode > 1 or not os.path.getsize(tmp):
+                print("FAILED   %s: %s" % (name, (result.stderr or result.stdout).strip()[:160]))
+                failed += 1
+                continue
+            verdict, detail = sidx.classify(tmp, probe_empty=False)
+            if verdict != sidx.FAST:
+                print("FAILED   %s: result is %s (%s), original untouched"
+                      % (name, verdict, detail))
+                failed += 1
+                continue
+            shutil.copymode(video, tmp)
+            os.replace(tmp, video)
+            tmp = None
+            fixed += 1
+            if args.clean:
+                for entry in retired:
+                    clean_extracted(args.out_dir, entry)
+            dropped = " -%d image" % len(drop) if drop else ""
+            print("updated  %s: +%d track(s)%s (%s)"
+                  % (name, len(items), dropped, detail))
+            if args.clean:
+                for entry, _ in items:
+                    removed = clean_extracted(args.out_dir, entry)
+                    if removed and args.verbose:
+                        print("         removed %s" % ", ".join(removed))
+        except OSError as ex:
+            print("FAILED   %s: %s" % (name, ex))
+            failed += 1
+        finally:
+            if tmp and os.path.exists(tmp):
+                os.unlink(tmp)
+
+    if skipped_unsafe:
+        print("\n%d file(s) skipped to avoid removing a language entirely"
+              % len(skipped_unsafe))
+    print("\nupdated %d, failed %d" % (fixed, failed))
+    if fixed:
+        print("these files changed, so popcornd will re-probe them on the next scan")
+    return 1 if failed else 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__.split("\n")[0],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="See SUBTITLES.md.")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("extract", help="pull image subtitle tracks into a folder")
+    p.add_argument("--out-dir", required=True, help="where to write the tracks")
+    p.add_argument("--list", help="file listing videos (default: ./bitmap-subs.txt)")
+    p.add_argument("-l", "--language", dest="languages", action="append",
+                   metavar="LANG", help="only this language, repeatable "
+                                        "(default: all)")
+    p.add_argument("--only-forced", action="store_true",
+                   help="only forced tracks")
+    p.add_argument("--skip-forced", action="store_true",
+                   help="skip forced tracks")
+    p.add_argument("--force", action="store_true",
+                   help="re-extract tracks already present")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--verbose", action="store_true")
+    p.set_defaults(func=cmd_extract)
+
+    p = sub.add_parser("mux", help="mux the OCR'd SRTs back into their videos")
+    p.add_argument("--out-dir", required=True, help="the folder used for extract")
+    p.add_argument("--no-mark-ocr", dest="mark_ocr", action="store_false",
+                   help="title new tracks without the '(OCR)' suffix")
+    p.add_argument("--drop-replaced", action="store_true",
+                   help="remove the image tracks the new SRTs replace; tracks "
+                        "not yet OCR'd are kept")
+    p.add_argument("--drop-image-language", action="append", metavar="LANG",
+                   help="drop every image track in this language, including "
+                        "ones with no SRT; repeatable")
+    p.add_argument("--clean", action="store_true",
+                   help="delete the extracted .sup/.idx/.sub of muxed tracks")
+    p.add_argument("--verbose", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_mux, mark_ocr=True)
+
+    args = parser.parse_args()
+    if getattr(args, "only_forced", False) and getattr(args, "skip_forced", False):
+        parser.error("--only-forced and --skip-forced are mutually exclusive")
+    if getattr(args, "languages", None):
+        args.languages = [normalize_language(l) for l in args.languages]
+    if getattr(args, "drop_image_language", None):
+        args.drop_image_language = [normalize_language(l) for l in args.drop_image_language]
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

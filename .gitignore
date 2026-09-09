@@ -15,3 +15,8 @@ android-tv/local.properties
 /popcornd
 config.json
 config.toml
+__pycache__/
+/scripts/out/
+needs-fix.txt
+bitmap-subs.txt
+no-subtitle-blocks.txt

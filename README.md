@@ -16,6 +16,25 @@ it; otherwise, ffmpeg remuxes or transcodes it.
 Cinnamon was previously called Popcorn. The commands, config paths, and
 `POPCORN_*` environment variables still use the old name.
 
+## Screenshots
+
+### Android TV
+
+Browse the library or open a movie for ratings, cast, and playback options.
+
+![Cinnamon on Android TV: movie library with genre, rating, and watched filters](Screenshots/tv-cinnamon-2.png)
+
+![Cinnamon on Android TV: movie details for 10 Cloverfield Lane](Screenshots/tv-cinnamon-3.png)
+
+### Android phone
+
+Browse and play on your phone, or use it to control playback on the TV.
+
+<p>
+  <img src="Screenshots/phone-cinnamon-2.png" alt="Cinnamon on Android: movie library with TV playback controls" width="280">
+  <img src="Screenshots/phone-cinnamon-3.png" alt="Cinnamon on Android: movie details and playback options" width="280">
+</p>
+
 ## Getting started
 
 You need Go 1.26.3 or later, plus `ffmpeg` and `ffprobe` on your `PATH`.

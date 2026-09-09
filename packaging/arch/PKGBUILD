@@ -1,10 +1,10 @@
-# Maintainer: Popcorn maintainers
+# Maintainer: Cinnamon maintainers
 pkgname=popcorn-media
 pkgver=0.1.0
 pkgrel=1
 pkgdesc='Local media server with web, Android TV, phone, and rofi/mpv clients'
 arch=('x86_64' 'aarch64')
-url='https://github.com/carnager/popcorn'
+url='https://github.com/carnager/cinnamon'
 license=('custom')
 depends=('ffmpeg' 'mpv' 'rofi')
 makedepends=('go' 'git')

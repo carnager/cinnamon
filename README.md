@@ -1,176 +1,66 @@
-# Popcorn
+# Cinnamon
 
-Popcorn is a small media daemon focused on a clean API, fast local scans, direct playback, ffmpeg transcoding, and first-party web, TV, phone, and desktop clients.
+Cinnamon is a media server for your own movies and TV shows. It runs on a
+machine with access to your media, with clients for the browser, Android TV,
+Android phones, and mpv on the desktop.
 
-## Quick Start
+Each account has its own watch history, resume points, watchlist, and home
+layout. You can arrange shelves around what you watch: recent additions,
+unfinished shows, recommendations, or filters such as genre, decade, and rating.
+The web, TV, and phone apps share that layout.
+
+The server is written in Go, stores its data in SQLite, and includes the web
+client in the binary. Playback uses the original file when the client supports
+it; otherwise, ffmpeg remuxes or transcodes it.
+
+Cinnamon was previously called Popcorn. The commands, config paths, and
+`POPCORN_*` environment variables still use the old name.
+
+## Getting started
+
+You need Go 1.26.3 or later, plus `ffmpeg` and `ffprobe` on your `PATH`.
 
 ```sh
+git clone https://github.com/carnager/cinnamon.git
+cd cinnamon
 cp config.example.toml config.toml
 $EDITOR config.toml
+```
+
+Set the library paths to your movie and TV folders. The example config uses
+VAAPI; change `hwAccel` to `"none"` if you want CPU transcoding. Set
+`scanOnStart = true` to scan your libraries when the server starts.
+
+```sh
 go run ./cmd/popcornd -config config.toml
 ```
 
-Open `http://localhost:8097`.
+Open <http://localhost:8097>. On an empty database, the server creates an admin
+account. The username defaults to `admin`; set `POPCORN_ADMIN_USER` to change
+it. Set `POPCORN_ADMIN_PASSWORD` before starting the server to choose the
+password, or use the generated password printed once in the startup log.
 
-On the first run with an empty database, Popcorn creates the bootstrap admin user
-from `POPCORN_ADMIN_USER` or `admin`. Set `POPCORN_ADMIN_PASSWORD` to choose the
-initial password; otherwise `popcornd` generates one and prints it once in the
-startup log.
-
-For scanner diagnostics, run with debug logging:
-
-```sh
-POPCORN_LOG_LEVEL=debug go run ./cmd/popcornd -config config.toml
-```
-
-Build a daemon binary with:
+To build and run the server binary:
 
 ```sh
 go build -o popcornd ./cmd/popcornd
+./popcornd -config config.toml
 ```
 
-A starter systemd unit is in `packaging/popcornd.service`.
-
-You can also configure it with environment variables:
+You can also run with environment variables alone:
 
 ```sh
 POPCORN_LIBRARY=/media/movies POPCORN_LISTEN=:8097 go run ./cmd/popcornd
 ```
 
-For a single TV library through env vars, add `POPCORN_LIBRARY_TYPE=tv`.
+Add `POPCORN_LIBRARY_TYPE=tv` for a TV library. Set `POPCORN_LOG_LEVEL=debug`
+when you need more detail about scans or playback.
 
-## Desktop Launcher
+## Libraries and metadata
 
-The desktop launcher is `popcorn-mpv`. It uses mpv for playback and rofi or fzf
-for selection:
-
-```sh
-go run ./cmd/popcorn-mpv -server http://localhost:8097
-```
-
-After installing release binaries, use rofi directly:
-
-```sh
-popcorn-mpv -selector rofi
-```
-
-The launcher stores its login token in
-`$XDG_CONFIG_HOME/popcorn/mpv.toml`, or `~/.config/popcorn/mpv.toml`.
-
-## Arch Linux Package
-
-From a checkout:
-
-```sh
-cd packaging/arch
-makepkg -si
-sudoedit /etc/popcorn/config.toml
-sudo systemctl enable --now popcornd
-popcorn-mpv -selector rofi
-```
-
-The package builds `popcornd` and `popcorn-mpv`, and installs
-systemd/sysusers/tmpfiles integration.
-
-## Development
-
-Run the server tests and build both Android debug APKs with:
-
-```sh
-./scripts/check
-```
-
-Set `POPCORN_CHECK_ANDROID=0` to run only Go tests, or
-`POPCORN_CHECK_GO=0` to build only the Android apps. To make the check script
-build release APKs, run:
-
-```sh
-POPCORN_CHECK_ANDROID_TASKS=':app:assembleRelease :companion:assembleRelease' ./scripts/check
-```
-
-Create a full versioned release bundle with:
-
-```sh
-./scripts/release
-```
-
-For a server/desktop-only bundle that does not require Android tooling:
-
-```sh
-./scripts/release --server
-```
-
-Use `--phone` or `--androidtv` to build just one Android app. Component flags
-can be combined.
-
-Full Android releases require release signing credentials. By default the build
-reads `~/.local/android/release-keys/popcorn.properties`; see
-[DEPLOYMENT.md](DEPLOYMENT.md) for the required `POPCORN_ANDROID_*` fields.
-
-The bundle is written to `dist/<git-version>/` and contains `popcornd`,
-`popcorn-mpv`, packaging files, example configs, systemd files, and SHA-256
-checksums. A full release also contains the TV and companion APKs.
-Upload APKs manually from the web admin App Updates screen, or set
-`POPCORN_RELEASE_UPLOAD=1`, `POPCORN_UPLOAD_SERVER`, `POPCORN_UPLOAD_USER`, and
-`POPCORN_UPLOAD_PASSWORD` to publish both APKs through the admin upload API.
-
-## API
-
-All API routes require either `Authorization: Bearer <token>` or the `popcorn_token`
-login cookie, except `GET /api/health`, `POST /api/auth/login`, and the QR
-start/poll endpoints used by first-time TV setup.
-Repeated failed login attempts for the same username and client are temporarily
-throttled.
-
-- `GET /api/health`
-- `GET /api/libraries`
-- `POST /api/scan`
-- `GET /api/scan`
-- `GET /api/items?libraryId=movies&q=alien&genre=Sci-Fi&limit=100&offset=0`
-- `GET /api/genres?libraryId=movies`
-- `GET /api/items/{id}`
-- `GET /api/progress`
-- `GET /api/history`
-- `GET /api/progress/tv`
-- `GET /api/items/{id}/progress`
-- `PUT /api/items/{id}/progress`
-- `GET /api/watchlist`
-- `PUT /api/items/{id}/watchlist`
-- `DELETE /api/items/{id}/watchlist`
-- `PUT /api/watchlist/tv?libraryId=tv_shows&showTitle=Example`
-- `DELETE /api/watchlist/tv?libraryId=tv_shows&showTitle=Example`
-- `GET /api/items/{id}/stream`
-- `GET /api/items/{id}/transcode?bandwidth=6000`
-- `GET /api/items/{id}/image/poster`
-- `GET /api/items/{id}/image/backdrop`
-- `GET /api/trakt/status`
-- `POST /api/trakt/device`
-- `POST /api/trakt/device/token`
-- `POST /api/trakt/import-watched`
-- `POST /api/trakt/import-watchlist`
-- `DELETE /api/trakt`
-
-Progress, watchlist, Trakt, and remote-device state are per authenticated user.
-
-## Transcoding
-
-Transcoding streams fragmented MP4 from ffmpeg. Set `hwAccel` to:
-
-- `none` for CPU encode with `libx264`
-- `auto` for automatic hardware decode and CPU encode
-- `nvenc` for NVIDIA H.264 encode
-- `qsv` for Intel Quick Sync H.264 encode
-- `vaapi` for VAAPI H.264 encode. Popcorn uses software decode plus VAAPI encode for this mode because it is more reliable across mixed source codecs.
-
-For VAAPI, set `hwDevice` to the render node, usually `/dev/dri/renderD128`.
-
-The web UI lets you pick fixed target bandwidths before playback.
-
-## Metadata
-
-The scanner expects TinyMediaManager-style local assets. It reads title/year from sidecar `.nfo` files and looks for common poster/backdrop names next to each video.
-
-Libraries must declare a type:
+Cinnamon reads local `.nfo` files and artwork in the layout used by
+TinyMediaManager. Keep posters and backdrops beside the videos. Each library
+has a type:
 
 ```toml
 [[libraries]]
@@ -186,41 +76,128 @@ type = "tv"
 path = "/media/tv"
 ```
 
-TV libraries scan videos as episodes. Popcorn reads `showtitle`, `season`, `episode`, and episode `title` from episode `.nfo` files, falls back to `tvshow.nfo` for the show title, and then falls back to the first folder below the library root.
+For TV, episode `.nfo` files supply the show title, season, episode number, and
+episode title. If the show title is missing, the scanner checks `tvshow.nfo`,
+then falls back to the first folder below the library root.
 
-Scans are manual and incremental. Use the admin-only Update Libraries action in
-the web or TV client after adding or renaming media. Popcorn still walks the
-library so deletes are noticed, but it reuses stored ffprobe data for unchanged
-files and probes new or changed files in parallel.
+Use **Update Libraries** from an admin account to scan manually. Scans notice
+removed files and reuse probe results for files that have not changed.
+`autoScan = true` enables filesystem watching and periodic scans. A separate
+reconciliation scan runs every hour by default, even with `autoScan` off;
+set `reconcileInterval = "0s"` to disable it.
 
-## Seeking
+For media on a NAS, [popcorn-watch](packaging/popcorn-watch.md) can run on the
+storage host and notify the server when a folder changes.
 
-Direct playback uses normal HTTP range requests. Transcoded playback accepts `start` in seconds:
+## Clients
 
-```sh
-GET /api/items/{id}/transcode?bandwidth=6000&start=3600
-```
+The web client is served at the server's root URL. The Android TV and phone
+apps live in `android-tv/`; both connect to the same server and support QR
+sign-in. The phone app can also act as a TV remote.
 
-The web UI uses that to seek outside the currently buffered transcode output by restarting ffmpeg at the selected movie timestamp.
-
-## Trakt
-
-Popcorn ships with Trakt app credentials for the device-auth flow. You can override them with `traktClientId` and `traktClientSecret` in `config.toml` or with `POPCORN_TRAKT_CLIENT_ID` and `POPCORN_TRAKT_CLIENT_SECRET`.
-
-Each Popcorn user connects Trakt separately:
-
-1. `POST /api/trakt/device` returns the user code and verification URL.
-2. After the user approves it on Trakt, poll `POST /api/trakt/device/token` with `{"deviceCode":"..."}`.
-3. Playback progress updates will save local resume state. Start, pause, and finished events are also sent to Trakt when that user has connected an account.
-
-To import existing Trakt watched status for a linked Popcorn user:
+On the desktop, `popcorn-mpv` uses mpv for playback and rofi or fzf to choose
+what to watch:
 
 ```sh
-./scripts/import-trakt-watched.sh
+go run ./cmd/popcorn-mpv -server http://localhost:8097 -selector rofi
 ```
 
-To import an existing Trakt watchlist:
+Use `-selector fzf` for a terminal picker. The launcher saves its login token
+in `$XDG_CONFIG_HOME/popcorn/mpv.toml`, or `~/.config/popcorn/mpv.toml`.
+
+## Playback
+
+The server chooses direct playback, an HLS remux, an audio transcode, or a full
+transcode based on the client's supported formats and bandwidth limit. Direct
+playback supports HTTP range requests; transcoded playback can restart at the
+requested position when you seek.
+
+Set `hwAccel` in the server config to choose how ffmpeg transcodes video:
+
+| Value | Behaviour |
+| --- | --- |
+| `none` | CPU encoding with libx264 |
+| `auto` | Automatic hardware decoding, CPU encoding |
+| `nvenc` | NVIDIA H.264 encoding |
+| `qsv` | Intel Quick Sync H.264 encoding |
+| `vaapi` | Software decoding, VAAPI H.264 encoding |
+
+For VAAPI, set `hwDevice` to your render node, usually `/dev/dri/renderD128`.
+
+Embedded text subtitles in Matroska files can be read directly from the file's
+index. Files without a usable subtitle index fall back to ffmpeg, which can be
+slow on large files. PGS and VobSub image subtitles need conversion to text for
+the apps. [SUBTITLES.md](SUBTITLES.md) covers extraction and the repair and OCR
+scripts.
+
+## Trakt and discovery
+
+Connect Trakt from your account settings to scrobble playback and access your
+Trakt watchlist, history, and recommendations. You can import watched status,
+watchlists, ratings, and hidden recommendations. Collection sync records which
+titles are in your libraries and removes entries Cinnamon added when those
+files are gone.
+
+The phone app's Discover screen shows titles outside your library and upcoming
+episodes of shows you own. Configure `tmdbApiKey` or `tmdbReadAccessToken` for
+TMDb artwork and details. An optional `omdbApiKey` adds ratings from OMDb.
+
+Trakt app credentials are included for device sign-in. To use your own Trakt
+app, set `traktClientId` and `traktClientSecret`, or the matching
+`POPCORN_TRAKT_CLIENT_ID` and `POPCORN_TRAKT_CLIENT_SECRET` environment variables.
+Each Cinnamon user connects their Trakt account separately.
+
+## Installing on Arch Linux
+
+From a checkout:
 
 ```sh
-./scripts/import-trakt-watchlist.sh
+cd packaging/arch
+makepkg -si
+sudoedit /etc/popcorn/config.toml
+sudo systemctl enable --now popcornd
+popcorn-mpv -selector rofi
 ```
+
+The package installs the server, desktop launcher, and systemd integration.
+See [the packaging notes](packaging/arch/README.md) for details.
+
+## Development and releases
+
+Run the Go tests and build both Android debug APKs:
+
+```sh
+./scripts/check
+```
+
+Android builds need Java 21 and Android SDK platform 36. The script selects
+`/usr/lib/jvm/java-21-openjdk` when it exists and `JAVA_HOME` is unset.
+Set `POPCORN_CHECK_ANDROID=0` to run only the Go tests, or
+`POPCORN_CHECK_GO=0` to build only the Android apps.
+
+Build a release bundle with:
+
+```sh
+./scripts/release
+```
+
+Use `--server` for the server and desktop launcher, `--phone` for the phone
+app, or `--androidtv` for the TV app. Flags can be combined. Bundles go into
+`dist/<git-version>/` with SHA-256 checksums.
+
+Android releases require signing credentials. By default, the build reads
+`~/.local/android/release-keys/popcorn.properties`. The web admin's **App
+Updates** screen accepts release APKs for clients to download.
+[DEPLOYMENT.md](DEPLOYMENT.md) covers signing, release options, uploads, and
+systemd setup.
+
+## API
+
+The clients use a JSON API under `/api/`. Authenticate with
+`Authorization: Bearer <token>` or the `popcorn_token` login cookie. Health,
+login, and the QR start/poll/claim routes are public; other API routes require
+a login, and administrative actions require an admin account.
+
+Useful starting points are `GET /api/libraries`, `GET /api/items`,
+`GET /api/home`, and `POST /api/playback/plan`. The route list is in
+[internal/server/server.go](internal/server/server.go).

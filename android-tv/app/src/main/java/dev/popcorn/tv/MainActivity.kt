@@ -209,7 +209,7 @@ fun PopcornApp() {
         }
     }
 
-    fun applyHomePayload(activeSession: Session, payload: HomePayload, generation: Int? = null) {
+    fun applyHomePayload(activeSession: Session, payload: HomePayload, generation: Int? = null, showHome: Boolean = true) {
         if (generation != null && generation != loadGeneration) return
         libraries = payload.libraries
         if (payload.user.username.isNotBlank() && (activeSession.username != payload.user.username || activeSession.displayName != payload.user.displayName || activeSession.isAdmin != payload.user.isAdmin || activeSession.userId != payload.user.id || activeSession.avatar != payload.user.avatar)) {
@@ -228,7 +228,7 @@ fun PopcornApp() {
         watchlistShows = payload.watchlist.shows.map { showKey(it) }.toSet()
         AppCache.writeHomeSections(context, activeSession, payload.sectionsJson)
         AppCache.writeLibraries(context, activeSession, payload.libraries)
-        screen = Screen.Home
+        if (showHome) screen = Screen.Home
         loading = false
         error = ""
     }
@@ -784,15 +784,29 @@ fun PopcornApp() {
                 loading = false
             }
         }
-        runCatching { Api(active).home() }
-            .onSuccess { applyHomePayload(active, it) }
-            .onFailure {
-                error = it.message ?: "Server unavailable"
-                // Cached sections are better than bouncing to login when the
-                // server is merely unreachable.
-                if (homeSections.isEmpty()) screen = Screen.Login
-                loading = false
+        // Only a rejected token sends you to login. A server that is down or
+        // restarting is waited out, so restarting popcornd never costs a login.
+        var backoff = 2_000L
+        while (true) {
+            val result = runCatching { Api(active).home() }
+            val payload = result.getOrNull()
+            if (payload != null) {
+                // Cached home may have let you browse on while this retried.
+                applyHomePayload(active, payload, showHome = screen is Screen.Loading || screen is Screen.Home)
+                break
             }
+            val failure = result.exceptionOrNull()
+            if (failure is HttpException && failure.code == 401) {
+                error = "Session expired, please sign in again"
+                screen = Screen.Login
+                loading = false
+                break
+            }
+            error = "Server unavailable, retrying…"
+            loading = false
+            delay(backoff)
+            backoff = (backoff * 2).coerceAtMost(30_000L)
+        }
     }
 
     // The "More" chip on a shelf. Known targets open the screen that shows the

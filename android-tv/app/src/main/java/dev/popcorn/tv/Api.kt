@@ -13,6 +13,10 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
+// A response the server actually sent, as opposed to not reaching it. Only a
+// 401 means the token is gone; anything else is worth retrying.
+class HttpException(val code: Int, message: String) : Exception(message)
+
 object AppCache {
     fun readLibraries(context: Context, session: Session): List<Library> {
         return runCatching {
@@ -1030,7 +1034,7 @@ class Api(private val session: Session) {
         val code = conn.responseCode
         val stream = if (code in 200..299) conn.inputStream else conn.errorStream
         val text = stream.bufferedReader().use { it.readText() }
-        if (code !in 200..299) error(text.ifBlank { "HTTP $code" })
+        if (code !in 200..299) throw HttpException(code, text.ifBlank { "HTTP $code" })
         return text
     }
 

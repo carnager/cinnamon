@@ -33,6 +33,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Star
@@ -269,7 +270,7 @@ fun ShowCard(
     CardShell(autoFocus = autoFocus, focusRequester = focusRequester, onFocus = onFocus, onLeftEdge = onLeftEdge, onRightEdge = onRightEdge, onUp = onUp, onClick = onClick, onLongClick = onLongClick) {
         Box {
             Poster(session, show.posterItemId, Modifier.fillMaxWidth(), show.posterMtimeUnix)
-            PosterCornerMarks(watched, watchlisted, show.rating)
+            PosterCornerMarks(watched, watchlisted, show.rating, notInterested = notInterestedKey(show) in LocalNotInterested.current)
         }
         Spacer(Modifier.height(5.dp))
         Text(show.title, color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -295,7 +296,7 @@ fun ItemCard(
     CardShell(autoFocus = autoFocus, focusRequester = focusRequester, onFocus = onFocus, onLeftEdge = onLeftEdge, onRightEdge = onRightEdge, onUp = onUp, onClick = onClick, onLongClick = onLongClick) {
         Box {
             Poster(session, item.id, Modifier.fillMaxWidth(), item.posterMtimeUnix)
-            PosterCornerMarks(watched, watchlisted, item.rating)
+            PosterCornerMarks(watched, watchlisted, item.rating, notInterested = notInterestedKey(item)?.let { it in LocalNotInterested.current } == true)
             val progress = LocalResumeProgress.current[item.id] ?: 0f
             if (progress > 0f) PosterProgressBar(progress)
         }
@@ -352,7 +353,7 @@ fun BoxScope.PosterProgressBar(fraction: Float) {
 // nothing else claims: stills carry their episode number bottom left and
 // season posters their title there.
 @Composable
-fun BoxScope.PosterCornerMarks(watched: Boolean, watchlisted: Boolean, rating: Double = 0.0) {
+fun BoxScope.PosterCornerMarks(watched: Boolean, watchlisted: Boolean, rating: Double = 0.0, notInterested: Boolean = false) {
     if (watchlisted) {
         // A ribbon off the top edge, carrying no glyph: the silhouette is the
         // bookmark, which is why it survives at any size and on any artwork
@@ -369,7 +370,28 @@ fun BoxScope.PosterCornerMarks(watched: Boolean, watchlisted: Boolean, rating: D
                 .background(Teal),
         )
     }
-    if (watched) {
+    if (notInterested) {
+        // Not Interested takes the seen wedge's corner, in a cold grey that
+        // reads as set aside rather than done. It replaces the seen wedge
+        // because the choice is the stronger statement about the title.
+        Box(Modifier.matchParentSize().clip(CardShape)) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(46.dp)
+                    .clip(SeenWedge)
+                    .background(NotInterestedGrey.copy(alpha = .9f)),
+                contentAlignment = Alignment.BottomEnd,
+            ) {
+                Icon(
+                    Icons.Filled.Block,
+                    "Not interested",
+                    Modifier.padding(end = 7.dp, bottom = 7.dp).size(15.dp),
+                    tint = Color.White,
+                )
+            }
+        }
+    } else if (watched) {
         // Seen is the one mark that says something happened, so it fills its
         // corner rather than sitting in it as a glyph: a wedge of accent is
         // found at a glance scanning a grid, where a check has to be looked
@@ -413,6 +435,8 @@ fun BoxScope.PosterCornerMarks(watched: Boolean, watchlisted: Boolean, rating: D
         }
     }
 }
+
+private val NotInterestedGrey = Color(0xFF55606A)
 
 // A tab with a notch cut out of its bottom edge — a bookmark hanging from the
 // top of the poster.

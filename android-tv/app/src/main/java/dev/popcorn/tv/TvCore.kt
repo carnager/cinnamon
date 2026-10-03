@@ -148,6 +148,14 @@ fun resumeFractionMap(progress: List<PlaybackProgress>): Map<Long, Float> {
 // through every screen composable.
 val LocalResumeProgress = compositionLocalOf { emptyMap<Long, Float>() }
 
+// Recommendation exclusion keys ("item:<id>", "show:<library>:<title>") so a
+// poster can mark what was set to Not Interested, the same way as above.
+val LocalNotInterested = compositionLocalOf { emptySet<String>() }
+
+fun notInterestedKey(item: PopItem): String? = if (item.kind == "movie") "item:${item.id}" else null
+
+fun notInterestedKey(show: ShowSummary): String = "show:${show.libraryId.trim().lowercase()}:${show.title.trim().lowercase()}"
+
 // Artwork width the server will generate for card-sized images (see
 // internal/server/thumbs.go — requests snap up to the nearest bucket, 400 or
 // 800). Source posters are routinely 1000x1500, so a shelf of cards otherwise

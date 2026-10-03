@@ -989,7 +989,7 @@ fun PopcornApp() {
         }
     }
 
-    CompositionLocalProvider(LocalResumeProgress provides resumeFractionById) {
+    CompositionLocalProvider(LocalResumeProgress provides resumeFractionById, LocalNotInterested provides recommendationExclusionKeys) {
     when (val current = screen) {
         Screen.Loading -> LoadingView(error)
         Screen.Login -> LoginView(

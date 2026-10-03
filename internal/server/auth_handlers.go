@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net"
@@ -38,7 +39,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), status)
 		return
 	}
-	token, err := a.auth.CreateSession(r.Context(), user.ID, 30*24*time.Hour)
+	token, err := a.auth.CreateSession(r.Context(), user.ID, auth.SessionTTL)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -197,6 +198,12 @@ func (a *App) requireUser(w http.ResponseWriter, r *http.Request) (auth.User, bo
 	}
 	user, err := a.auth.UserByToken(r.Context(), token)
 	if err != nil {
+		// A database hiccup is not a verdict on the token; a 401 here would
+		// sign clients out over a busy database.
+		if !errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "auth unavailable", http.StatusServiceUnavailable)
+			return auth.User{}, false
+		}
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return auth.User{}, false
 	}

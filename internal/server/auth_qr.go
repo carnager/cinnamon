@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"popcorn/internal/auth"
 )
 
 func (a *App) authQRStart(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +125,7 @@ func (a *App) authQRComplete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "qr code already completed", http.StatusConflict)
 		return
 	}
-	token, err := a.auth.CreateSession(r.Context(), user.ID, 30*24*time.Hour)
+	token, err := a.auth.CreateSession(r.Context(), user.ID, auth.SessionTTL)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

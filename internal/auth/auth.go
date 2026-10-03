@@ -21,6 +21,10 @@ const (
 	saltBytes            = 16
 	keyBytes             = 32
 	sessionTouchInterval = 5 * time.Minute
+	// SessionTTL is how long a session lives without being used. Every use
+	// pushes the expiry out again, so a device in regular use never has to
+	// sign in twice.
+	SessionTTL = 30 * 24 * time.Hour
 )
 
 var (
@@ -242,8 +246,9 @@ WHERE s.token = ? AND s.expires_at > ? AND u.disabled = 0`, token, time.Now().UT
 	}
 	user.IsAdmin = isAdmin != 0
 	user.Disabled = disabled != 0
-	if shouldTouchSession(lastSeen, time.Now().UTC()) {
-		_, _ = s.db.ExecContext(ctx, `UPDATE auth_sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE token = ?`, token)
+	if now := time.Now().UTC(); shouldTouchSession(lastSeen, now) {
+		_, _ = s.db.ExecContext(ctx, `UPDATE auth_sessions SET last_seen_at = CURRENT_TIMESTAMP, expires_at = ? WHERE token = ?`,
+			now.Add(SessionTTL).Format(time.RFC3339), token)
 	}
 	return user, nil
 }

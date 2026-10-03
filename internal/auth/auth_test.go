@@ -162,6 +162,36 @@ func TestSessionLifecycleAndExpiry(t *testing.T) {
 	}
 }
 
+func TestSessionUseExtendsExpiry(t *testing.T) {
+	store, ctx := newTestStore(t)
+	user, err := store.CreateUser(ctx, CreateUserInput{Username: "player", Password: "secret1"})
+	if err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	token, err := store.CreateSession(ctx, user.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	// Make the session look idle so the next lookup touches it.
+	if _, err := store.db.ExecContext(ctx, `UPDATE auth_sessions SET last_seen_at = '2000-01-01 00:00:00' WHERE token = ?`, token); err != nil {
+		t.Fatalf("age session: %v", err)
+	}
+	if _, err := store.UserByToken(ctx, token); err != nil {
+		t.Fatalf("lookup session: %v", err)
+	}
+	var expires string
+	if err := store.db.QueryRowContext(ctx, `SELECT expires_at FROM auth_sessions WHERE token = ?`, token).Scan(&expires); err != nil {
+		t.Fatalf("read expiry: %v", err)
+	}
+	got, err := time.Parse(time.RFC3339, expires)
+	if err != nil {
+		t.Fatalf("parse expiry %q: %v", expires, err)
+	}
+	if want := time.Now().Add(SessionTTL - time.Minute); got.Before(want) {
+		t.Fatalf("expiry = %v, want extended to about %v", got, want)
+	}
+}
+
 func TestShouldTouchSessionAcceptsSQLiteAndRFC3339Timestamps(t *testing.T) {
 	now := time.Date(2026, 6, 8, 12, 0, 0, 0, time.UTC)
 	recentSQLite := now.Add(-time.Minute).Format("2006-01-02 15:04:05")

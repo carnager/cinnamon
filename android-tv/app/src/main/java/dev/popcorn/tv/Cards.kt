@@ -256,6 +256,17 @@ private fun AlphabetRail(
     // run off the screen with "Z" cut off.
     val letterHeight = ((availableHeight - 6.dp - 44.dp) / letters.size).coerceIn(10.dp, 16.dp)
     var previewJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    // Up/Down step to the next letter that has titles. Letters without any
+    // can't take focus, and the general focus search then picked whatever
+    // was nearest — often a grid card — so focus fell out of the rail where
+    // letters were missing (and at the ends).
+    val letterFocus = remember { letters.map { FocusRequester() } }
+    fun stepLetter(from: Int, down: Boolean): Boolean {
+        val range = if (down) (from + 1..letters.lastIndex) else (from - 1 downTo 0)
+        val next = range.firstOrNull { index[letters[it]] != null } ?: return true
+        runCatching { letterFocus[next].requestFocus() }
+        return true
+    }
     Column(
         modifier
             .width(36.dp)
@@ -265,7 +276,7 @@ private fun AlphabetRail(
             .padding(vertical = 3.dp, horizontal = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        letters.forEach { letter ->
+        letters.forEachIndexed { letterIndex, letter ->
             var focused by remember { mutableStateOf(false) }
             val target = index[letter]
             Box(
@@ -273,6 +284,7 @@ private fun AlphabetRail(
                     .fillMaxWidth()
                     .height(letterHeight)
                     .then(if (letter == focusLetter && focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+                    .focusRequester(letterFocus[letterIndex])
                     .clip(RoundedCornerShape(6.dp))
                     .background(if (focused && target != null) Accent else Color.Transparent)
                     .onFocusChanged {
@@ -289,6 +301,8 @@ private fun AlphabetRail(
                     .focusable(enabled = target != null)
                     .onKeyEvent {
                         when {
+                            it.type == KeyEventType.KeyDown && it.key == Key.DirectionDown -> stepLetter(letterIndex, down = true)
+                            it.type == KeyEventType.KeyDown && it.key == Key.DirectionUp -> stepLetter(letterIndex, down = false)
                             it.type != KeyEventType.KeyDown || it.key != Key.DirectionLeft -> false
                             // Into the grid at this letter, where it now shows.
                             target != null -> {

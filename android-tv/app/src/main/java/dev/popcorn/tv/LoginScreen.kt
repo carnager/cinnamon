@@ -40,6 +40,10 @@ import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.net.NetworkInterface
@@ -47,7 +51,7 @@ import java.net.ServerSocket
 import java.util.UUID
 
 @Composable
-fun LoginView(initialServer: String, initialUsername: String = "", error: String, onLogin: (String, String, String) -> Unit, onQrLogin: (Session) -> Unit) {
+fun LoginView(initialServer: String, initialUsername: String = "", error: String, busy: Boolean = false, onLogin: (String, String, String) -> Unit, onQrLogin: (Session) -> Unit) {
     var server by remember { mutableStateOf(initialServer) }
     var username by remember { mutableStateOf(initialUsername.ifBlank { "admin" }) }
     var password by remember { mutableStateOf("") }
@@ -58,6 +62,15 @@ fun LoginView(initialServer: String, initialUsername: String = "", error: String
     var setupSocket by remember { mutableStateOf<ServerSocket?>(null) }
     var qrError by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    // Nothing had focus on the first screen, so the first D-pad press only
+    // found the buttons.
+    val chooseFocus = remember { FocusRequester() }
+    LaunchedEffect(mode) {
+        if (mode == "choose") {
+            delay(120)
+            runCatching { chooseFocus.requestFocus() }
+        }
+    }
 
     fun startPhoneSetup() {
         setupJob?.cancel()
@@ -126,9 +139,10 @@ fun LoginView(initialServer: String, initialUsername: String = "", error: String
                         modifier = Modifier.fillMaxWidth().height(40.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black),
                         shape = RoundedCornerShape(6.dp),
-                        onClick = { onLogin(server, username, password) },
+                        // Ignore repeat presses while a sign-in is in flight.
+                        onClick = { if (!busy) onLogin(server, username, password) },
                     ) {
-                        Text("Sign In", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text(if (busy) "Signing in\u2026" else "Sign In", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     }
                     Button(
                         modifier = Modifier.fillMaxWidth().height(40.dp),
@@ -174,7 +188,7 @@ fun LoginView(initialServer: String, initialUsername: String = "", error: String
                 }
                 else -> {
                     Button(
-                        modifier = Modifier.fillMaxWidth().height(44.dp),
+                        modifier = Modifier.fillMaxWidth().height(44.dp).focusRequester(chooseFocus),
                         colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black),
                         shape = RoundedCornerShape(6.dp),
                         onClick = {

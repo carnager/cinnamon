@@ -91,7 +91,10 @@ fun UpdateApplyDialog(session: Session?, onDismiss: () -> Unit, onUpdateStarted:
                 Api(active).downloadTvUpdate(info, apk)
             }.onSuccess { apk ->
                 status = installApk(context, apk)
-                onUpdateStarted()
+                // Only when the installer actually opened: a redirect to the
+                // "install unknown apps" setting cleared the update badge
+                // although nothing had been installed.
+                if (installerLaunched(context)) onUpdateStarted()
             }.onFailure {
                 status = it.message ?: "Download failed"
             }
@@ -219,6 +222,9 @@ private fun installApk(context: Context, apk: File): String {
 	}, 600)
 	return "Opening Android installer. Reopen Cinnamon after installation."
 }
+
+private fun installerLaunched(context: Context): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.O || context.packageManager.canRequestPackageInstalls()
 
 private fun formatBytes(bytes: Long): String {
     val mib = bytes.toDouble() / (1024.0 * 1024.0)

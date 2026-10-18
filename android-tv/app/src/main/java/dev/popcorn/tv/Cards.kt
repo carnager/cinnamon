@@ -132,7 +132,7 @@ fun <T> PosterGrid(
             columns = GridCells.Adaptive(118.dp),
             state = gridState,
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 32.dp, end = if (alphabetIndex.isEmpty()) 32.dp else 58.dp, top = 16.dp, bottom = 28.dp),
+            contentPadding = PaddingValues(start = 32.dp, end = if (alphabetIndex.isEmpty()) 32.dp else 74.dp, top = 16.dp, bottom = 28.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
@@ -173,7 +173,8 @@ fun <T> PosterGrid(
                 requestedFocusLetter = selectedAlphabetLetter,
                 restoreFocus = restoreFocus,
                 availableHeight = maxHeight,
-                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 10.dp),
+                // Inside the TV overscan margin (was 10dp from the screen edge).
+                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 26.dp),
             )
         }
     }

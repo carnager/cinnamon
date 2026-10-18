@@ -90,6 +90,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.offset
@@ -323,7 +326,8 @@ fun SideNavigation(
             .onFocusChanged {
                 onFocusChange(it.hasFocus)
             }
-            .padding(horizontal = 10.dp, vertical = 18.dp),
+            // Bottom kept inside the ~27dp TV overscan margin (avatar sat at 18dp).
+            .padding(start = 10.dp, end = 10.dp, top = 18.dp, bottom = 30.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -581,6 +585,7 @@ fun HistoryView(
     var error by remember(session?.token) { mutableStateOf("") }
     var restoreContentFocus by remember { mutableStateOf<FocusRequester?>(null) }
     val restoreIndex = remember { HistoryMemory.focusIndex }
+    val historyContext = LocalContext.current
     val historyListState = rememberLazyListState(initialFirstVisibleItemIndex = restoreIndex)
 
     LaunchedEffect(session?.token) {
@@ -642,7 +647,13 @@ fun HistoryView(
                                 restoreContentFocus = requester
                                 HistoryMemory.focusIndex = index
                             },
-                            onClick = { entry.item?.let(onItem) },
+                            // Trakt plays of titles this server doesn't have did
+                            // nothing on OK, with no hint why.
+                            onClick = {
+                                val target = entry.item
+                                if (target != null) onItem(target)
+                                else android.widget.Toast.makeText(historyContext, "Not in this library", android.widget.Toast.LENGTH_SHORT).show()
+                            },
                         )
                     }
                 }
@@ -1123,8 +1134,10 @@ fun LibraryFilterBar(
             .fillMaxWidth()
             .padding(horizontal = 26.dp, vertical = 10.dp),
     ) {
+        // Scrolls rather than squeezing: long library names and filter labels
+        // ("Sort: IMDb rating highest") pushed the last pills off screen.
         Row(
-            Modifier.fillMaxWidth(),
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -1409,6 +1422,7 @@ private fun UserMenuDrawer(
     var phoneQrRefresh by remember { mutableIntStateOf(0) }
     var exclusions by remember { mutableStateOf<List<RecommendationExclusion>>(emptyList()) }
     var exclusionsLoading by remember { mutableStateOf(false) }
+    var exclusionsError by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val entries = when (page) {
         UserMenuPage.Root -> buildList {
@@ -1458,6 +1472,7 @@ private fun UserMenuDrawer(
                         entry.item?.let { api.restoreItemRecommendation(it.id) }
                             ?: entry.show?.let { api.restoreShowRecommendation(it.libraryId, it.title) }
                     }.onSuccess { exclusions = exclusions.filterNot { it.key == entry.key } }
+                        .onFailure { exclusionsError = "Couldn't restore: ${it.message ?: "request failed"}" }
                 }
             }
         }
@@ -1466,7 +1481,11 @@ private fun UserMenuDrawer(
     LaunchedEffect(page, session?.token) {
         if (page != UserMenuPage.NotInterested || session == null) return@LaunchedEffect
         exclusionsLoading = true
-        exclusions = runCatching { Api(session).recommendationExclusions() }.getOrDefault(emptyList())
+        exclusionsError = ""
+        // A failed load used to read as "0 excluded".
+        runCatching { Api(session).recommendationExclusions() }
+            .onSuccess { exclusions = it }
+            .onFailure { exclusionsError = "Couldn't load: ${it.message ?: "request failed"}" }
         exclusionsLoading = false
     }
 
@@ -1530,7 +1549,11 @@ private fun UserMenuDrawer(
                     when (page) {
                         UserMenuPage.Root -> session.userDisplayName()
                         UserMenuPage.PhoneLogin -> "Cinnamon Android"
-                        UserMenuPage.NotInterested -> if (exclusionsLoading) "Loading…" else "${exclusions.size} excluded"
+                        UserMenuPage.NotInterested -> when {
+                            exclusionsLoading -> "Loading…"
+                            exclusionsError.isNotBlank() -> exclusionsError
+                            else -> "${exclusions.size} excluded"
+                        }
                         UserMenuPage.ConfirmLogout -> "Sign out of ${session.userDisplayName()}?"
                         else -> "Playback languages"
                     },

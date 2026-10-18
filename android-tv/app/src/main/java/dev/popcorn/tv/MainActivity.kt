@@ -165,6 +165,7 @@ fun PopcornApp() {
     // Where Back from each open actor page goes, innermost last. A single slot
     // looped: Detail X > Actor A > Detail Y > Actor B overwrote it with Y, and
     // Back then cycled Y <> A forever with X unreachable.
+    var homeGrabSnapshot by remember { mutableStateOf<List<HomeLayoutSection>?>(null) }
     var actorReturnStack by remember { mutableStateOf<List<Pair<Actor, Screen>>>(emptyList()) }
     fun backFromActor(actor: Actor): Screen {
         val at = actorReturnStack.indexOfLast { it.first == actor }
@@ -1047,7 +1048,13 @@ fun PopcornApp() {
                 homeOptionsIndex = null
             }
             homeShelvesOpen -> homeShelvesOpen = false
-            homeEditGrabbed -> homeEditGrabbed = false
+            // Back while carrying a shelf puts it back where it was picked up
+            // (each move already rewrote the draft).
+            homeEditGrabbed -> {
+                homeGrabSnapshot?.let { homeEditDraft = it }
+                homeGrabSnapshot = null
+                homeEditGrabbed = false
+            }
             else -> session?.let { finishHomeArrange(it) }
         }
     }
@@ -1087,6 +1094,7 @@ fun PopcornApp() {
         Screen.Login -> LoginView(
             initialServer = prefs.getString("server", "http://10.0.2.2:8097") ?: "http://10.0.2.2:8097",
             initialUsername = prefs.getString("username", "") ?: "",
+            busy = loading,
             error = error,
             onLogin = { server, username, password ->
                 scope.launch {
@@ -1554,6 +1562,7 @@ fun PopcornApp() {
                 canConfigure = definition?.params?.any { !it.hidden } == true,
                 onMove = {
                     homeActionsIndex = null
+                    homeGrabSnapshot = homeEditDraft
                     homeEditGrabbed = true
                 },
                 onOptions = {

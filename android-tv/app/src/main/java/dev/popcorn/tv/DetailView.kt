@@ -710,140 +710,6 @@ fun PlayButton(
 }
 
 @Composable
-fun ActionToggle(
-    label: String,
-    icon: ImageVector,
-    active: Boolean,
-    focusRequester: FocusRequester? = null,
-    onFocus: () -> Unit = {},
-    onUp: (() -> Boolean)? = null,
-    onDown: (() -> Boolean)? = null,
-    onClick: () -> Unit,
-) {
-    var focused by remember { mutableStateOf(false) }
-    val buttonWidth by animateDpAsState(
-        targetValue = if (focused) 108.dp else 58.dp,
-        animationSpec = tween(durationMillis = 140),
-        label = "secondaryActionWidth",
-    )
-    val bg = Color.Transparent
-    val borderColor = when {
-        focused -> Accent.copy(alpha = .95f)
-        else -> Color.Transparent
-    }
-    val contentColor = when {
-        focused -> TextColor
-        active -> Accent
-        else -> TextColor.copy(alpha = .88f)
-    }
-    Row(
-        Modifier
-            .height(44.dp)
-            .width(buttonWidth)
-            .clip(RoundedCornerShape(13.dp))
-            .background(bg)
-            .border(1.dp, borderColor, RoundedCornerShape(13.dp))
-            .onFocusChanged {
-                focused = it.isFocused
-                if (it.isFocused) onFocus()
-            }
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .focusable()
-            .onPreviewKeyEvent {
-                when {
-                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionUp && onUp != null -> onUp()
-                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionDown && onDown != null -> onDown()
-                    else -> false
-                }
-            }
-            .tvActivate(onClick)
-            .padding(horizontal = 13.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
-    ) {
-        Icon(icon, contentDescription = null, tint = contentColor, modifier = Modifier.size(20.dp))
-        AnimatedVisibility(
-            visible = focused,
-            enter = expandHorizontally(animationSpec = tween(120)) + fadeIn(animationSpec = tween(90)),
-            exit = shrinkHorizontally(animationSpec = tween(120)) + fadeOut(animationSpec = tween(75)),
-        ) {
-            Text(
-                label,
-                color = contentColor,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-            )
-        }
-    }
-}
-
-@Composable
-fun ActionIcon(
-    icon: ImageVector,
-    label: String,
-    contentDescription: String,
-    active: Boolean,
-    activeTint: Color = Accent,
-    focusRequester: FocusRequester? = null,
-    onFocus: () -> Unit = {},
-    onUp: (() -> Boolean)? = null,
-    onDown: (() -> Boolean)? = null,
-    onClick: () -> Unit,
-) {
-    var focused by remember { mutableStateOf(false) }
-    val buttonWidth by animateDpAsState(
-        targetValue = if (focused) 108.dp else 58.dp,
-        animationSpec = tween(durationMillis = 140),
-        label = "secondaryActionWidth",
-    )
-    val bg = Color.Transparent
-    val borderColor = when {
-        focused -> Accent.copy(alpha = .95f)
-        else -> Color.Transparent
-    }
-    val tint = when {
-        focused -> TextColor
-        active -> activeTint
-        else -> Muted
-    }
-    Row(
-        Modifier
-            .height(44.dp)
-            .width(buttonWidth)
-            .clip(RoundedCornerShape(13.dp))
-            .background(bg)
-            .border(1.dp, borderColor, RoundedCornerShape(13.dp))
-            .onFocusChanged {
-                focused = it.isFocused
-                if (it.isFocused) onFocus()
-            }
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .focusable()
-            .onPreviewKeyEvent {
-                when {
-                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionUp && onUp != null -> onUp()
-                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionDown && onDown != null -> onDown()
-                    else -> false
-                }
-            }
-            .tvActivate(onClick)
-            .padding(horizontal = 13.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(7.dp),
-    ) {
-        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(20.dp))
-        AnimatedVisibility(
-            visible = focused,
-            enter = expandHorizontally(animationSpec = tween(120)) + fadeIn(animationSpec = tween(90)),
-            exit = shrinkHorizontally(animationSpec = tween(120)) + fadeOut(animationSpec = tween(75)),
-        ) {
-            Text(label, color = tint, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-        }
-    }
-}
-
-@Composable
 fun FocusableDescriptionPanel(
     overview: String,
     maxLines: Int = 3,
@@ -1381,3 +1247,77 @@ fun MediaPreferenceDialog(
         onDismiss = onDismiss,
     )
 }
+
+// Secondary actions: fixed size with the label always visible. They used
+// to grow from 58dp to 108dp on focus to reveal the label, shifting every
+// button to the right while moving along the row.
+@Composable
+fun ActionIcon(
+    icon: ImageVector,
+    label: String,
+    contentDescription: String,
+    active: Boolean,
+    activeTint: Color = Accent,
+    focusRequester: FocusRequester? = null,
+    onFocus: () -> Unit = {},
+    onUp: (() -> Boolean)? = null,
+    onDown: (() -> Boolean)? = null,
+    onClick: () -> Unit,
+) {
+    var focused by remember { mutableStateOf(false) }
+    val tint = when {
+        focused -> Color.White
+        active -> activeTint
+        else -> Muted
+    }
+    Column(
+        Modifier
+            .width(78.dp)
+            .height(54.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (focused) Accent.copy(alpha = .22f) else Color.Transparent)
+            .border(if (focused) 2.dp else 0.dp, if (focused) Accent else Color.Transparent, RoundedCornerShape(12.dp))
+            .onFocusChanged {
+                focused = it.isFocused
+                if (it.isFocused) onFocus()
+            }
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .focusable()
+            .onPreviewKeyEvent {
+                when {
+                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionUp && onUp != null -> onUp()
+                    it.type == KeyEventType.KeyDown && it.key == Key.DirectionDown && onDown != null -> onDown()
+                    else -> false
+                }
+            }
+            .tvActivate(onClick)
+            .padding(horizontal = 4.dp, vertical = 5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterVertically),
+    ) {
+        Icon(icon, contentDescription = contentDescription, tint = tint, modifier = Modifier.size(20.dp))
+        Text(label, color = tint, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+fun ActionToggle(
+    label: String,
+    icon: ImageVector,
+    active: Boolean,
+    focusRequester: FocusRequester? = null,
+    onFocus: () -> Unit = {},
+    onUp: (() -> Boolean)? = null,
+    onDown: (() -> Boolean)? = null,
+    onClick: () -> Unit,
+) = ActionIcon(
+    icon = icon,
+    label = label,
+    contentDescription = label,
+    active = active,
+    focusRequester = focusRequester,
+    onFocus = onFocus,
+    onUp = onUp,
+    onDown = onDown,
+    onClick = onClick,
+)

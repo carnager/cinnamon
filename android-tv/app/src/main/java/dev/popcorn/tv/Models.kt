@@ -152,6 +152,8 @@ data class ShowSummary(
     val rating: Double,
     val year: Int = 0,
     val endYear: Int = 0,
+    // Server sort key (articles stripped); the grid is ordered by it.
+    val sortTitle: String = "",
 )
 
 // yearsLabel renders a show's run as "2019" or "2009–2012"; empty when unknown.
@@ -351,6 +353,8 @@ data class PopItem(
     val episodeNumber: Int,
     val episodeTitle: String,
     val actors: List<Actor> = emptyList(),
+    // Server sort key (articles stripped); the grid is ordered by it.
+    val sortTitle: String = "",
 )
 
 data class AppUpdateInfo(

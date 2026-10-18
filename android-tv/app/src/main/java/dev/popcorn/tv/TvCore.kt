@@ -250,3 +250,17 @@ fun youtubeTrailerSearchUrl(title: String, year: Int): String {
 private fun urlEncode(value: String): String = java.net.URLEncoder.encode(value, "UTF-8")
 
 fun dp(context: Context, value: Int): Int = (value * context.resources.displayMetrics.density).toInt()
+
+// Alphabet rail letters, exactly as the server buckets them
+// (media.alphabetLetter on media.sortKey): the first character of the sort
+// key if it is a-z, otherwise "#". Using the grid's own sort key keeps rail
+// letters and grid order in step — German articles are not stripped there,
+// so "Das Boot" sorts and files under D.
+fun alphabetRailLetter(title: String, sortTitle: String): String {
+    var key = sortTitle.ifBlank { title }.trim().lowercase()
+    if (sortTitle.isBlank()) {
+        for (prefix in listOf("the ", "a ", "an ")) key = key.removePrefix(prefix)
+    }
+    val ch = key.firstOrNull() ?: return "#"
+    return if (ch in 'a'..'z') ch.uppercaseChar().toString() else "#"
+}

@@ -111,18 +111,6 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
-private fun railAlphabetLetter(title: String): String {
-    val ch = title.withoutLeadingArticleForRail().firstOrNull() ?: return "#"
-    return if (ch.isLetter()) ch.uppercaseChar().toString() else "#"
-}
-
-private fun String.withoutLeadingArticleForRail(): String {
-    val trimmed = trim()
-    val lowered = trimmed.lowercase()
-    val articles = listOf("the ", "a ", "an ", "der ", "die ", "das ", "ein ", "eine ")
-    val article = articles.firstOrNull { lowered.startsWith(it) } ?: return trimmed
-    return trimmed.drop(article.length).trimStart()
-}
 
 @Composable
 fun HomeView(
@@ -857,7 +845,7 @@ fun LibraryPageView(
                         key = { showFocusKey(it) },
                         initialFocusKey = initialFocusKey,
                         autoFocusOnEntry = gridEntryFocusPending,
-                        alphabetTitle = { it.title },
+                        alphabetTitle = { it.sortTitle.ifBlank { it.title } },
                         alphabetEntries = alphabet.takeIf { selectedSort.isBlank() } ?: emptyList(),
                         onAlphabet = { entry ->
                             suppressSideNavigationExpansion = true
@@ -886,7 +874,7 @@ fun LibraryPageView(
                             onFocus = {
                                 gridEntryFocusPending = false
                                 restoreGridFocus = focusRequester
-                                focusedAlphabetLetter = railAlphabetLetter(show.title)
+                                focusedAlphabetLetter = alphabetRailLetter(show.title, show.sortTitle)
                                 focusedBackdrop.value = show.backdropPreview()
                             },
                             onLeftEdge = if (column == 0) {
@@ -918,7 +906,7 @@ fun LibraryPageView(
                         key = { it.id },
                         initialFocusKey = initialFocusKey,
                         autoFocusOnEntry = gridEntryFocusPending,
-                        alphabetTitle = { it.title },
+                        alphabetTitle = { it.sortTitle.ifBlank { it.title } },
                         alphabetEntries = alphabet.takeIf { selectedSort.isBlank() } ?: emptyList(),
                         onAlphabet = { entry ->
                             suppressSideNavigationExpansion = true
@@ -947,7 +935,7 @@ fun LibraryPageView(
                             onFocus = {
                                 gridEntryFocusPending = false
                                 restoreGridFocus = focusRequester
-                                focusedAlphabetLetter = railAlphabetLetter(item.title)
+                                focusedAlphabetLetter = alphabetRailLetter(item.title, item.sortTitle)
                                 focusedBackdrop.value = item.backdropPreview()
                             },
                             onLeftEdge = if (column == 0) {

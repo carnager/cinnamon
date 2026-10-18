@@ -1276,3 +1276,36 @@ func TestNewEpisodeCountsOnlyCountsEpisodesAddedSinceLastWatch(t *testing.T) {
 		t.Fatalf("counts = %#v, want Watched:1", counts)
 	}
 }
+
+func TestTVAlphabetIndexFollowsShowSortTitle(t *testing.T) {
+	store, ctx := newTestStore(t)
+	for _, title := range []string{"The 100", "Alpha", "Zulu"} {
+		upsertTestItem(t, ctx, store, Item{
+			LibraryID:     "tv",
+			Path:          "/tv/" + title + "/S01E01.mkv",
+			Kind:          "episode",
+			Title:         title,
+			SortTitle:     strings.ToLower(title),
+			ShowTitle:     title,
+			SeasonNumber:  1,
+			EpisodeNumber: 1,
+			SizeBytes:     1,
+		})
+	}
+	// The show grid sorts by media_shows.sort_title, which drops articles.
+	if _, err := store.DB().Exec(`INSERT INTO media_shows(library_id, show_title, sort_title, updated_at) VALUES ('tv', 'The 100', '100', CURRENT_TIMESTAMP)
+		ON CONFLICT(library_id, show_title) DO UPDATE SET sort_title = '100'`); err != nil {
+		t.Fatalf("set show sort title: %v", err)
+	}
+	alphabet, err := store.AlphabetIndex(ctx, AlphabetOptions{LibraryID: "tv", Kind: "tv"})
+	if err != nil {
+		t.Fatalf("alphabet: %v", err)
+	}
+	got := map[string]int{}
+	for _, entry := range alphabet {
+		got[entry.Letter] = entry.Offset
+	}
+	if len(alphabet) != 3 || got["#"] != 0 || got["A"] != 1 || got["Z"] != 2 {
+		t.Fatalf("alphabet = %+v, want # at 0, A at 1, Z at 2 (The 100 sorts as 100)", alphabet)
+	}
+}

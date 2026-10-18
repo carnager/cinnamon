@@ -111,14 +111,20 @@ fun <T> PosterGrid(
     var highlightIndex by remember { mutableStateOf<Int?>(null) }
     var previewClearJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val alphabetIndex = remember(entries, alphabetTitle, alphabetEntries, onAlphabet) {
-        if (alphabetEntries.isNotEmpty()) {
+        // Once the whole list is loaded, letters are located in the grid
+        // itself: the server's offsets came from its own ordering, and for TV
+        // shows that differed from the grid's ("The 100" under T there, first
+        // here), so jumps landed on the wrong titles. Until then, the server's.
+        val serverTotal = alphabetEntries.sumOf { it.count }
+        val gridIsComplete = alphabetEntries.isNotEmpty() && entries.size >= serverTotal
+        if (alphabetEntries.isNotEmpty() && !(gridIsComplete && alphabetTitle != null)) {
             alphabetEntries.associateBy { it.letter }
-        } else if (alphabetTitle == null || onAlphabet != null) {
+        } else if (alphabetTitle == null || (onAlphabet != null && alphabetEntries.isEmpty())) {
             emptyMap()
         } else {
             val out = linkedMapOf<String, AlphabetEntry>()
             entries.forEachIndexed { index, item ->
-                val letter = alphabetLetter(alphabetTitle.invoke(item))
+                val letter = alphabetRailLetter(alphabetTitle.invoke(item), "")
                 val existing = out[letter]
                 if (existing == null) {
                     out[letter] = AlphabetEntry(letter, index, 1)
@@ -223,18 +229,6 @@ fun <T> PosterGrid(
     }
 }
 
-private fun alphabetLetter(title: String): String {
-    val ch = title.withoutLeadingArticle().firstOrNull() ?: return "#"
-    return if (ch.isLetter()) ch.uppercaseChar().toString() else "#"
-}
-
-private fun String.withoutLeadingArticle(): String {
-    val trimmed = trim()
-    val lowered = trimmed.lowercase()
-    val articles = listOf("the ", "a ", "an ", "der ", "die ", "das ", "ein ", "eine ")
-    val article = articles.firstOrNull { lowered.startsWith(it) } ?: return trimmed
-    return trimmed.drop(article.length).trimStart()
-}
 
 @Composable
 private fun AlphabetRail(

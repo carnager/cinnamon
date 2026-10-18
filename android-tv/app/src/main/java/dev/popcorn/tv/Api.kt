@@ -77,6 +77,7 @@ private fun jsonToUser(o: JSONObject): User {
 
 private fun jsonToShow(o: JSONObject): ShowSummary {
     return ShowSummary(
+        sortTitle = o.optString("sortTitle"),
         libraryId = o.getString("libraryId"),
         title = o.getString("title"),
         episodeCount = o.optInt("episodeCount"),
@@ -145,6 +146,7 @@ private fun jsonToHomeSections(arr: JSONArray): List<HomeSection> = (0 until arr
 private fun jsonToItem(o: JSONObject): PopItem {
     val actors = o.optJSONArray("actors") ?: JSONArray()
     return PopItem(
+        sortTitle = o.optString("sortTitle"),
         id = o.getLong("id"),
         libraryId = o.getString("libraryId"),
         kind = o.optString("kind"),

@@ -752,6 +752,9 @@ func (s *Store) AlphabetIndex(ctx context.Context, opts AlphabetOptions) ([]Alph
 	genres := splitFilterList(opts.Genre)
 	switch opts.Kind {
 	case "tv":
+		// Same key the show grid sorts by (media_shows.sort_title, articles
+		// stripped): with the raw title, "The 100" counted under T while the
+		// grid lists it first, and every letter's offset was off.
 		genreWhere, genreArgs := itemGenreFilterSQL("mi.genres", genres, "")
 		decadeHaving := decadeFilterSQL(showYearExpr, opts.Decades)
 		if decadeHaving != "" {
@@ -760,7 +763,7 @@ func (s *Store) AlphabetIndex(ctx context.Context, opts AlphabetOptions) ([]Alph
 		args := []any{opts.LibraryID, opts.LibraryID}
 		args = append(args, genreArgs...)
 		rows, err = s.db.QueryContext(ctx, `
-SELECT LOWER(COALESCE(mi.show_title, '')) AS sort_title
+SELECT COALESCE(ms.sort_title, LOWER(COALESCE(mi.show_title, ''))) AS sort_title
 FROM media_items mi
 LEFT JOIN media_shows ms ON ms.library_id = mi.library_id AND ms.show_title = mi.show_title
 WHERE mi.kind = 'episode'

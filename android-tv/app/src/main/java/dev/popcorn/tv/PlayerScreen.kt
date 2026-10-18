@@ -31,6 +31,9 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.Icons
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.snapshotFlow
@@ -1437,8 +1440,8 @@ private fun UpNextCard(
         delay(120)
         runCatching { focusRequester.requestFocus() }
     }
-    // The countdown's length is whatever it was when the card appeared (15s
-    // of credits, or the last 25s); the bar drains against that.
+    // Same compact card as before, styled like the player controls: dark
+    // panel, pill buttons, and a thin line draining along the bottom edge.
     val total = remember(episode.id) { secondsLeft.coerceAtLeast(1) }
     val remaining by androidx.compose.animation.core.animateFloatAsState(
         targetValue = (secondsLeft - 1).coerceAtLeast(0).toFloat() / total,
@@ -1450,69 +1453,40 @@ private fun UpNextCard(
     } else {
         ""
     }
-    Box(Modifier.fillMaxSize().padding(end = 48.dp, bottom = 48.dp), contentAlignment = Alignment.BottomEnd) {
+    Box(Modifier.fillMaxSize().padding(end = 48.dp, bottom = 64.dp), contentAlignment = Alignment.BottomEnd) {
         Column(
             Modifier
-                .width(440.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .background(Color(0xF20B0E14))
-                .border(1.dp, Color.White.copy(alpha = .14f), RoundedCornerShape(16.dp)),
+                .widthIn(max = 380.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Bg.copy(alpha = .94f))
+                .border(1.dp, Color.White.copy(alpha = .10f), RoundedCornerShape(14.dp)),
         ) {
-            Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
-                EpisodeStill(session, episode, Modifier.fillMaxSize())
-                Box(
-                    Modifier.fillMaxSize().background(
-                        Brush.verticalGradient(listOf(Color.Black.copy(alpha = .35f), Color.Transparent, Color.Black.copy(alpha = .55f))),
-                    ),
-                )
-                Text(
-                    "UP NEXT",
-                    color = Color.Black,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Black,
-                    modifier = Modifier
-                        .align(Alignment.TopStart)
-                        .padding(12.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(Accent)
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
-                )
-                Text(
-                    "in ${secondsLeft}s",
-                    color = Color.White,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Black,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(12.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(Color.Black.copy(alpha = .6f))
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
-                )
-                // Drains as the countdown runs.
-                Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(5.dp).background(Color.White.copy(alpha = .2f)))
-                Box(Modifier.align(Alignment.BottomStart).fillMaxWidth(remaining).height(5.dp).background(Accent))
-            }
-            Column(Modifier.padding(horizontal = 18.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (episode.showTitle.isNotBlank()) {
-                    Text(episode.showTitle, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Column(Modifier.padding(start = 18.dp, end = 18.dp, top = 14.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("UP NEXT", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Black)
+                    Spacer(Modifier.weight(1f))
+                    Text("in ${secondsLeft}s", color = Color.White.copy(alpha = .8f), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
-                Text(
-                    listOf(code, episode.episodeTitle.ifBlank { episode.title }).filter { it.isNotBlank() }.joinToString("  \u00b7  "),
-                    color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (episode.overview.isNotBlank()) {
-                    Text(episode.overview, color = Color.White.copy(alpha = .72f), fontSize = 13.sp, lineHeight = 18.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Column {
+                    if (episode.showTitle.isNotBlank()) {
+                        Text(episode.showTitle, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                    Text(
+                        listOf(code, episode.episodeTitle.ifBlank { episode.title }).filter { it.isNotBlank() }.joinToString("  \u00b7  "),
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
-                Spacer(Modifier.height(6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    FocusButton(label = "\u25B6  Play now", primary = true, modifier = Modifier.focusRequester(focusRequester), onClick = onPlayNow)
-                    FocusButton(label = "Cancel", primary = false, onClick = onDismiss)
+                    OsdButton(icon = Icons.Filled.PlayArrow, label = "Play now", onUp = { true }, onClick = onPlayNow, modifier = Modifier.focusRequester(focusRequester))
+                    OsdButton(icon = Icons.Filled.Close, label = "Cancel", onUp = { true }, onClick = onDismiss)
                 }
+            }
+            Box(Modifier.fillMaxWidth().height(3.dp).background(Color.White.copy(alpha = .12f))) {
+                Box(Modifier.fillMaxWidth(remaining).height(3.dp).background(Accent))
             }
         }
     }

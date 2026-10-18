@@ -309,7 +309,7 @@ private fun OsdProgressBar(state: OsdState, focusRequester: FocusRequester, onKe
 }
 
 @Composable
-private fun OsdButton(icon: ImageVector, label: String?, onUp: () -> Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun OsdButton(icon: ImageVector, label: String?, onUp: () -> Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     var focused by remember { mutableStateOf(false) }
     val content = if (focused) Color.Black else Color.White
     Row(

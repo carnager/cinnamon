@@ -1,20 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
   <defs>
-    <radialGradient id="bg" cx="72%" cy="22%" r="90%">
-      <stop offset="0" stop-color="#172832"/>
-      <stop offset=".55" stop-color="#091218"/>
-      <stop offset="1" stop-color="#04090c"/>
-    </radialGradient>
     <linearGradient id="spice" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#ff9a58"/>
       <stop offset="1" stop-color="#e95e22"/>
     </linearGradient>
   </defs>
-  <g transform="translate(150 190)" fill="none" stroke="url(#spice)" stroke-linecap="round">
-    <path d="M244 24a160 160 0 1 0 0 248" stroke-width="25"/>
-    <path d="M218 72a105 105 0 1 0 0 152" stroke-width="23"/>
-    <path d="M193 116a55 55 0 1 0 0 64" stroke-width="21"/>
+  <!-- Transparent so launchers (Projectivy) can draw their focus tile behind
+       it; logo and wordmark fill the tile so it reads at launcher size. -->
+  <g transform="translate(20 40) scale(1.25)" fill="none" stroke="url(#spice)" stroke-linecap="round">
+    <path d="M355 132a160 160 0 1 0 0 248" stroke-width="29"/>
+    <path d="M329 180a105 105 0 1 0 0 152" stroke-width="27"/>
+    <path d="M304 224a55 55 0 1 0 0 64" stroke-width="25"/>
   </g>
-  <text x="520" y="345" font-family="Inter, Arial, sans-serif" font-size="104" font-weight="700" fill="#f3f1ef">Cinnamon</text>
-  <text x="526" y="410" font-family="Inter, Arial, sans-serif" font-size="31" font-weight="500" fill="#99a5ad">Movies and shows from your own library</text>
+  <text x="490" y="408" font-family="Inter, Arial, sans-serif" font-size="136" font-weight="700" fill="#f3f1ef">Cinnamon</text>
 </svg>

@@ -90,6 +90,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import android.os.SystemClock
 import androidx.compose.runtime.State
@@ -1897,13 +1898,21 @@ fun CuratedLanding(
         }
     }
     val heroKeys = remember(heroEntries) { heroEntries.map { it.key } }
-    var heroIndex by remember(heroKeys) { mutableStateOf(0) }
+    var heroIndex by remember(heroKeys) { mutableStateOf(HomeFocusMemory.heroIndex.takeIf { it in heroKeys.indices } ?: 0) }
     var initialFocusPending by remember { mutableStateOf(true) }
+    // Coming back from a detail page lands on the card that was opened, not
+    // on the hero at the top. Read once per composition of Home.
+    val restoreSection = remember(shelves) { HomeFocusMemory.sectionId?.takeIf { id -> shelves.any { it.id == id } } }
+    val restoreKey = remember(shelves) { HomeFocusMemory.key }
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = restoreSection?.let { id -> shelves.indexOfFirst { it.id == id } + 1 } ?: 0,
+    )
     // DOWN from the full-width hero would otherwise focus whatever card sits
     // under its center (and drift as the row scrolls); route it to the first
     // card of the first shelf instead.
     val firstShelfCardRequester = remember { FocusRequester() }
     val initialFocusTarget = when {
+        restoreSection != null -> restoreSection
         heroEntries.isNotEmpty() -> "hero"
         else -> shelves.firstOrNull()?.id.orEmpty()
     }
@@ -1917,10 +1926,11 @@ fun CuratedLanding(
     }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
+        state = listState,
         contentPadding = PaddingValues(top = 10.dp, bottom = 30.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item {
+        item(key = "hero", contentType = "hero") {
             if (heroEntries.isEmpty()) {
                 BrowserHeader("Home", "")
             } else {
@@ -1928,7 +1938,10 @@ fun CuratedLanding(
                     session = session,
                     picks = heroEntries,
                     index = heroIndex.coerceIn(0, heroEntries.lastIndex),
-                    onIndexChange = { heroIndex = it },
+                    onIndexChange = {
+                        heroIndex = it
+                        HomeFocusMemory.heroIndex = it
+                    },
                     autoFocus = initialFocusPending && initialFocusTarget == "hero",
                     onPlayItem = onPlayItem,
                     onPlayShow = onPlayShow,
@@ -1936,6 +1949,8 @@ fun CuratedLanding(
                     onShow = onShow,
                     onContentFocus = { requester ->
                         if (initialFocusTarget == "hero") initialFocusPending = false
+                        HomeFocusMemory.sectionId = null
+                        HomeFocusMemory.key = null
                         onContentFocus(requester)
                     },
                     onDpadLeft = onHeroLeft,
@@ -1945,8 +1960,9 @@ fun CuratedLanding(
                 )
             }
         }
-        itemsIndexed(shelves, key = { _, section -> section.id }) { index, section ->
+        itemsIndexed(shelves, key = { _, section -> section.id }, contentType = { _, _ -> "shelf" }) { index, section ->
             val firstShelf = index == 0
+            val restoring = section.id == restoreSection
             // A row shows a handful and stops; More appears only when the shelf
             // actually holds more than that, and opens the rest. A shelf of
             // three has nothing behind it and says so by having no More.
@@ -1957,7 +1973,8 @@ fun CuratedLanding(
                     section.subtitle,
                     section.shows.take(HomeShelfLimit),
                     key = { it.title },
-                    autoFocusFirst = firstShelf,
+                    autoFocusFirst = firstShelf || restoring,
+                    focusIndex = if (restoring) section.shows.take(HomeShelfLimit).indexOfFirst { it.title == restoreKey }.coerceAtLeast(0) else 0,
                     moreVisible = moreVisible,
                     onMore = { onMore(section) },
                 ) { show, autoFocus ->
@@ -1965,7 +1982,7 @@ fun CuratedLanding(
                     val requester = if (autoFocus && firstShelf) firstShelfCardRequester else fallback
                     val focusNow = shouldInitialFocus(section.id, autoFocus)
                     val key = "${show.libraryId}\n${show.title.lowercase()}"
-                    ShowCard(session, show, watched = completedShows.contains(key), watchlisted = watchlistShows.contains(key), autoFocus = focusNow, focusRequester = requester, onFocus = { onContentFocus(requester); consumeInitialFocus(section.id, autoFocus) }, onClick = { onShow(show) }, onLongClick = { requester -> onShowMenu(show, requester) })
+                    ShowCard(session, show, watched = completedShows.contains(key), watchlisted = watchlistShows.contains(key), autoFocus = focusNow, focusRequester = requester, onFocus = { onContentFocus(requester); consumeInitialFocus(section.id, autoFocus); HomeFocusMemory.remember(section.id, show.title) }, onClick = { onShow(show) }, onLongClick = { requester -> onShowMenu(show, requester) })
                 }
             } else {
                 PosterShelf(
@@ -1973,17 +1990,32 @@ fun CuratedLanding(
                     section.subtitle,
                     section.items.take(HomeShelfLimit),
                     key = { it.id },
-                    autoFocusFirst = firstShelf,
+                    autoFocusFirst = firstShelf || restoring,
+                    focusIndex = if (restoring) section.items.take(HomeShelfLimit).indexOfFirst { it.id == restoreKey }.coerceAtLeast(0) else 0,
                     moreVisible = moreVisible,
                     onMore = { onMore(section) },
                 ) { item, autoFocus ->
                     val fallback = remember { FocusRequester() }
                     val requester = if (autoFocus && firstShelf) firstShelfCardRequester else fallback
                     val focusNow = shouldInitialFocus(section.id, autoFocus)
-                    ItemCard(session, item, watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), autoFocus = focusNow, focusRequester = requester, onFocus = { onContentFocus(requester); consumeInitialFocus(section.id, autoFocus) }, onClick = { onItem(item) }, onLongClick = { requester -> onItemMenu(item, requester) })
+                    ItemCard(session, item, watched = completedItems.contains(item.id), watchlisted = watchlistItems.contains(item.id), autoFocus = focusNow, focusRequester = requester, onFocus = { onContentFocus(requester); consumeInitialFocus(section.id, autoFocus); HomeFocusMemory.remember(section.id, item.id) }, onClick = { onItem(item) }, onLongClick = { requester -> onItemMenu(item, requester) })
                 }
             }
         }
+    }
+}
+
+// Where the viewer was on Home. Plain fields, not Compose state: it is
+// written on every focus move and only read when Home is composed again,
+// so recording it must not recompose anything.
+object HomeFocusMemory {
+    var sectionId: String? = null
+    var key: Any? = null
+    var heroIndex: Int = 0
+
+    fun remember(section: String, cardKey: Any) {
+        sectionId = section
+        key = cardKey
     }
 }
 
@@ -2169,10 +2201,13 @@ fun <T> PosterShelf(
     entries: List<T>,
     key: (T) -> Any,
     autoFocusFirst: Boolean = false,
+    focusIndex: Int = 0,
     moreVisible: Boolean = false,
     onMore: (() -> Unit)? = null,
     content: @Composable (T, Boolean) -> Unit,
 ) {
+    // Start scrolled so a restored focus target is composed and can take focus.
+    val rowState = rememberLazyListState(initialFirstVisibleItemIndex = (focusIndex - 1).coerceAtLeast(0))
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier
@@ -2186,12 +2221,13 @@ fun <T> PosterShelf(
         }
         LazyRow(
             modifier = Modifier.fillMaxWidth(),
+            state = rowState,
             contentPadding = PaddingValues(horizontal = 32.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             itemsIndexed(entries, key = { _, item -> key(item) }) { index, item ->
                 Box(Modifier.width(122.dp)) {
-                    content(item, autoFocusFirst && index == 0)
+                    content(item, autoFocusFirst && index == focusIndex)
                 }
             }
             if (moreVisible && onMore != null) {

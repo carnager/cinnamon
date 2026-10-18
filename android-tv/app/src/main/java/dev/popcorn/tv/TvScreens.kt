@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed as rowItemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -843,7 +844,10 @@ private fun EpisodeCarousel(
     onEpisodeMenu: (PopItem, FocusRequester) -> Unit,
     onUp: (() -> Boolean)? = null,
 ) {
-    val targetId = initialEpisodeFocus?.takeIf { id -> episodes.any { it.id == id } } ?: episodes.firstOrNull()?.id
+    val targetId = remember(episodes) { initialEpisodeFocus?.takeIf { id -> episodes.any { it.id == id } } ?: episodes.firstOrNull()?.id }
+    // Cards are 430dp wide, so only two fit: start scrolled to the target or
+    // it is never composed and can't take focus (focus fell back to E1).
+    val rowState = remember(episodes) { LazyListState(firstVisibleItemIndex = episodes.indexOfFirst { it.id == targetId }.coerceAtLeast(0)) }
     if (episodes.isEmpty()) {
         Box(Modifier.fillMaxWidth().height(156.dp), contentAlignment = Alignment.Center) {
             Text("No episodes found", color = Muted, fontSize = 12.sp)
@@ -852,6 +856,7 @@ private fun EpisodeCarousel(
     }
     LazyRow(
         modifier = Modifier.fillMaxWidth().height(162.dp),
+        state = rowState,
         contentPadding = PaddingValues(start = 32.dp, end = 32.dp, top = 5.dp, bottom = 7.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {

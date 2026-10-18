@@ -162,7 +162,17 @@ fun PopcornApp() {
     var pendingPlayerCommand by remember { mutableStateOf<PlayerRemoteCommand?>(null) }
     var lastDetail by remember { mutableStateOf<Screen.Detail?>(null) }
     var lastPlayerReturnScreen by remember { mutableStateOf<Screen?>(null) }
-    var lastActorReturnScreen by remember { mutableStateOf<Screen?>(null) }
+    // Where Back from each open actor page goes, innermost last. A single slot
+    // looped: Detail X > Actor A > Detail Y > Actor B overwrote it with Y, and
+    // Back then cycled Y <> A forever with X unreachable.
+    var actorReturnStack by remember { mutableStateOf<List<Pair<Actor, Screen>>>(emptyList()) }
+    fun backFromActor(actor: Actor): Screen {
+        val at = actorReturnStack.indexOfLast { it.first == actor }
+        if (at < 0) return Screen.Home
+        val target = actorReturnStack[at].second
+        actorReturnStack = actorReturnStack.take(at)
+        return target
+    }
     var libraryFocusKey by remember { mutableStateOf<Any?>(null) }
     var showFocusSeason by remember { mutableStateOf<Int?>(null) }
     var seasonFocusEpisode by remember { mutableStateOf<Long?>(null) }
@@ -1056,7 +1066,7 @@ fun PopcornApp() {
             is Screen.Season -> screen = Screen.Show(s.show, fromHome = s.fromHome, fromSearch = s.fromSearch, fromWatchlist = s.fromWatchlist, fromActor = s.fromActor)
             is Screen.Detail -> returnFromDetail(s)
             is Screen.ItemShelf -> screen = s.returnTo ?: Screen.Home
-            is Screen.Actor -> screen = lastActorReturnScreen ?: Screen.Home
+            is Screen.Actor -> screen = backFromActor(s.actor)
             is Screen.Player -> returnFromPlayer()
             is Screen.SidecarPlayer -> screen = s.returnScreen
             else -> screen = Screen.Home
@@ -1322,7 +1332,9 @@ fun PopcornApp() {
             showUpdate = updateAvailable,
             initialSeasonFocus = showFocusSeason,
             initialEpisodeFocus = seasonFocusEpisode,
-            startWithEpisodes = false,
+            // Back from an episode's detail page or the player: land on that
+            // episode, not on the season tab.
+            startWithEpisodes = seasonFocusEpisode != null,
             completedItems = completedItems,
             watchlistItems = watchlistItems,
             showWatched = completedShows.contains(showKey(current.show)),
@@ -1346,9 +1358,9 @@ fun PopcornApp() {
                 seasonFocusEpisode = null
             },
             onSeasonMenu = { season, requester -> openSeasonWatchMenu(season, requester) },
-            onEpisodeFocus = {
-                seasonFocusEpisode = it.id
-            },
+            // Recorded on click/play only: writing app-level state on every
+            // focus move recomposed the whole app per D-pad press.
+            onEpisodeFocus = {},
             onPlayEpisode = { item ->
                 seasonFocusEpisode = item.id
                 playEpisode(item, current)
@@ -1391,9 +1403,9 @@ fun PopcornApp() {
                 seasonFocusEpisode = null
             },
             onSeasonMenu = { season, requester -> openSeasonWatchMenu(season, requester) },
-            onEpisodeFocus = {
-                seasonFocusEpisode = it.id
-            },
+            // Recorded on click/play only: writing app-level state on every
+            // focus move recomposed the whole app per D-pad press.
+            onEpisodeFocus = {},
             onPlayEpisode = { item ->
                 seasonFocusEpisode = item.id
                 playEpisode(item, current)
@@ -1442,7 +1454,7 @@ fun PopcornApp() {
             onScan = ::scanLibraries,
             onLogout = ::logout,
             onActor = { actor ->
-                lastActorReturnScreen = current
+                actorReturnStack = actorReturnStack + (actor to current)
                 screen = Screen.Actor(actor)
             },
             onMoreLikeThis = { items ->
@@ -1456,7 +1468,7 @@ fun PopcornApp() {
             completedShows = completedShows,
             watchlistItems = watchlistItems,
             watchlistShows = watchlistShows,
-            onBack = { screen = lastActorReturnScreen ?: Screen.Home },
+            onBack = { screen = backFromActor(current.actor) },
             onItem = { screen = Screen.Detail(it, null, fromActor = current.actor) },
             onShow = {
                 showFocusSeason = null
@@ -1494,6 +1506,7 @@ fun PopcornApp() {
                 },
                 onPlayNext = { next ->
                     pendingPlayerCommand = null
+                    if (next.kind == "episode") seasonFocusEpisode = next.id
                     screen = Screen.Player(next, null, null, 0L)
                 },
             )

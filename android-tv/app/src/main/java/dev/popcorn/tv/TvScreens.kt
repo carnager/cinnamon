@@ -455,7 +455,7 @@ fun ShowHeader(
                     Text(
                         genreLine.uppercase(),
                         color = Teal,
-                        fontSize = 10.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Black,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -726,7 +726,7 @@ fun SeasonHeader(session: Session?, show: ShowSummary, season: SeasonSummary, fo
                 }
                 if (overview.isNotBlank()) {
                     Spacer(Modifier.height(5.dp))
-                    Text(overview, color = TextColor.copy(alpha = .72f), fontSize = 11.sp, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(overview, color = TextColor.copy(alpha = .72f), fontSize = 12.sp, lineHeight = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -823,7 +823,7 @@ private fun SeasonTabs(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(seasonTitle(season), color = if (focused) TextColor else if (selected) Teal else Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Text("${season.episodeCount}", color = if (focused) TextColor.copy(alpha = .72f) else Muted.copy(alpha = .72f), fontSize = 10.sp)
+                    Text("${season.episodeCount}", color = if (focused) TextColor.copy(alpha = .72f) else Muted.copy(alpha = .72f), fontSize = 12.sp)
                 }
             }
         }
@@ -945,7 +945,7 @@ private fun EpisodeLandscapeCard(
                 )
                 fmtDuration(item.durationMs).takeIf { it.isNotBlank() }?.let {
                     Spacer(Modifier.height(5.dp))
-                    Text(it, color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                    Text(it, color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                 }
             }
         }
@@ -1062,7 +1062,7 @@ fun SeasonCard(
                 seasonTitle(season),
                 color = Color.White,
                 fontWeight = FontWeight.Black,
-                fontSize = 11.sp,
+                fontSize = 12.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 8.dp, vertical = 8.dp),
@@ -1077,7 +1077,7 @@ fun SeasonCard(
                         .background(Accent.copy(alpha = .95f))
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                 ) {
-                    Text("On", color = Color.Black, fontSize = 9.sp, fontWeight = FontWeight.Black)
+                    Text("On", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Black)
                 }
             }
         }
@@ -1165,7 +1165,7 @@ fun EpisodeCard(
             Text(
                 "%02d".format(item.episodeNumber),
                 color = Color.White,
-                fontSize = 10.sp,
+                fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -1183,14 +1183,14 @@ fun EpisodeCard(
                 fmtDuration(item.durationMs).ifBlank { null },
             ).joinToString(" · "),
             color = Muted,
-            fontSize = 10.sp,
+            fontSize = 12.sp,
         )
         if (item.overview.isNotBlank()) {
             Spacer(Modifier.height(2.dp))
             Text(
                 item.overview,
                 color = TextColor.copy(alpha = .62f),
-                fontSize = 9.sp,
+                fontSize = 12.sp,
                 lineHeight = 12.sp,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,

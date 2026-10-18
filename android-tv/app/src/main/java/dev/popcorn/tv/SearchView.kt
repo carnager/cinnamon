@@ -246,7 +246,7 @@ private fun SearchOptionRow(label: String, content: @Composable () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(label.uppercase(), color = Muted, fontSize = 9.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(72.dp))
+        Text(label.uppercase(), color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(72.dp))
         content()
     }
 }
@@ -271,7 +271,7 @@ private fun SearchChoice(label: String, active: Boolean, onClick: () -> Unit) {
             tint = if (active) Teal else Color.Transparent,
             modifier = Modifier.size(14.dp),
         )
-        Text(label, color = if (active || focused) TextColor else Muted, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+        Text(label, color = if (active || focused) TextColor else Muted, fontSize = 12.sp, fontWeight = FontWeight.Medium)
     }
 }
 

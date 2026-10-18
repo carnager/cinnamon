@@ -90,6 +90,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.zIndex
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import android.os.SystemClock
@@ -308,10 +311,11 @@ fun SideNavigation(
     expansionSuppressed: Boolean = false,
     onFocusChange: (Boolean) -> Unit = {},
 ) {
-    val movieLibrary = libraries.firstOrNull { it.type == "movies" || it.type == "movie" }
-    val tvLibrary = libraries.firstOrNull { it.type == "tv" }
     Column(
         Modifier
+            // Drawn above the content so a focused item's label can extend
+            // past the rail without reflowing the page.
+            .zIndex(2f)
             .width(76.dp)
             .fillMaxSize()
             .background(Color.Black.copy(alpha = .12f))
@@ -324,13 +328,14 @@ fun SideNavigation(
     ) {
         Spacer(Modifier.height(64.dp))
         SideNavigationItem(icon = Icons.Filled.Home, label = "Home", selected = selected == "home", focusRequester = firstFocusRequester, onRight = onExit, onClick = onHome)
-        if (movieLibrary != null) {
-            SideNavigationItem(icon = Icons.Filled.Movie, label = movieLibrary.name, selected = selected == movieLibrary.id, onRight = onExit, onClick = { onLibrary(movieLibrary) })
-        }
-        if (tvLibrary != null) {
-            SideNavigationItem(icon = Icons.Filled.LiveTv, label = tvLibrary.name, selected = selected == tvLibrary.id, onRight = onExit, onClick = { onLibrary(tvLibrary) })
+        // Every library, not just the first of each type: a second movie or TV
+        // library had no way in.
+        libraries.forEach { library ->
+            val icon = if (library.type == "tv") Icons.Filled.LiveTv else Icons.Filled.Movie
+            SideNavigationItem(icon = icon, label = library.name, selected = selected == library.id, onRight = onExit, onClick = { onLibrary(library) })
         }
         SideNavigationItem(icon = Icons.Filled.Bookmark, label = "Watchlist", selected = selected == "watchlist", onRight = onExit, onClick = onWatchlist)
+        SideNavigationItem(icon = Icons.Filled.History, label = "History", selected = selected == "history", onRight = onExit, onClick = onHistory)
         SideNavigationItem(icon = Icons.Filled.Search, label = "Search", selected = selected == "search", onRight = onExit, onClick = onSearch)
         Spacer(Modifier.weight(1f))
         UserMenuButton(session, showUpdate, onHistory, onUpdates, onScan, onLogout)
@@ -340,15 +345,21 @@ fun SideNavigation(
 @Composable
 fun SideNavigationItem(icon: ImageVector, label: String, selected: Boolean, focusRequester: FocusRequester? = null, onRight: (() -> Boolean)? = null, onClick: () -> Unit) {
     var focused by remember { mutableStateOf(false) }
-    val background = Color.Transparent
-    val contentColor = if (selected || focused) Accent else TextColor.copy(alpha = .82f)
+    // Focused = filled pill with a label; selected = accent icon and a bar.
+    // The two used to look nearly the same.
+    val background = if (focused) Accent.copy(alpha = .22f) else Color.Transparent
+    val contentColor = if (focused) Color.White else if (selected) Accent else TextColor.copy(alpha = .82f)
+    Box(Modifier.fillMaxWidth().height(44.dp)) {
+    if (selected && !focused) {
+        Box(Modifier.align(Alignment.CenterStart).offset(x = (-10).dp).width(3.dp).height(22.dp).clip(RoundedCornerShape(2.dp)).background(Accent))
+    }
     Row(
         Modifier
             .fillMaxWidth()
             .height(44.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(background)
-            .border(1.dp, if (focused || selected) Accent.copy(alpha = if (focused) .95f else .60f) else Color.Transparent, RoundedCornerShape(10.dp))
+            .border(if (focused) 2.dp else 0.dp, if (focused) Accent else Color.Transparent, RoundedCornerShape(10.dp))
             .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .onFocusChanged { focused = it.isFocused }
             .focusable()
@@ -370,6 +381,23 @@ fun SideNavigationItem(icon: ImageVector, label: String, selected: Boolean, focu
             tint = contentColor,
             modifier = Modifier.size(24.dp).width(28.dp),
         )
+    }
+    if (focused) {
+        Text(
+            label,
+            color = Color.White,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .wrapContentWidth(Alignment.Start, unbounded = true)
+                .offset(x = 64.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xF0172029))
+                .padding(horizontal = 12.dp, vertical = 7.dp),
+        )
+    }
     }
 }
 
@@ -535,7 +563,7 @@ fun GridSectionHeader(title: String, subtitle: String, compact: Boolean = false)
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(title, color = TextColor, fontSize = if (compact) 16.sp else 22.sp, fontWeight = FontWeight.Black)
-        Text(subtitle, color = Muted, fontSize = 11.sp, modifier = Modifier.padding(bottom = 2.dp))
+        Text(subtitle, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 2.dp))
     }
 }
 
@@ -666,12 +694,12 @@ private fun HistoryListRow(
                 entry.year.takeIf { it > 0 }?.toString(),
             ).joinToString(" · ")
             if (details.isNotBlank()) {
-                Text(details, color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(details, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         Column(horizontalAlignment = Alignment.End) {
-            Text(historyTimestamp(entry.watchedAt), color = Muted, fontSize = 10.sp)
-            if (entry.item == null) Text("Trakt", color = Teal, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+            Text(historyTimestamp(entry.watchedAt), color = Muted, fontSize = 12.sp)
+            if (entry.item == null) Text("Trakt", color = Teal, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -1200,7 +1228,7 @@ private fun LibraryFilterDrawer(
             Column(
                 Modifier.fillMaxHeight().width(356.dp).background(Bg.copy(alpha = .98f)).border(1.dp, Color.White.copy(alpha = .10f)).padding(horizontal = 28.dp, vertical = 42.dp),
             ) {
-                Text("FILTERS", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                Text("FILTERS", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(7.dp))
                 Text(
                     when (page) {
@@ -1491,7 +1519,7 @@ private fun UserMenuDrawer(
                         UserMenuPage.ConfirmLogout -> "LOGOUT"
                     },
                     color = Accent,
-                    fontSize = 10.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Black,
                 )
                 Spacer(Modifier.height(7.dp))
@@ -1519,7 +1547,7 @@ private fun UserMenuDrawer(
                         if (phoneQrPayload.isNotBlank()) {
                             QRCode(phoneQrPayload, Modifier.size(218.dp))
                             Text("Scan this code from the signed-out Cinnamon Android app.", color = TextColor, fontSize = 12.sp, lineHeight = 17.sp, textAlign = TextAlign.Center)
-                            Text("The code signs the phone in as ${session.userDisplayName()}, expires in ten minutes, and works once.", color = Muted, fontSize = 11.sp, lineHeight = 16.sp, textAlign = TextAlign.Center)
+                            Text("The code signs the phone in as ${session.userDisplayName()}, expires in ten minutes, and works once.", color = Muted, fontSize = 12.sp, lineHeight = 16.sp, textAlign = TextAlign.Center)
                         } else if (phoneQrError.isBlank()) {
                             Box(Modifier.size(218.dp).clip(RoundedCornerShape(8.dp)).background(Surface2), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
@@ -1577,7 +1605,7 @@ fun UserDrawerAction(entry: UserDrawerEntry, modifier: Modifier = Modifier) {
     ) {
         Icon(entry.icon, contentDescription = null, tint = tint, modifier = Modifier.size(19.dp))
         Text(entry.label, color = tint, fontSize = 13.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-        if (entry.detail.isNotBlank()) Text(entry.detail, color = Muted, fontSize = 10.sp, maxLines = 1)
+        if (entry.detail.isNotBlank()) Text(entry.detail, color = Muted, fontSize = 12.sp, maxLines = 1)
         if (entry.active) Icon(Icons.Filled.Check, contentDescription = "Selected", tint = Accent, modifier = Modifier.size(16.dp))
     }
 }
@@ -1762,7 +1790,7 @@ private fun HomeHero(
                     Text(
                         current.kick,
                         color = Teal,
-                        fontSize = 10.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -2217,12 +2245,13 @@ fun <T> PosterShelf(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(title, color = TextColor, fontSize = 16.sp, fontWeight = FontWeight.Black)
-            Text(subtitle, color = Muted, fontSize = 11.sp, modifier = Modifier.padding(bottom = 2.dp))
+            Text(subtitle, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 2.dp))
         }
         LazyRow(
             modifier = Modifier.fillMaxWidth(),
             state = rowState,
-            contentPadding = PaddingValues(horizontal = 32.dp),
+            // Room for the focused card's scale-up; LazyRow clips to bounds.
+            contentPadding = PaddingValues(horizontal = 32.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             itemsIndexed(entries, key = { _, item -> key(item) }) { index, item ->
@@ -2259,7 +2288,7 @@ private fun MoreCard(onClick: () -> Unit) {
             }
         }
         Spacer(Modifier.height(5.dp))
-        Text("Open full view", color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text("Open full view", color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -2380,7 +2409,7 @@ fun GenreRow(text: String, count: Int, selected: Boolean, autoFocus: Boolean, on
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(text, color = if (selected) Color.Black else TextColor, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        Text(count.toString(), color = if (selected) Color.Black.copy(alpha = .7f) else Muted, fontSize = 10.sp)
+        Text(count.toString(), color = if (selected) Color.Black.copy(alpha = .7f) else Muted, fontSize = 12.sp)
     }
 }
 

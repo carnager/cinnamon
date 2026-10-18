@@ -247,7 +247,7 @@ private fun AlphabetRail(
                         focused -> Color.Black
                         else -> TextColor
                     },
-                    fontSize = 9.sp,
+                    fontSize = 12.sp,
                     lineHeight = 9.sp,
                     fontWeight = FontWeight.Black,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -279,7 +279,7 @@ fun ShowCard(
         }
         Spacer(Modifier.height(5.dp))
         Text(show.title, color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text("${show.seasonCount}S \u00b7 ${show.episodeCount}E", color = Muted, fontSize = 10.sp)
+        Text("${show.seasonCount}S \u00b7 ${show.episodeCount}E", color = Muted, fontSize = 12.sp)
     }
 }
 
@@ -314,12 +314,12 @@ fun ItemCard(
             item.year.takeIf { it > 0 }?.toString(),
             fmtDuration(item.durationMs).ifBlank { null },
         ).joinToString(" \u00b7 ")
-        if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 10.sp)
+        if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 12.sp)
         if (item.kind == "movie" && item.genres.isNotBlank()) {
             Text(
                 item.genres.split(",", "/", "|").map { it.trim() }.filter { it.isNotBlank() }.take(2).joinToString(", "),
                 color = Teal.copy(alpha = .86f),
-                fontSize = 9.sp,
+                fontSize = 12.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -434,7 +434,7 @@ fun BoxScope.PosterCornerMarks(watched: Boolean, watchlisted: Boolean, rating: D
                 "%.1f".format(rating),
                 color = Color.White,
                 fontWeight = FontWeight.Black,
-                fontSize = 10.sp,
+                fontSize = 12.sp,
                 style = TextStyle(shadow = Shadow(Color.Black.copy(alpha = .9f), Offset(0f, 0f), blurRadius = 4f)),
             )
         }
@@ -597,7 +597,7 @@ fun EpisodeRow(session: Session?, item: PopItem, watched: Boolean = false, watch
             }
             Text(
                 "%02d".format(item.episodeNumber),
-                color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold,
+                color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(4.dp).background(Color.Black.copy(alpha = .7f), RoundedCornerShape(3.dp)).padding(horizontal = 4.dp, vertical = 1.dp),
             )
             PosterStatusBadges(watched, watchlisted)
@@ -606,12 +606,12 @@ fun EpisodeRow(session: Session?, item: PopItem, watched: Boolean = false, watch
             Text(item.episodeTitle.ifBlank { item.title }, color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
             if (item.overview.isNotBlank()) {
                 Spacer(Modifier.height(2.dp))
-                Text(item.overview, color = Muted, fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 14.sp)
+                Text(item.overview, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 14.sp)
             }
         }
         Column(horizontalAlignment = Alignment.End) {
             val dur = fmtDuration(item.durationMs)
-            if (dur.isNotBlank()) Text(dur, color = Muted, fontSize = 10.sp)
+            if (dur.isNotBlank()) Text(dur, color = Muted, fontSize = 12.sp)
             if (item.rating > 0) {
                 Spacer(Modifier.height(2.dp))
                 RatingBadge(item.rating, small = true)
@@ -656,7 +656,7 @@ fun WatchActionOverlay(
                 .padding(horizontal = 28.dp, vertical = 42.dp),
             verticalArrangement = Arrangement.Center,
         ) {
-            Text(if (watchlisted == null) "SEASON OPTIONS" else "QUICK ACTIONS", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black)
+            Text(if (watchlisted == null) "SEASON OPTIONS" else "QUICK ACTIONS", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Black)
             Spacer(Modifier.height(7.dp))
             Text(title, color = TextColor, fontSize = 22.sp, lineHeight = 27.sp, fontWeight = FontWeight.Black, maxLines = 3, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(24.dp))
@@ -688,7 +688,7 @@ fun WatchActionOverlay(
                 )
             }
             Spacer(Modifier.height(22.dp))
-            Text("Press Back to close", color = Muted.copy(alpha = .72f), fontSize = 10.sp)
+            Text("Press Back to close", color = Muted.copy(alpha = .72f), fontSize = 12.sp)
         }
     }
 }
@@ -742,7 +742,9 @@ fun CardShell(
     onRightEdge: (() -> Boolean)? = null,
     onUp: (() -> Boolean)? = null,
     onDown: (() -> Boolean)? = null,
-    focusScale: Float = 1.025f,
+    // Readable from the sofa: the old 1.025 scale and 1dp border were hard to
+    // spot on a poster wall three metres away.
+    focusScale: Float = 1.06f,
     onClick: () -> Unit,
     onLongClick: ((FocusRequester) -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
@@ -797,6 +799,12 @@ fun CardShell(
                         }
                         true
                     }
+                    // MENU opens the quick actions too; a 650ms OK hold was the
+                    // only, undiscoverable way in.
+                    it.key == Key.Menu && onLongClick != null -> {
+                        if (it.type == KeyEventType.KeyUp) onLongClick.invoke(requester)
+                        true
+                    }
                     isActivationKey(it.key) && it.type == KeyEventType.KeyUp -> {
                         longPressJob?.cancel()
                         longPressJob = null
@@ -811,14 +819,15 @@ fun CardShell(
                     else -> false
                 }
             }
-            .clickable(onClick = onClick)
+            // No ripple or second focus target: keys are handled above.
+            .clickable(interactionSource = null, indication = null, onClick = onClick)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
             }
             .clip(CardShape)
-            .border(1.dp, if (focused) Accent.copy(alpha = .95f) else Color.White.copy(alpha = .12f), CardShape)
-            .background(if (focused) Accent.copy(alpha = .035f) else Color.Black.copy(alpha = .10f))
+            .border(if (focused) 2.5.dp else 1.dp, if (focused) Accent else Color.White.copy(alpha = .12f), CardShape)
+            .background(if (focused) Accent.copy(alpha = .12f) else Color.Black.copy(alpha = .10f))
             .padding(3.dp),
         content = content,
     )

@@ -85,7 +85,7 @@ fun TvCheckListShelf(
                     .border(1.dp, Color.White.copy(alpha = .10f))
                     .padding(horizontal = 26.dp, vertical = 38.dp),
             ) {
-                Text(title.uppercase(), color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                Text(title.uppercase(), color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(7.dp))
                 Text(subtitle, color = TextColor, fontSize = 21.sp, fontWeight = FontWeight.Black)
                 if (modeRow != null) {
@@ -126,7 +126,7 @@ private fun TvMatchToggle(row: TvOptionRow) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(row.label, color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
+        Text(row.label, color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
         Text(row.value, color = if (focused) Accent else TextColor, fontSize = 13.sp, fontWeight = FontWeight.Black)
         Text("⇄", color = if (focused) Accent else Muted, fontSize = 13.sp, fontWeight = FontWeight.Black)
     }
@@ -173,7 +173,7 @@ private fun TvCheckRowItem(row: TvCheckRow, focusRequester: FocusRequester?, aft
                 overflow = TextOverflow.Ellipsis,
             )
             if (row.description.isNotBlank()) {
-                Text(row.description, color = Muted, fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(row.description, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -308,7 +308,7 @@ fun TvOptionsShelf(
                     .border(1.dp, Color.White.copy(alpha = .10f))
                     .padding(horizontal = 26.dp, vertical = 38.dp),
             ) {
-                Text(title.uppercase(), color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                Text(title.uppercase(), color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(7.dp))
                 Text(subtitle, color = TextColor, fontSize = 21.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(16.dp))
@@ -322,7 +322,7 @@ fun TvOptionsShelf(
                     }
                 }
                 Spacer(Modifier.height(12.dp))
-                Text("OK steps through the values", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("OK steps through the values", color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
         }
     }

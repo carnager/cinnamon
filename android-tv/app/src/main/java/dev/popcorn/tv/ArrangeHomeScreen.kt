@@ -290,7 +290,7 @@ private fun ArrangeRow(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        Text(detail, color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+        Text(detail, color = Muted, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1)
         if (grabbed) Text("↕", color = Accent, fontSize = 15.sp, fontWeight = FontWeight.Black)
     }
 }
@@ -364,7 +364,7 @@ private fun ArrangePreview(
                     Text(
                         chip,
                         color = Teal,
-                        fontSize = 10.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Black,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -505,7 +505,7 @@ fun ArrangeActionsShelf(
                     .padding(horizontal = 26.dp, vertical = 38.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text("SHELF", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                Text("SHELF", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(7.dp))
                 Text(title, color = TextColor, fontSize = 21.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(16.dp))
@@ -535,7 +535,7 @@ private fun ArrangeActionRow(label: String, detail: String, focusRequester: Focu
             .padding(horizontal = 12.dp, vertical = 11.dp),
     ) {
         Text(label, color = TextColor, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-        Text(detail, color = Muted, fontSize = 11.sp)
+        Text(detail, color = Muted, fontSize = 12.sp)
     }
 }
 

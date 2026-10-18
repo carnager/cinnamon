@@ -174,7 +174,7 @@ fun Pill(text: String, selected: Boolean, badge: String? = null, modifier: Modif
     ) {
         Text(text, color = TextColor, fontWeight = FontWeight.Medium, fontSize = 13.sp)
         if (badge != null) {
-            Text(badge, color = Muted, fontSize = 10.sp)
+            Text(badge, color = Muted, fontSize = 12.sp)
         }
     }
 }
@@ -202,7 +202,7 @@ fun SourceRatingBadge(label: String, value: String) {
         horizontalArrangement = Arrangement.spacedBy(5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, color = Teal, fontWeight = FontWeight.Black, fontSize = 10.sp)
+        Text(label, color = Teal, fontWeight = FontWeight.Black, fontSize = 12.sp)
         Text(value, color = TextColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
     }
 }
@@ -219,8 +219,8 @@ fun PosterRating(rating: Double) {
             horizontalArrangement = Arrangement.spacedBy(3.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("IMDb", color = Teal, fontWeight = FontWeight.Black, fontSize = 8.sp)
-            Text("%.1f".format(rating), color = TextColor, fontWeight = FontWeight.Bold, fontSize = 9.sp)
+            Text("IMDb", color = Teal, fontWeight = FontWeight.Black, fontSize = 12.sp)
+            Text("%.1f".format(rating), color = TextColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
         }
     }
 }

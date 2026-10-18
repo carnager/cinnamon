@@ -444,7 +444,7 @@ private fun DetailHeroContent(
                     Text(
                         genres.joinToString(", "),
                         color = Teal.copy(alpha = .86f),
-                        fontSize = 11.sp,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Medium,
                         lineHeight = 15.sp,
                         maxLines = 2,
@@ -952,7 +952,7 @@ private fun ContentRatingChip(text: String) {
     Text(
         text,
         color = Color.White,
-        fontSize = 11.sp,
+        fontSize = 12.sp,
         fontWeight = FontWeight.Black,
         maxLines = 1,
         modifier = Modifier
@@ -966,7 +966,7 @@ private fun TechChip(text: String) {
     Text(
         text,
         color = TextColor.copy(alpha = .85f),
-        fontSize = 11.sp,
+        fontSize = 12.sp,
         fontWeight = FontWeight.Bold,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
@@ -1020,9 +1020,9 @@ private fun SelectorBadge(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
-        Text(label, color = if (focused) Accent else Muted, fontSize = 10.sp, fontWeight = FontWeight.Black, maxLines = 1)
-        Text(value, color = TextColor.copy(alpha = .86f), fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        Text("\u25BE", color = if (focused) Accent else Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = if (focused) Accent else Muted, fontSize = 12.sp, fontWeight = FontWeight.Black, maxLines = 1)
+        Text(value, color = TextColor.copy(alpha = .86f), fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text("\u25BE", color = if (focused) Accent else Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -1076,8 +1076,8 @@ fun DetailFactRows(rows: List<Pair<String, String>>) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         rows.take(6).forEach { (label, value) ->
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
-                Text(label, color = Accent.copy(alpha = .85f), fontSize = 11.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(58.dp))
-                Text(value, color = Color.White.copy(alpha = .75f), fontSize = 11.sp, lineHeight = 15.sp, maxLines = if (label == "Tags") 2 else 1, overflow = TextOverflow.Ellipsis)
+                Text(label, color = Accent.copy(alpha = .85f), fontSize = 12.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(58.dp))
+                Text(value, color = Color.White.copy(alpha = .75f), fontSize = 12.sp, lineHeight = 15.sp, maxLines = if (label == "Tags") 2 else 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -1162,9 +1162,9 @@ private fun CastAvatar(
             }
         }
         Spacer(Modifier.height(4.dp))
-        Text(actor.name, color = TextColor, fontSize = 9.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(actor.name, color = TextColor, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (actor.role.isNotBlank()) {
-            Text(actor.role, color = Muted, fontSize = 8.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(actor.role, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -1224,7 +1224,7 @@ fun TrackSelectorButton(label: String, value: String, modifier: Modifier = Modif
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Column(Modifier.weight(1f)) {
-            Text(label, color = if (focused) Accent else Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Text(label, color = if (focused) Accent else Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             Text(value, color = TextColor, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Text("\u25BE", color = if (focused) Accent else Muted, fontSize = 14.sp, fontWeight = FontWeight.Bold)

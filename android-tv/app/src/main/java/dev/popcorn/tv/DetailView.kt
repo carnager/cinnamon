@@ -79,6 +79,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.foundation.onFocusedBoundsChanged
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.wrapContentHeight
@@ -88,6 +91,7 @@ import androidx.compose.animation.core.animateIntAsState
 import kotlinx.coroutines.launch
 import java.util.Locale
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun DetailView(
     item: PopItem,
@@ -201,14 +205,29 @@ fun DetailView(
 
     var detailViewportPx by remember { mutableStateOf(0) }
     var detailContentPx by remember { mutableStateOf(0) }
-    var detailShowBottom by remember(item.id) { mutableStateOf(false) }
+    var detailTargetShift by remember(item.id) { mutableStateOf(0) }
     val detailShift by animateIntAsState(
-        targetValue = if (detailShowBottom) (detailContentPx - detailViewportPx).coerceAtLeast(0) else 0,
+        targetValue = detailTargetShift.coerceIn(0, (detailContentPx - detailViewportPx).coerceAtLeast(0)),
         animationSpec = tween(durationMillis = 220),
         label = "detailShift",
     )
-    fun scrollDetailTo(top: Boolean) {
-        detailShowBottom = !top
+    var detailColumnCoords by remember { mutableStateOf<androidx.compose.ui.layout.LayoutCoordinates?>(null) }
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    // Keep whatever has focus fully on screen, preferring the very top (title
+    // and poster visible) whenever the focused element fits there. Moves only
+    // when focus changes, so it never fights the D-pad.
+    fun followFocus(focused: androidx.compose.ui.layout.LayoutCoordinates?) {
+        val column = detailColumnCoords ?: return
+        if (focused == null || !focused.isAttached || !column.isAttached) return
+        val rect = column.localBoundingBoxOf(focused, clipBounds = false)
+        val topMargin = with(density) { 24.dp.toPx() }
+        val bottomMargin = with(density) { 40.dp.toPx() }
+        val viewport = detailViewportPx.toFloat()
+        detailTargetShift = if (rect.bottom + bottomMargin <= viewport) {
+            0
+        } else {
+            minOf(rect.bottom + bottomMargin - viewport, rect.top - topMargin).coerceAtLeast(0f).toInt()
+        }
     }
 
     Box(Modifier.fillMaxSize().background(Bg)) {
@@ -288,12 +307,10 @@ fun DetailView(
             fontSize = 21,
         )
 
-        // A long synopsis or original title used to push the cast row off
-        // screen. No scroll container here: bring-into-view would move it on
-        // every focus change and fight anything steering it, which is what
-        // makes scrolling TV pages jitter. Instead the column shifts between
-        // two resting positions — top while focus is in the upper part,
-        // bottom while it is in the cast row — and only when it overflows.
+        // Taller than the screen with a long synopsis and the cast row. No
+        // scroll container: its bring-into-view moves the page on every focus
+        // change and fights anything steering it — what makes scrolling TV
+        // pages jitter. The column is shifted by followFocus instead.
         Box(
             Modifier
                 .fillMaxSize()
@@ -306,10 +323,11 @@ fun DetailView(
                 .wrapContentHeight(Alignment.Top, unbounded = true)
                 .onSizeChanged { detailContentPx = it.height }
                 .offset { IntOffset(0, -detailShift) }
+                .onGloballyPositioned { detailColumnCoords = it }
+                .onFocusedBoundsChanged { followFocus(it) }
                 .padding(start = 116.dp, end = 34.dp),
         ) {
             Spacer(Modifier.height(82.dp))
-            Box(Modifier.onFocusChanged { if (it.hasFocus) scrollDetailTo(top = true) }) {
             DetailHeroContent(
                 session = session,
                 detailItem = detailItem,
@@ -348,19 +366,16 @@ fun DetailView(
                 },
                 onSimilar = { onMoreLikeThis(similar) },
             )
-            }
 
             if (detailItem.actors.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
-                Box(Modifier.onFocusChanged { if (it.hasFocus) scrollDetailTo(top = false) }) {
-                    CastStrip(
-                        session = session,
-                        actors = detailItem.actors,
-                        firstFocusRequester = castFocus,
-                        onUp = { runCatching { playFocus.requestFocus() }.isSuccess },
-                        onActor = onActor,
-                    )
-                }
+                CastStrip(
+                    session = session,
+                    actors = detailItem.actors,
+                    firstFocusRequester = castFocus,
+                    onUp = { requestDetailFocus(descriptionFocus) || requestDetailFocus(audioFocus) },
+                    onActor = onActor,
+                )
             }
             // Keeps the cast row clear of the bottom overscan edge.
             Spacer(Modifier.height(36.dp))
@@ -534,43 +549,8 @@ private fun DetailHeroContent(
 
             DetailRatingRow(detailItem, externalRatings)
 
-            val chips = detailChips(detailItem, audioTracks, selectedAudio)
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                chips.forEach { TechChip(it) }
-                SelectorBadge(
-                    label = "Audio",
-                    value = audioLabel,
-                    focusRequester = audioFocus,
-                    onLeft = { true },
-                    onRight = {
-                        subtitleFocus.requestFocus()
-                        true
-                    },
-                    onDown = { requestDetailFocus(descriptionFocus) },
-                    onClick = onAudio,
-                )
-                SelectorBadge(
-                    label = "Subs",
-                    value = subtitleLabel,
-                    focusRequester = subtitleFocus,
-                    onLeft = {
-                        audioFocus.requestFocus()
-                        true
-                    },
-                    onDown = { requestDetailFocus(descriptionFocus) },
-                    onClick = onSubtitle,
-                )
-            }
-
-            FocusableDescriptionPanel(
-                overview = detailItem.overview,
-                focusRequester = descriptionFocus,
-                onUp = { requestDetailFocus(audioFocus) },
-                onDown = { requestDetailFocus(playFocus) },
-                onClick = onFullText,
-            )
-
+            // Actions first: Play is where focus lands, and it no longer moves
+            // down the page with the length of the synopsis.
             Spacer(Modifier.height(14.dp))
             Row(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -583,8 +563,8 @@ private fun DetailHeroContent(
                     label = if (canResume) "Resume" else "Play",
                     detail = if (canResume) fmtClock(resumePositionMs) else null,
                     focusRequester = playFocus,
-                    onUp = { requestDetailFocus(descriptionFocus) },
-                    onDown = { requestDetailFocus(castFocus) },
+                    onUp = { true },
+                    onDown = { requestDetailFocus(audioFocus) },
                     onClick = { if (canResume) onResume() else onPlayFromStart() },
                 )
                 if (hasSavedProgress) {
@@ -592,8 +572,8 @@ private fun DetailHeroContent(
                         label = "Start over",
                         icon = Icons.Filled.Replay,
                         active = false,
-                        onUp = { requestDetailFocus(descriptionFocus) },
-                        onDown = { requestDetailFocus(castFocus) },
+                        onUp = { true },
+                        onDown = { requestDetailFocus(audioFocus) },
                         onClick = { resumeMenuOpen = true },
                     )
                 }
@@ -601,8 +581,8 @@ private fun DetailHeroContent(
                     label = "Trailer",
                     icon = Icons.Filled.PlayCircleOutline,
                     active = false,
-                    onUp = { requestDetailFocus(descriptionFocus) },
-                    onDown = { requestDetailFocus(castFocus) },
+                    onUp = { true },
+                    onDown = { requestDetailFocus(audioFocus) },
                     onClick = onTrailer,
                 )
                 ActionIcon(
@@ -619,8 +599,8 @@ private fun DetailHeroContent(
                     contentDescription = "Viewing preference",
                     active = preference != MediaPreference.Unwatched,
                     activeTint = if (preference == MediaPreference.NotInterested) ErrorRed else Accent,
-                    onUp = { requestDetailFocus(descriptionFocus) },
-                    onDown = { requestDetailFocus(castFocus) },
+                    onUp = { true },
+                    onDown = { requestDetailFocus(audioFocus) },
                     onClick = { preferenceMenuOpen = true },
                 )
                 ActionIcon(
@@ -629,8 +609,8 @@ private fun DetailHeroContent(
                     contentDescription = if (watchlisted) "On watchlist" else "Add to watchlist",
                     active = watchlisted,
                     activeTint = Teal,
-                    onUp = { requestDetailFocus(descriptionFocus) },
-                    onDown = { requestDetailFocus(castFocus) },
+                    onUp = { true },
+                    onDown = { requestDetailFocus(audioFocus) },
                     onClick = onWatchlistChange,
                 )
                 ActionIcon(
@@ -639,8 +619,8 @@ private fun DetailHeroContent(
                     contentDescription = if (userRating > 0) "Rated $userRating of 10" else "Rate",
                     active = userRating > 0,
                     activeTint = Gold,
-                    onUp = { requestDetailFocus(descriptionFocus) },
-                    onDown = { requestDetailFocus(castFocus) },
+                    onUp = { true },
+                    onDown = { requestDetailFocus(audioFocus) },
                     onClick = onRateMenu,
                 )
                 if (showSimilar) {
@@ -648,12 +628,52 @@ private fun DetailHeroContent(
                         label = "Similar",
                         icon = Icons.Filled.Tune,
                         active = false,
-                        onUp = { requestDetailFocus(descriptionFocus) },
-                        onDown = { requestDetailFocus(castFocus) },
+                        onUp = { true },
+                        onDown = { requestDetailFocus(audioFocus) },
                         onClick = onSimilar,
                     )
                 }
             }
+            val chips = detailChips(detailItem, audioTracks, selectedAudio)
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                SelectorBadge(
+                    label = "Audio",
+                    value = audioLabel,
+                    focusRequester = audioFocus,
+                    onLeft = { true },
+                    onRight = {
+                        subtitleFocus.requestFocus()
+                        true
+                    },
+                    onUp = { requestDetailFocus(playFocus) },
+                    onDown = { requestDetailFocus(descriptionFocus) },
+                    onClick = onAudio,
+                )
+                SelectorBadge(
+                    label = "Subs",
+                    value = subtitleLabel,
+                    focusRequester = subtitleFocus,
+                    onLeft = {
+                        audioFocus.requestFocus()
+                        true
+                    },
+                    onUp = { requestDetailFocus(playFocus) },
+                    onDown = { requestDetailFocus(descriptionFocus) },
+                    onClick = onSubtitle,
+                )
+                chips.forEach { TechChip(it) }
+            }
+            FocusableDescriptionPanel(
+                overview = detailItem.overview,
+                focusRequester = descriptionFocus,
+                maxLines = 8,
+                maxWidth = 900.dp,
+                onUp = { requestDetailFocus(audioFocus) },
+                onDown = { requestDetailFocus(castFocus) },
+                onClick = onFullText,
+            )
+
         }
     }
 
@@ -787,9 +807,9 @@ fun FocusableDescriptionPanel(
     ) {
         Text(
             overview,
-            color = Color.White.copy(alpha = .82f),
-            fontSize = 13.sp,
-            lineHeight = 18.sp,
+            color = Color.White.copy(alpha = .86f),
+            fontSize = 15.sp,
+            lineHeight = 21.sp,
             maxLines = maxLines,
             overflow = TextOverflow.Ellipsis,
         )
@@ -906,13 +926,15 @@ private fun SelectorBadge(
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
+    // A real button now (was a 28dp chip at 12sp, easy to miss beside the
+    // tech chips). Wide enough for "Deutsch · DTS-HD MA 7.1".
     Row(
         Modifier
-            .height(28.dp)
-            .widthIn(max = 180.dp)
-            .clip(RoundedCornerShape(4.dp))
-            .background(Color.Transparent)
-            .border(1.dp, if (focused) Accent else Color.Transparent, RoundedCornerShape(4.dp))
+            .height(40.dp)
+            .widthIn(max = 320.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (focused) Accent.copy(alpha = .22f) else Color.White.copy(alpha = .06f))
+            .border(if (focused) 2.dp else 1.dp, if (focused) Accent else Color.White.copy(alpha = .14f), RoundedCornerShape(10.dp))
             .onFocusChanged {
                 focused = it.isFocused
                 if (it.isFocused) onFocus()
@@ -929,12 +951,12 @@ private fun SelectorBadge(
                 }
             }
             .tvActivate(onClick)
-            .padding(horizontal = 8.dp),
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
-        Text(label, color = if (focused) Accent else Muted, fontSize = 12.sp, fontWeight = FontWeight.Black, maxLines = 1)
-        Text(value, color = TextColor.copy(alpha = .86f), fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(label, color = if (focused) Color.White else Muted, fontSize = 13.sp, fontWeight = FontWeight.Black, maxLines = 1)
+        Text(value, color = TextColor, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
         Text("\u25BE", color = if (focused) Accent else Muted, fontSize = 12.sp, fontWeight = FontWeight.Bold)
     }
 }

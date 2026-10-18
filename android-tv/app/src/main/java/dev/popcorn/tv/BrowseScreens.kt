@@ -1358,6 +1358,10 @@ private fun UserMenuDrawer(
             add(UserDrawerEntry("Sign in a phone", Icons.Filled.QrCode2, "QR code", action = { onPage(UserMenuPage.PhoneLogin) }))
             add(UserDrawerEntry("Preferred audio", Icons.AutoMirrored.Filled.VolumeUp, audioOptions.firstOrNull { it.first == PlaybackPrefs.audioLang }?.second.orEmpty(), action = { onPage(UserMenuPage.Audio) }))
             add(UserDrawerEntry("Preferred subtitles", Icons.Filled.Subtitles, subtitleOptions.firstOrNull { it.first == PlaybackPrefs.subtitleLang }?.second.orEmpty(), action = { onPage(UserMenuPage.Subtitles) }))
+            // A toggle rather than a page: there are only two engines.
+            add(UserDrawerEntry("Player engine", Icons.Filled.PlayArrow, if (PlaybackPrefs.useMpv) "mpv" else "ExoPlayer", action = {
+                PlaybackPrefs.setEngine(context, if (PlaybackPrefs.useMpv) PlaybackPrefs.ENGINE_EXO else PlaybackPrefs.ENGINE_MPV)
+            }))
             if (session?.isAdmin == true) add(UserDrawerEntry("Update libraries", Icons.Filled.Refresh, action = onScan))
             if (showUpdate) add(UserDrawerEntry("Update app", Icons.Filled.SystemUpdate, action = onUpdates))
             add(UserDrawerEntry("Logout", Icons.AutoMirrored.Filled.Logout, action = onLogout))

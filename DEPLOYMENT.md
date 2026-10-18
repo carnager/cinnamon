@@ -24,8 +24,9 @@ The release and check scripts automatically select `/usr/lib/jvm/java-21-openjdk
 when `JAVA_HOME` is unset. Keep using Java 21 for Android builds; Java 26
 currently trips Android's JDK image transform during APK builds.
 
-The Android TV release APK uses ExoPlayer/media3 for playback (no bundled
-player libraries). Native libraries are limited to `armeabi-v7a`: both the
+The Android TV release APK plays through libmpv (`dev.jdtech.mpv:libmpv`) by
+default, with ExoPlayer/media3 selectable as a fallback in the user menu
+("Player engine"). Native libraries are limited to `armeabi-v7a`: both the
 Shield and the Google TV Streamer run a 32-bit userspace (`ro.zygote=zygote32`,
 empty `abilist64`), so a 64-bit `.so` can never load there. The build uses
 release shrinking/R8. `scripts/release` fails if the TV APK accidentally

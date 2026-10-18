@@ -1432,17 +1432,7 @@ fun PopcornApp() {
             onItemMenu = { item, requester -> openItemWatchMenu(item, requester) },
             onShowMenu = { show, requester -> openShowWatchMenu(show, requester) },
         )
-        is Screen.Player -> if (BuildConfig.USE_MPV) key(current.item.id, current.token) {
-            MpvPlayerScreen(
-                item = current.item,
-                session = session,
-                deviceId = deviceId,
-                initialAudioIndex = current.audioIndex,
-                initialSubtitleIndex = current.subtitleIndex,
-                initialStartPositionMs = current.startPositionMs,
-                onBack = ::returnFromPlayer,
-            )
-        } else key(current.item.id, current.token) {
+        is Screen.Player -> key(current.item.id, current.token) {
             PlayerScreen(
                 item = current.item,
                 session = session,

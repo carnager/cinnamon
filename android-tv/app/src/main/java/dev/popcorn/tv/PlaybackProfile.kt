@@ -9,7 +9,7 @@ import androidx.media3.exoplayer.audio.AudioCapabilities
 import org.json.JSONArray
 import org.json.JSONObject
 
-fun buildPlaybackProfile(context: Context): JSONObject {
+fun buildPlaybackProfile(context: Context, mpv: Boolean = false): JSONObject {
     val display = context.display
     val hdrFormats = displayHdrFormats(display)
     val video = linkedMapOf<String, JSONObject>()
@@ -60,6 +60,16 @@ fun buildPlaybackProfile(context: Context): JSONObject {
     listOf("aac", "mp3", "flac", "opus", "vorbis").forEach { codec ->
         audio.putIfAbsent(codec, JSONObject().put("codec", codec).put("maxChannels", 8))
     }
+    // mpv decodes every audio format in software (ffmpeg) and outputs
+    // multichannel PCM, and draws image subtitles itself: nothing here needs
+    // the server. Video stays limited to what MediaCodec decodes — software
+    // HEVC on these CPUs would not keep up.
+    val subtitles = mutableListOf("srt", "subrip", "ass", "ssa", "webvtt", "mov_text")
+    if (mpv) {
+        listOf("ac3", "eac3", "dts", "dts-hd", "truehd", "aac", "mp3", "flac", "opus", "vorbis", "pcm_s16le", "pcm_s24le", "mp2")
+            .forEach { codec -> audio[codec] = JSONObject().put("codec", codec).put("maxChannels", 8) }
+        subtitles += listOf("hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle")
+    }
     return JSONObject()
         .put("schemaVersion", 1)
         .put("client", "android-tv")
@@ -81,7 +91,7 @@ fun buildPlaybackProfile(context: Context): JSONObject {
         .put("containers", JSONArray(listOf("mkv", "mp4", "webm", "m4v", "mov")))
         .put("video", JSONArray(video.values))
         .put("audio", JSONArray(audio.values))
-        .put("subtitles", JSONArray(listOf("srt", "subrip", "ass", "ssa", "webvtt", "mov_text")))
+        .put("subtitles", JSONArray(subtitles))
 }
 
 private fun displayHdrFormats(display: Display?): List<String> {

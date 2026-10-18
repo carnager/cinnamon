@@ -26,10 +26,27 @@ object PlaybackPrefs {
     var subtitleLang by mutableStateOf(SUBS_OFF)
         private set
 
+    const val ENGINE_MPV = "mpv"
+    const val ENGINE_EXO = "exo"
+
+    // Playback engine: libmpv plays (nearly) every file directly; ExoPlayer is
+    // the fallback, with the server transcoding what the box can't decode.
+    var engine by mutableStateOf(ENGINE_MPV)
+        private set
+
+    val useMpv: Boolean get() = engine == ENGINE_MPV
+
     fun load(context: Context) {
         val prefs = context.getSharedPreferences("popcorn", Context.MODE_PRIVATE)
+        engine = prefs.getString("prefEngine", ENGINE_MPV) ?: ENGINE_MPV
         audioLang = prefs.getString("prefAudioLang", "") ?: ""
         subtitleLang = prefs.getString("prefSubtitleLang", SUBS_OFF) ?: SUBS_OFF
+    }
+
+    fun setEngine(context: Context, value: String) {
+        engine = value
+        context.getSharedPreferences("popcorn", Context.MODE_PRIVATE)
+            .edit().putString("prefEngine", value).apply()
     }
 
     fun setAudio(context: Context, value: String) {

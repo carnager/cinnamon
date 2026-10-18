@@ -113,7 +113,9 @@ fun PlayerScreen(
     var playbackSampleAtMs by remember(item.id) { mutableStateOf(SystemClock.elapsedRealtime()) }
     val pressedSeekKeys = remember(item.id) { mutableMapOf<Int, Long>() }
     val originalStreams = remember { mutableStateListOf<StreamInfo>() }
-    val playbackProfile = remember(context) { buildPlaybackProfile(context) }
+    // Fixed per player instance: switching engines mid-playback isn't supported.
+    val useMpv = remember { PlaybackPrefs.useMpv }
+    val playbackProfile = remember(context) { buildPlaybackProfile(context, mpv = useMpv) }
 
     // ── Up Next (auto-play next episode) ──
     var nextEpisode by remember(item.id) { mutableStateOf<PopItem?>(null) }
@@ -147,7 +149,8 @@ fun PlayerScreen(
             }
     }
 
-    val exoPlayer = remember {
+    val exoPlayer: Player = remember {
+        if (useMpv) return@remember MpvPlayer(context, session?.token.orEmpty())
         val httpFactory = DefaultHttpDataSource.Factory().apply {
             if (session != null && session.token.isNotBlank()) {
                 setDefaultRequestProperties(mapOf("Authorization" to "Bearer ${session.token}"))
@@ -157,6 +160,7 @@ fun PlayerScreen(
             .setMediaSourceFactory(DefaultMediaSourceFactory(httpFactory))
             .build()
     }
+    val mpvPlayer = exoPlayer as? MpvPlayer
 
     val playerView = remember {
         (LayoutInflater.from(context).inflate(R.layout.player_view, null) as PlayerView).apply {
@@ -167,6 +171,9 @@ fun PlayerScreen(
             controllerShowTimeoutMs = 5000
             keepScreenOn = true
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            // mpv reports no video tracks, so PlayerView keeps its shutter
+            // closed; make it see-through rather than a black sheet over the video.
+            if (useMpv) setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
         }
     }
 
@@ -224,12 +231,15 @@ fun PlayerScreen(
             ?: exoPlayer.duration.coerceAtLeast(0)
     }
 
-    fun playerStateLabel(): String = when {
-        exoPlayer.isPlaying -> "exo-playing"
-        exoPlayer.playbackState == Player.STATE_READY -> "exo-ready"
-        exoPlayer.playbackState == Player.STATE_BUFFERING -> "exo-buffering"
-        exoPlayer.playbackState == Player.STATE_ENDED -> "exo-ended"
-        else -> "exo-idle"
+    fun playerStateLabel(): String {
+        val engine = if (useMpv) "mpv" else "exo"
+        return when {
+            exoPlayer.isPlaying -> "$engine-playing"
+            exoPlayer.playbackState == Player.STATE_READY -> "$engine-ready"
+            exoPlayer.playbackState == Player.STATE_BUFFERING -> "$engine-buffering"
+            exoPlayer.playbackState == Player.STATE_ENDED -> "$engine-ended"
+            else -> "$engine-idle"
+        }
     }
 
     fun logClient(event: String, keyEvent: AndroidKeyEvent? = null, message: String = "", extra: JSONObject? = null) {
@@ -245,7 +255,7 @@ fun PlayerScreen(
                     .put("title", if (item.kind == "episode") item.episodeTitle.ifBlank { item.title } else item.title)
                     .put("planMode", activePlan?.mode.orEmpty())
                     .put("usesHls", planUsesHls)
-                    .put("usesMpv", false)
+                    .put("usesMpv", useMpv)
                     .put("hlsId", hlsSessionId.orEmpty())
                     .put("positionMs", logicalPositionMs())
                     .put("durationMs", logicalDurationMs())
@@ -258,6 +268,8 @@ fun PlayerScreen(
             }
         }
     }
+
+    mpvPlayer?.onDiagnostic = { event, message, extra -> logClient(event, message = message.take(230), extra = extra) }
 
     fun boundarySeekTarget(currentMs: Long, forward: Boolean): Long {
         val step = 30_000L
@@ -288,7 +300,14 @@ fun PlayerScreen(
 
     fun applyDirectTrackSelections() {
         if (planUsesHls || originalStreams.isEmpty()) return
-        val result = applyOriginalTrackSelection(exoPlayer, originalStreams, selectedAudioIndex, selectedSubtitleIndex)
+        if (mpvPlayer != null) {
+            // mpv addresses tracks by ffmpeg index directly; a selection made
+            // before the file loads is applied once it has.
+            mpvPlayer.selectTracks(selectedAudioIndex, selectedSubtitleIndex)
+            logClient("apply-direct-tracks", message = "mpv audio=${selectedAudioIndex ?: -1} sub=${selectedSubtitleIndex ?: -1}")
+            return
+        }
+        val result = applyOriginalTrackSelection(exoPlayer as ExoPlayer, originalStreams, selectedAudioIndex, selectedSubtitleIndex)
         logClient("apply-direct-tracks", message = result.take(230))
     }
 
@@ -299,6 +318,10 @@ fun PlayerScreen(
     // Returns true once the wanted track exists and has been selected, so the
     // caller can keep retrying while the player is still preparing.
     fun applyHlsSubtitleSelection(subtitleIndex: Int?): Boolean {
+        if (mpvPlayer != null) {
+            mpvPlayer.selectExternalSubtitle(subtitleIndex?.let(::sideloadedSubtitleId))
+            return true
+        }
         val params = exoPlayer.trackSelectionParameters.buildUpon()
             .clearOverridesOfType(C.TRACK_TYPE_TEXT)
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, subtitleIndex == null)
@@ -606,7 +629,7 @@ fun PlayerScreen(
             // place to flush: the empty text queue can't satisfy the seek, so
             // ExoPlayer re-extracts from the current position with the track
             // active and cues appear immediately.
-            if (index != null) {
+            if (index != null && mpvPlayer == null) {
                 seekWithoutLosingEvidence(exoPlayer.currentPosition)
             }
             return
@@ -1195,7 +1218,7 @@ fun PlayerScreen(
                 if (applyHlsSubtitleSelection(selectedSubtitleIndex)) return@LaunchedEffect
             } else {
                 applyDirectTrackSelections()
-                if (exoPlayer.currentTracks.groups.isNotEmpty()) return@LaunchedEffect
+                if (mpvPlayer != null || exoPlayer.currentTracks.groups.isNotEmpty()) return@LaunchedEffect
             }
             delay(250)
         }

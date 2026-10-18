@@ -31,7 +31,6 @@ android {
         ndk {
             abiFilters += listOf("armeabi-v7a")
         }
-        buildConfigField("boolean", "USE_MPV", "false")
     }
 
     signingConfigs {
@@ -71,7 +70,6 @@ android {
             applicationIdSuffix = ".mpv"
             versionNameSuffix = "-mpv"
             matchingFallbacks += listOf("release")
-            buildConfigField("boolean", "USE_MPV", "true")
         }
     }
 

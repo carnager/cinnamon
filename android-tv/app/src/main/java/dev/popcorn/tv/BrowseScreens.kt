@@ -1064,10 +1064,7 @@ fun LibraryFilterBar(
     var restoreFocus by remember(activeLibrary.id) { mutableStateOf<FocusRequester?>(null) }
     var filterReloadPending by remember(activeLibrary.id) { mutableStateOf(false) }
     val sortFocus = firstFocusRequester ?: remember { FocusRequester() }
-    val seenFocus = remember { FocusRequester() }
-    val ratingFocus = remember { FocusRequester() }
-    val genreFocus = remember { FocusRequester() }
-    val decadeFocus = remember { FocusRequester() }
+    val filterFocus = remember { FocusRequester() }
     val scope = rememberCoroutineScope()
 
     fun openDrawer(page: LibraryFilterPage, requester: FocusRequester) {
@@ -1107,7 +1104,8 @@ fun LibraryFilterBar(
     // each tick used to reload the whole library (spinner, four requests).
     var pendingGenres by remember { mutableStateOf<List<String>?>(null) }
     var pendingDecades by remember { mutableStateOf<List<String>?>(null) }
-    fun closeFilterDrawer() {
+    // Applies ticked genres/decades once, when their page is left.
+    fun commitPending(): Boolean {
         val genresChanged = pendingGenres?.let { it != selectedGenres } == true
         val decadesChanged = pendingDecades?.let { it != selectedDecadeList } == true
         if (genresChanged || decadesChanged) {
@@ -1122,8 +1120,26 @@ fun LibraryFilterBar(
         }
         pendingGenres = null
         pendingDecades = null
-        closeDrawer(restoreImmediately = !(genresChanged || decadesChanged))
+        return genresChanged || decadesChanged
     }
+    // Back: a filter page returns to the overview, the overview (or Sort)
+    // closes the drawer.
+    fun drawerBack() {
+        when (drawerPage) {
+            LibraryFilterPage.Genre, LibraryFilterPage.Decade -> {
+                commitPending()
+                drawerPage = LibraryFilterPage.Root
+            }
+            LibraryFilterPage.Seen, LibraryFilterPage.Rating -> drawerPage = LibraryFilterPage.Root
+            else -> closeDrawer(restoreImmediately = !filterReloadPending)
+        }
+    }
+    val activeFilters = listOf(
+        selectedSeenStatus.isNotBlank(),
+        selectedMinRating > 0.0,
+        selectedGenres.isNotEmpty(),
+        selectedDecadeList.isNotEmpty(),
+    ).count { it }
     val decadeLabel = when (selectedDecadeList.size) {
         0 -> "Decade: All"
         1 -> "Decade: ${selectedDecadeList.first()}s"
@@ -1141,14 +1157,20 @@ fun LibraryFilterBar(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(activeLibrary.name, color = TextColor, fontSize = 22.sp, fontWeight = FontWeight.Black)
-            Text(countLabel, color = Muted, fontSize = 12.sp)
-            Spacer(Modifier.width(10.dp))
+            // Two controls instead of five pills: sorting, and one filter
+            // drawer that says how many filters are on.
+            Text(activeLibrary.name, color = TextColor, fontSize = 24.sp, fontWeight = FontWeight.Black)
+            Text(countLabel, color = Muted, fontSize = 14.sp)
+            Spacer(Modifier.width(14.dp))
             Pill(text = "Sort: ${sortLabel(selectedSort)}", selected = selectedSort.isNotBlank(), modifier = Modifier.focusRequester(sortFocus), onClick = { openDrawer(LibraryFilterPage.Sort, sortFocus) })
-            Pill(text = seenLabel(selectedSeenStatus), selected = selectedSeenStatus.isNotBlank(), modifier = Modifier.focusRequester(seenFocus), onClick = { openDrawer(LibraryFilterPage.Seen, seenFocus) })
-            Pill(text = ratingLabel(selectedMinRating), selected = selectedMinRating > 0.0, modifier = Modifier.focusRequester(ratingFocus), onClick = { openDrawer(LibraryFilterPage.Rating, ratingFocus) })
-            Pill(text = genreLabel, selected = selectedGenres.isNotEmpty(), modifier = Modifier.focusRequester(genreFocus), onClick = { openDrawer(LibraryFilterPage.Genre, genreFocus) })
-            Pill(text = decadeLabel, selected = selectedDecadeList.isNotEmpty(), modifier = Modifier.focusRequester(decadeFocus), onClick = { openDrawer(LibraryFilterPage.Decade, decadeFocus) })
+            Pill(text = if (activeFilters == 0) "Filter" else "Filter \u00b7 $activeFilters active", selected = activeFilters > 0, modifier = Modifier.focusRequester(filterFocus), onClick = { openDrawer(LibraryFilterPage.Root, filterFocus) })
+            if (activeFilters > 0) {
+                Pill(text = "Clear", selected = false, onClick = {
+                    applyingFilter()
+                    restoreFocus = filterFocus
+                    onApply(selectedSort, "", 0.0, "", "")
+                })
+            }
         }
         drawerPage?.let { page ->
             LibraryFilterDrawer(
@@ -1168,22 +1190,35 @@ fun LibraryFilterBar(
                 onSeen = { value ->
                     applyingFilter()
                     onApply(selectedSort, value, selectedMinRating, selectedGenre, selectedDecades)
-                    closeDrawer(restoreImmediately = false)
+                    drawerPage = LibraryFilterPage.Root
                 },
                 onRating = { value ->
                     applyingFilter()
                     onApply(selectedSort, selectedSeenStatus, value, selectedGenre, selectedDecades)
-                    closeDrawer(restoreImmediately = false)
+                    drawerPage = LibraryFilterPage.Root
                 },
                 onGenres = { values -> pendingGenres = values },
                 onDecades = { values -> pendingDecades = values },
-                onClose = { closeFilterDrawer() },
+                onPage = { drawerPage = it },
+                onClearAll = {
+                    pendingGenres = null
+                    pendingDecades = null
+                    applyingFilter()
+                    onApply(selectedSort, "", 0.0, "", "")
+                    closeDrawer(restoreImmediately = false)
+                },
+                seenSummary = seenOptions().firstOrNull { it.first == selectedSeenStatus }?.second ?: "All",
+                ratingSummary = ratingOptions().firstOrNull { it.first == selectedMinRating }?.second ?: "All",
+                genreSummary = genreLabel.removePrefix("Genre: "),
+                decadeSummary = decadeLabel.removePrefix("Decade: "),
+                activeFilters = activeFilters,
+                onClose = { drawerBack() },
             )
         }
     }
 }
 
-private enum class LibraryFilterPage { Sort, Seen, Rating, Genre, Decade }
+private enum class LibraryFilterPage { Root, Sort, Seen, Rating, Genre, Decade }
 
 @Composable
 private fun LibraryFilterDrawer(
@@ -1200,10 +1235,24 @@ private fun LibraryFilterDrawer(
     onRating: (Double) -> Unit,
     onGenres: (List<String>) -> Unit,
     onDecades: (List<String>) -> Unit,
+    onPage: (LibraryFilterPage) -> Unit,
+    onClearAll: () -> Unit,
+    seenSummary: String,
+    ratingSummary: String,
+    genreSummary: String,
+    decadeSummary: String,
+    activeFilters: Int,
     onClose: () -> Unit,
 ) {
     val firstFocus = remember { FocusRequester() }
     val entries = when (page) {
+        LibraryFilterPage.Root -> buildList {
+            add(UserDrawerEntry("Seen", Icons.Filled.Visibility, seenSummary, active = seen.isNotBlank()) { onPage(LibraryFilterPage.Seen) })
+            add(UserDrawerEntry("IMDb rating", Icons.Filled.Star, ratingSummary, active = rating > 0.0) { onPage(LibraryFilterPage.Rating) })
+            add(UserDrawerEntry("Genres", Icons.Filled.Category, genreSummary, active = selectedGenres.isNotEmpty()) { onPage(LibraryFilterPage.Genre) })
+            add(UserDrawerEntry("Decades", Icons.Filled.DateRange, decadeSummary, active = selectedDecades.isNotEmpty()) { onPage(LibraryFilterPage.Decade) })
+            if (activeFilters > 0) add(UserDrawerEntry("Clear all filters", Icons.Filled.Block, action = onClearAll))
+        }
         LibraryFilterPage.Sort -> sortDropdownOptions().map { option ->
             UserDrawerEntry(option.label, Icons.AutoMirrored.Filled.Sort, active = sort == option.sort) { onSort(option.sort) }
         }
@@ -1244,10 +1293,11 @@ private fun LibraryFilterDrawer(
             Column(
                 Modifier.fillMaxHeight().width(356.dp).background(Bg.copy(alpha = .98f)).border(1.dp, Color.White.copy(alpha = .10f)).padding(horizontal = 28.dp, vertical = 42.dp),
             ) {
-                Text("FILTERS", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Black)
+                Text(if (page == LibraryFilterPage.Sort) "SORT" else "FILTERS", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(7.dp))
                 Text(
                     when (page) {
+                        LibraryFilterPage.Root -> if (activeFilters == 0) "No filters" else "$activeFilters active"
                         LibraryFilterPage.Sort -> "Sort"
                         LibraryFilterPage.Seen -> "Seen status"
                         LibraryFilterPage.Rating -> "IMDb rating"

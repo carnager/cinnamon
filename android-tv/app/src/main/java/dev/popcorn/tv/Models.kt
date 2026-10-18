@@ -10,15 +10,70 @@ data class StreamInfo(
     val title: String,
     val default: Boolean,
     val forced: Boolean,
+    val channels: Int = 0,
+    val profile: String = "",
 ) {
-    fun label(): String {
+    // "Deutsch · Forced" — what a viewer picks a track by.
+    fun primaryLabel(): String {
+        val lang = languageDisplayName(language)
         val parts = mutableListOf<String>()
-        if (title.isNotBlank()) parts.add(title)
-        if (language.isNotBlank()) parts.add(language.uppercase())
-        if (codec.isNotBlank()) parts.add(codec)
-        if (forced) parts.add("(forced)")
-        return parts.joinToString(" \u2022 ").ifBlank { "Track ${index}" }
+        if (lang.isNotBlank()) parts.add(lang)
+        // Release titles often just repeat the language ("German", "GER - SUBS").
+        if (title.isNotBlank() && !title.contains(lang, ignoreCase = true) && !title.equals(language, ignoreCase = true)) parts.add(title)
+        if (forced && parts.none { it.contains("forced", ignoreCase = true) }) parts.add("Forced")
+        return parts.joinToString(" \u00b7 ").ifBlank { "Track $index" }
     }
+
+    // "TrueHD 7.1 · Default" — format details, secondary.
+    fun detailLabel(): String {
+        val parts = mutableListOf<String>()
+        val format = friendlyCodec(codec, profile)
+        if (format.isNotBlank()) parts.add(if (type == "audio" && channels > 0) "$format ${channelLabel(channels)}" else format)
+        if (default) parts.add("Default")
+        return parts.joinToString(" \u00b7 ")
+    }
+
+    fun label(): String = listOf(primaryLabel(), detailLabel()).filter { it.isNotBlank() }.joinToString(" \u00b7 ")
+}
+
+private fun languageDisplayName(code: String): String {
+    val trimmed = code.trim()
+    if (trimmed.isBlank() || trimmed.equals("und", ignoreCase = true)) return ""
+    val name = runCatching { java.util.Locale.forLanguageTag(normalizeLang(trimmed)).getDisplayLanguage(java.util.Locale.getDefault()) }.getOrNull().orEmpty()
+    return if (name.isBlank() || name.equals(trimmed, ignoreCase = true)) trimmed.uppercase() else name.replaceFirstChar { it.titlecase() }
+}
+
+private fun channelLabel(channels: Int): String = when (channels) {
+    1 -> "Mono"
+    2 -> "Stereo"
+    6 -> "5.1"
+    7 -> "6.1"
+    8 -> "7.1"
+    else -> "${channels}ch"
+}
+
+private fun friendlyCodec(codec: String, profile: String): String = when (codec.lowercase()) {
+    "ac3" -> "Dolby Digital"
+    "eac3" -> if (profile.contains("atmos", ignoreCase = true)) "Dolby Digital+ Atmos" else "Dolby Digital+"
+    "truehd" -> if (profile.contains("atmos", ignoreCase = true)) "TrueHD Atmos" else "TrueHD"
+    "dts" -> when {
+        profile.contains("MA", ignoreCase = false) -> "DTS-HD MA"
+        profile.contains("HRA", ignoreCase = false) || profile.contains("HD", ignoreCase = false) -> "DTS-HD"
+        else -> "DTS"
+    }
+    "aac" -> "AAC"
+    "opus" -> "Opus"
+    "flac" -> "FLAC"
+    "mp3" -> "MP3"
+    "vorbis" -> "Vorbis"
+    "subrip", "srt" -> "SRT"
+    "ass", "ssa" -> "ASS"
+    "hdmv_pgs_subtitle" -> "PGS"
+    "dvd_subtitle" -> "VobSub"
+    "dvb_subtitle" -> "DVB"
+    "webvtt" -> "WebVTT"
+    "mov_text" -> "Text"
+    else -> codec.uppercase()
 }
 
 data class BandwidthOption(val label: String, val kbps: Int?)
@@ -320,6 +375,9 @@ sealed interface Screen {
     // token distinguishes two requests to play the same item. The player is
     // keyed on it, so a remote "play" for whatever is already on screen
     // restarts it instead of quietly reusing the running one.
-    data class Player(val item: PopItem, val audioIndex: Int?, val subtitleIndex: Int?, val startPositionMs: Long = 0L, val token: Long = 0L) : Screen
+    // tracksChosen: the viewer picked audio/subtitles (detail page, phone remote).
+    // Otherwise — Up Next, Continue Watching, a show's play button — the player
+    // applies the stored language preferences itself.
+    data class Player(val item: PopItem, val audioIndex: Int?, val subtitleIndex: Int?, val startPositionMs: Long = 0L, val token: Long = 0L, val tracksChosen: Boolean = false) : Screen
     data class SidecarPlayer(val url: String, val title: String, val returnScreen: Screen) : Screen
 }

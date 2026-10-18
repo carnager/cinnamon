@@ -148,9 +148,13 @@ fun PopcornApp() {
     var libraryAlphabet by remember { mutableStateOf<List<AlphabetEntry>>(emptyList()) }
     var watchMenu by remember { mutableStateOf<WatchMenuState?>(null) }
     var deviceId by remember { mutableStateOf(prefs.getString("remoteDeviceId", "") ?: "") }
+    // A bandwidth cap picked in the player lasts for this app session only.
+    // Persisted, one pick for a bad Wi-Fi evening turned every later title into
+    // a server transcode — and with mpv, which plays nearly everything
+    // directly, that was almost never what was wanted.
     var preferredBandwidthKbps by remember {
-        val savedBandwidth = prefs.getInt("preferredBandwidthKbps", -1)
-        mutableStateOf(BandwidthOptions.firstOrNull { it.kbps == savedBandwidth }?.kbps)
+        prefs.edit().remove("preferredBandwidthKbps").apply()
+        mutableStateOf<Int?>(null)
     }
     var lastRemoteCommandId by remember { mutableStateOf(prefs.getLong("remoteCommandId", 0L)) }
     var pendingPlayerCommand by remember { mutableStateOf<PlayerRemoteCommand?>(null) }
@@ -456,7 +460,7 @@ fun PopcornApp() {
                                         ?.takeIf { progressResumable(it.positionMs, it.durationMs) }
                                         ?.positionMs
                                     ?: 0L
-                                screen = Screen.Player(item, audio, subtitle, start, token = command.id)
+                                screen = Screen.Player(item, audio, subtitle, start, token = command.id, tracksChosen = command.payload.has("audioIndex") || command.payload.has("subtitleIndex"))
                             }
                             .onFailure { error = it.message ?: "Remote play failed" }
                     }
@@ -1414,7 +1418,7 @@ fun PopcornApp() {
             onPlay = { audioIndex, subtitleIndex, startPositionMs ->
                 lastDetail = current
                 lastPlayerReturnScreen = current
-                screen = Screen.Player(current.item, audioIndex, subtitleIndex, startPositionMs)
+                screen = Screen.Player(current.item, audioIndex, subtitleIndex, startPositionMs, tracksChosen = true)
             },
                 onTrailer = { localTrailer ->
                     if (localTrailer) {
@@ -1476,10 +1480,10 @@ fun PopcornApp() {
                 initialAudioIndex = current.audioIndex,
                 initialSubtitleIndex = current.subtitleIndex,
                 initialStartPositionMs = current.startPositionMs,
+                resolveTrackPrefs = !current.tracksChosen,
                 initialBandwidthKbps = preferredBandwidthKbps,
                 onBandwidthSelected = { kbps ->
                     preferredBandwidthKbps = kbps
-                    prefs.edit().putInt("preferredBandwidthKbps", kbps ?: -1).apply()
                 },
                 onBack = ::returnFromPlayer,
                 onRemoteStop = {

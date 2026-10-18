@@ -305,6 +305,12 @@ class MpvPlayer(
         onDiagnostic("mpv-track-missing", "$type ff-index $ffIndex not found", null)
     }
 
+    // Each external subtitle is a server-side conversion that demuxes the
+    // whole file, and sub-add blocks until it is downloaded. So only the
+    // track asked for is added, the first time it is asked for, off the main
+    // thread ("select" makes it current once loaded).
+    private val externalAdded = mutableSetOf<String>()
+
     private fun applyExternalSubtitle() {
         val wanted = wantedExternalSubtitle
         if (wanted == null) {
@@ -319,6 +325,11 @@ class MpvPlayer(
             mpv.setPropertyInt("sid", id)
             return
         }
+        if (!externalAdded.add(wanted)) return
+        val config = mediaItem?.localConfiguration?.subtitleConfigurations?.firstOrNull { it.id == wanted } ?: return
+        Thread({
+            if (!released) runCatching { mpv.command(arrayOf("sub-add", config.uri.toString(), "select", wanted, config.language.orEmpty())) }
+        }, "mpv-sub-add").start()
     }
 
     // ── mpv plumbing ──
@@ -401,12 +412,8 @@ class MpvPlayer(
             positionMs = target
             mpv.command(arrayOf("seek", seconds(target), "absolute"))
         }
+        externalAdded.clear()
         applyTrackSelection()
-        mediaItem?.localConfiguration?.subtitleConfigurations?.forEach { config ->
-            val title = config.id ?: return@forEach
-            runCatching { mpv.command(arrayOf("sub-add", config.uri.toString(), "auto", title, config.language.orEmpty())) }
-        }
-        if (wantedExternalSubtitle != null) applyExternalSubtitle()
         val info = JSONObject()
         listOf("file-format", "video-codec", "audio-codec-name", "hwdec-current", "current-vo", "current-ao", "track-list/count").forEach { name ->
             info.put(name, runCatching { mpv.getPropertyString(name) }.getOrNull().orEmpty())

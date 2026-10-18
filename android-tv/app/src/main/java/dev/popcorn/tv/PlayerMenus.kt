@@ -64,7 +64,7 @@ fun showNativeOriginalTrackMenu(
         })
     }
     tracks.forEach { track ->
-        choices.add(NativeChoice(track.label(), track.index == selectedIndex) {
+        choices.add(NativeChoice(track.primaryLabel(), track.index == selectedIndex, track.detailLabel()) {
             onSelected(track.index)
         })
     }
@@ -259,7 +259,7 @@ fun showNativeTrackMenu(
     )
 }
 
-private data class NativeChoice(val label: String, val selected: Boolean, val action: () -> Unit)
+private data class NativeChoice(val label: String, val selected: Boolean, val detail: String = "", val action: () -> Unit)
 
 private fun showNativeChoiceMenu(
     playerView: PlayerView,
@@ -296,7 +296,7 @@ private fun showNativeChoiceMenu(
         setBackgroundColor(0xFF111319.toInt())
         setPadding(dp(context, 0), dp(context, 10), dp(context, 0), dp(context, 10))
     }
-    val panelParams = FrameLayout.LayoutParams(dp(context, 340), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+    val panelParams = FrameLayout.LayoutParams(dp(context, 400), ViewGroup.LayoutParams.WRAP_CONTENT).apply {
         gravity = Gravity.END or Gravity.CENTER_VERTICAL
         marginEnd = dp(context, 32)
     }
@@ -305,10 +305,25 @@ private fun showNativeChoiceMenu(
     panel.addView(TextView(context).apply {
         text = title
         setTextColor(0xFFF47B35.toInt())
-        textSize = 15f
+        textSize = 17f
         typeface = Typeface.DEFAULT_BOLD
-        setPadding(dp(context, 16), dp(context, 8), dp(context, 16), dp(context, 10))
+        setPadding(dp(context, 18), dp(context, 8), dp(context, 18), dp(context, 10))
     })
+    // Remuxes and anime carry 20-30 subtitle tracks; without scrolling the
+    // rows ran off screen while still taking focus. Focusing a row scrolls it
+    // into view; the list is capped so the panel stays on screen.
+    val rowList = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+    val maxListHeight = (context.resources.displayMetrics.heightPixels * 0.75f).toInt()
+    val scroller = object : android.widget.ScrollView(context) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            super.onMeasure(widthMeasureSpec, View.MeasureSpec.makeMeasureSpec(maxListHeight, View.MeasureSpec.AT_MOST))
+        }
+    }.apply {
+        isVerticalScrollBarEnabled = true
+        isFocusable = false
+        addView(rowList, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+    panel.addView(scroller, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
     val rows = mutableListOf<TextView>()
     var selectedRow: TextView? = null
@@ -316,15 +331,22 @@ private fun showNativeChoiceMenu(
     fun addRow(choice: NativeChoice) {
         val rowIndex = rows.size
         val row = TextView(context).apply {
-            text = if (choice.selected) "\u2713  ${choice.label}" else "    ${choice.label}"
+            val head = if (choice.selected) "\u2713  ${choice.label}" else "     ${choice.label}"
+            text = if (choice.detail.isBlank()) head else android.text.SpannableStringBuilder(head).apply {
+                append("\n")
+                val start = length
+                append("     ${choice.detail}")
+                setSpan(android.text.style.RelativeSizeSpan(0.8f), start, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(android.text.style.ForegroundColorSpan(0xFF9AA3AE.toInt()), start, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
             setTextColor(if (choice.selected) 0xFFFFFFFF.toInt() else 0xFFE8ECF2.toInt())
-            textSize = 13f
+            textSize = 16f
             typeface = if (choice.selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
             isFocusable = true
             isClickable = true
-            setSingleLine(true)
+            maxLines = 2
             ellipsize = android.text.TextUtils.TruncateAt.END
-            setPadding(dp(context, 16), dp(context, 9), dp(context, 16), dp(context, 9))
+            setPadding(dp(context, 18), dp(context, 10), dp(context, 18), dp(context, 10))
             setBackgroundColor(if (choice.selected) 0x33B95525 else 0x00000000)
             setOnFocusChangeListener { view, focused ->
                 view.setBackgroundColor(if (focused) 0xFF19262E.toInt() else if (choice.selected) 0x33B95525 else 0x00000000)
@@ -363,7 +385,7 @@ private fun showNativeChoiceMenu(
         }
         if (choice.selected && selectedRow == null) selectedRow = row
         rows.add(row)
-        panel.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        rowList.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
 
     choices.forEach { addRow(it) }

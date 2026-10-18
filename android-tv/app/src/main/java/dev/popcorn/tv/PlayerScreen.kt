@@ -25,6 +25,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.first
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -80,6 +84,7 @@ fun PlayerScreen(
     initialAudioIndex: Int?,
     initialSubtitleIndex: Int?,
     initialStartPositionMs: Long,
+    resolveTrackPrefs: Boolean,
     initialBandwidthKbps: Int?,
     onBandwidthSelected: (Int?) -> Unit,
     onBack: () -> Unit,
@@ -113,6 +118,13 @@ fun PlayerScreen(
     var playbackSampleAtMs by remember(item.id) { mutableStateOf(SystemClock.elapsedRealtime()) }
     val pressedSeekKeys = remember(item.id) { mutableMapOf<Int, Long>() }
     val originalStreams = remember { mutableStateListOf<StreamInfo>() }
+    var streamsReady by remember(item.id) { mutableStateOf(false) }
+    // Shown as a card instead of leaving a black screen: an unplayable plan,
+    // or an engine error once the server fallback is used up.
+    var playbackError by remember(item.id) { mutableStateOf<String?>(null) }
+    var stoppedByLifecycle by remember(item.id) { mutableStateOf(false) }
+    var mediaStarted by remember(item.id) { mutableStateOf(false) }
+    val errorFocus = remember { FocusRequester() }
     // Fixed per player instance: switching engines mid-playback isn't supported.
     val useMpv = remember { PlaybackPrefs.useMpv }
     val playbackProfile = remember(context) { buildPlaybackProfile(context, mpv = useMpv) }
@@ -142,11 +154,14 @@ fun PlayerScreen(
             .onSuccess { streams ->
                 originalStreams.clear()
                 originalStreams.addAll(streams)
-                if (selectedAudioIndex == null) {
-                    selectedAudioIndex = streams.firstOrNull { it.type == "audio" && it.default }?.index
-                        ?: streams.firstOrNull { it.type == "audio" }?.index
+                if (resolveTrackPrefs) {
+                    selectedAudioIndex = preferredAudioIndex(streams.filter { it.type == "audio" })
+                    selectedSubtitleIndex = preferredSubtitleIndex(streams.filter { it.type == "subtitle" })
+                } else if (selectedAudioIndex == null) {
+                    selectedAudioIndex = preferredAudioIndex(streams.filter { it.type == "audio" && it.default }.ifEmpty { streams.filter { it.type == "audio" } })
                 }
             }
+        streamsReady = true
     }
 
     val exoPlayer: Player = remember {
@@ -445,6 +460,8 @@ fun PlayerScreen(
 
     fun applyPlaybackPlan(activeSession: Session, plan: PlaybackPlan, wasPlaying: Boolean, startMs: Long, showController: Boolean = true) {
         if (!plan.playable || plan.url.isBlank()) return
+        playbackError = null
+        mediaStarted = true
         val oldHlsSession = hlsSessionId
         activePlan = plan
         planUsesHls = plan.usesHls
@@ -517,6 +534,8 @@ fun PlayerScreen(
                     logClient("plan-unplayable", message = plan.reasons.joinToString("; ").take(230))
                     if (forceMode != "auto") {
                         requestPlaybackPlan(kbps, startMs, "auto", wasPlaying = shouldPlay, showController = showController)
+                    } else {
+                        playbackError = plan.reasons.joinToString("; ").ifBlank { "The server has no way to play this file." }
                     }
                     return@onSuccess
                 }
@@ -535,6 +554,7 @@ fun PlayerScreen(
                     selectedSubtitleIndex,
                 )
                 val oldHlsSession = hlsSessionId
+                mediaStarted = true
                 activePlan = null
                 planUsesHls = fallbackHlsSession != null
                 hlsSessionId = fallbackHlsSession
@@ -589,7 +609,9 @@ fun PlayerScreen(
 
     fun commitPendingSeek(showController: Boolean) {
         val target = pendingSeekTargetMs ?: return
-        seekToLogical(target, showController = showController)
+        // The viewer may have brought the OSD up while the seek was pending;
+        // a commit scheduled from hidden controls must not hide it again.
+        seekToLogical(target, showController = showController || playerView.isControllerFullyVisible)
     }
 
     fun schedulePendingSeekCommit(showController: Boolean) {
@@ -667,6 +689,11 @@ fun PlayerScreen(
 
     LaunchedEffect(item.id, session) {
         if (session == null) return@LaunchedEffect
+        // The plan carries the audio/subtitle choice (HLS bakes it in), so when
+        // the player resolves language preferences itself it waits for them.
+        if (resolveTrackPrefs) {
+            withTimeoutOrNull(3_000) { snapshotFlow { streamsReady }.first { it } }
+        }
         requestPlaybackPlan(selectedBandwidth, initialStartPositionMs.coerceAtLeast(0), forceModeForBandwidth(selectedBandwidth), wasPlaying = true)
     }
 
@@ -777,6 +804,15 @@ fun PlayerScreen(
                 // The native track menu owns all keys while open; let events reach
                 // its view listeners so BACK closes the menu, not the player.
                 playerView.findViewWithTag<View>(NativeTrackMenuTag) != null -> false
+                // Back closes the Up Next card rather than the player.
+                upNextCardVisible() && isBackKey(event.keyCode) -> {
+                    if (event.action == AndroidKeyEvent.ACTION_UP) upNextDismissed = true
+                    true
+                }
+                playbackError != null && isBackKey(event.keyCode) -> {
+                    if (event.action == AndroidKeyEvent.ACTION_UP) exitPlayer()
+                    true
+                }
                 isBackKey(event.keyCode) && event.action == AndroidKeyEvent.ACTION_DOWN -> {
                     logClient("player-back-dispatch", event)
                     if (event.repeatCount == 0) dismissOsdOrExit("player-back")
@@ -792,6 +828,12 @@ fun PlayerScreen(
         PlayerOsdBridge.handler = { event ->
             when {
                 playerView.findViewWithTag<View>(NativeTrackMenuTag) != null -> false
+                upNextCardVisible() && isBackKey(event.keyCode) -> {
+                    if (event.action == AndroidKeyEvent.ACTION_UP) upNextDismissed = true
+                    true
+                }
+                // The error card's buttons are Compose; let D-pad and OK reach them.
+                playbackError != null -> false
                 isBackKey(event.keyCode) && event.action == AndroidKeyEvent.ACTION_DOWN -> {
                     logClient("player-osd-back", event)
                     if (event.repeatCount == 0) dismissOsdOrExit("player-osd-back")
@@ -807,6 +849,19 @@ fun PlayerScreen(
                     // to the Compose overlay so its buttons can be focused and pressed.
                     false
                 }
+                // Media FF/REW seek with the OSD up too (media3 would call its own
+                // seekForward, which the mpv engine doesn't offer and HLS gets wrong).
+                (event.keyCode == AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD || event.keyCode == AndroidKeyEvent.KEYCODE_MEDIA_REWIND) && playerView.isControllerFullyVisible -> {
+                    if (event.action == AndroidKeyEvent.ACTION_UP) {
+                        pressedSeekKeys.remove(event.keyCode)
+                        schedulePendingSeekCommit(showController = true)
+                    } else if (shouldHandleSeekKey(event)) {
+                        pendingSeekJob?.cancel()
+                        pendingSeekTargetMs = pendingSeekTarget(pendingSeekTargetMs, event.keyCode)
+                        scheduleControllerAutoHide()
+                    }
+                    true
+                }
                 isHiddenSeekKey(event.keyCode) && !playerView.isControllerFullyVisible && playerView.findViewWithTag<View>(NativeTrackMenuTag) == null -> {
                     if (event.action == AndroidKeyEvent.ACTION_UP) {
                         pressedSeekKeys.remove(event.keyCode)
@@ -818,7 +873,15 @@ fun PlayerScreen(
                 }
                 isActionKey(event.keyCode) && !playerView.isControllerFullyVisible && playerView.findViewWithTag<View>(NativeTrackMenuTag) == null -> {
                     if (event.action == AndroidKeyEvent.ACTION_UP) {
-                        if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                        if (exoPlayer.isPlaying) {
+                            exoPlayer.pause()
+                            // Paused, PlayerView shows its controls with nothing
+                            // focused, and the next key was spent repairing focus.
+                            playerView.showController()
+                            focusPlayerControl()
+                        } else {
+                            exoPlayer.play()
+                        }
                     }
                     true
                 }
@@ -873,9 +936,17 @@ fun PlayerScreen(
         if (lifecycle == null) return@DisposableEffect onDispose {}
         val observer = LifecycleEventObserver { _, event ->
             logClient("lifecycle-${event.name.lowercase()}")
-            if (event == Lifecycle.Event.ON_STOP) {
+            if (event == Lifecycle.Event.ON_STOP && !exitingPlayer) {
                 reportProgress("stopped")
                 exoPlayer.stop()
+                stoppedByLifecycle = true
+            }
+            // Back from Home, an input switch or the screensaver: the engine was
+            // stopped, so load the plan again, paused where it left off, instead
+            // of leaving a dead black player.
+            if (event == Lifecycle.Event.ON_START && stoppedByLifecycle && !exitingPlayer) {
+                stoppedByLifecycle = false
+                requestPlaybackPlan(selectedBandwidth, logicalPositionMs(), forceModeForBandwidth(selectedBandwidth), wasPlaying = false)
             }
         }
         lifecycle.addObserver(observer)
@@ -889,9 +960,18 @@ fun PlayerScreen(
                     reportProgress("stopped", forceCompleted = true)
                     if (nextEpisode != null && !upNextDismissed) {
                         playNextEpisode()
+                    } else {
+                        // Nothing follows: leave instead of freezing on the last
+                        // frame with the OSD up.
+                        scope.launch {
+                            delay(1_500)
+                            if (exoPlayer.playbackState == Player.STATE_ENDED) exitPlayer()
+                        }
                     }
                 }
-                if (playbackState == Player.STATE_READY) {
+                // mpv applies its selection once per file load; re-applying it
+                // after every seek's rebuffer would only churn aid/sid.
+                if (playbackState == Player.STATE_READY && mpvPlayer == null) {
                     applyDirectTrackSelections()
                 }
             }
@@ -928,8 +1008,11 @@ fun PlayerScreen(
             override fun onPlayerError(error: PlaybackException) {
                 val activeSession = session ?: return
                 logClient("exo-error", message = "${error.errorCodeName}: ${error.message.orEmpty()}".take(230))
-                val failedPlan = activePlan ?: return
-                if (fallbackRetried) return
+                val failedPlan = activePlan
+                if (failedPlan == null || fallbackRetried) {
+                    playbackError = error.message ?: error.errorCodeName
+                    return
+                }
                 fallbackRetried = true
                 val position = logicalPositionMs()
                 scope.launch {
@@ -944,7 +1027,11 @@ fun PlayerScreen(
                     }.onSuccess { fallback ->
                         if (fallback != null) {
                             applyPlaybackPlan(activeSession, fallback, wasPlaying = true, startMs = position)
+                        } else {
+                            playbackError = error.message ?: error.errorCodeName
                         }
+                    }.onFailure {
+                        playbackError = error.message ?: error.errorCodeName
                     }
                 }
             }
@@ -1027,7 +1114,12 @@ fun PlayerScreen(
             }
         }
 
-        titleView?.text = if (item.kind == "episode") item.episodeTitle.ifBlank { item.title } else item.title
+        titleView?.text = if (item.kind == "episode") {
+            val code = if (item.seasonNumber > 0 && item.episodeNumber > 0) "S%02dE%02d".format(item.seasonNumber, item.episodeNumber) else ""
+            listOf(item.showTitle, code, item.episodeTitle.ifBlank { item.title }).filter { it.isNotBlank() }.joinToString("  \u00b7  ")
+        } else {
+            item.title
+        }
         if (clearLogoView != null && session != null) {
             val request = ImageRequest.Builder(context)
                 .data(imageUrl(session, item.id, "clearlogo", item.posterMtimeUnix.coerceAtLeast(item.backdropMtimeUnix)))
@@ -1162,8 +1254,21 @@ fun PlayerScreen(
         }
     }
 
+    LaunchedEffect(selectedSubtitleIndex, playerView) {
+        playerView.findViewById<ImageButton>(R.id.popcorn_subtitles)?.setImageResource(
+            if (selectedSubtitleIndex == null) androidx.media3.ui.R.drawable.exo_ic_subtitle_off else androidx.media3.ui.R.drawable.exo_ic_subtitle_on,
+        )
+    }
+
+    // Say what the server is actually doing: "Direct" used to show for any
+    // uncapped plan, even when the file was being remuxed or transcoded.
     LaunchedEffect(selectedBandwidth, activePlan?.mode, playerView) {
-        playerView.findViewById<TextView>(R.id.popcorn_bandwidth)?.text = bandwidthLabel(selectedBandwidth)
+        playerView.findViewById<TextView>(R.id.popcorn_bandwidth)?.text = when {
+            selectedBandwidth != null -> bandwidthLabel(selectedBandwidth)
+            activePlan?.mode == "remux" -> "Remux"
+            activePlan?.mode?.endsWith("transcode") == true -> "Transcode"
+            else -> bandwidthLabel(null)
+        }
     }
 
     LaunchedEffect(planUsesHls, playbackBaseMs, playerView, item.durationMs) {
@@ -1174,6 +1279,8 @@ fun PlayerScreen(
         val nativeDurationView = playerView.findViewById<TextView>(R.id.popcorn_duration)
         val positionView = playerView.findViewById<TextView>(R.id.popcorn_hls_position)
         val durationView = playerView.findViewById<TextView>(R.id.popcorn_hls_duration)
+        val endsView = playerView.findViewById<TextView>(R.id.popcorn_ends)
+        val clockFormat = android.text.format.DateFormat.getTimeFormat(context)
         nativeTimeBar?.visibility = if (planUsesHls) View.GONE else View.VISIBLE
         timeBar?.visibility = if (planUsesHls) View.VISIBLE else View.GONE
         nativePositionView?.visibility = if (planUsesHls) View.GONE else View.VISIBLE
@@ -1190,6 +1297,8 @@ fun PlayerScreen(
             val duration = logicalDurationMs()
             val position = pendingSeekTargetMs ?: logicalPositionMs()
             if (duration > 0) {
+                val remaining = (duration - position).coerceAtLeast(0)
+                endsView?.text = "-${fmtClock(remaining)}  \u00b7  ends ${clockFormat.format(java.util.Date(System.currentTimeMillis() + remaining))}"
                 if (planUsesHls) {
                     timeBar?.setDuration(duration)
                     timeBar?.setBufferedPosition(duration)
@@ -1279,8 +1388,16 @@ fun PlayerScreen(
     // Up Next card is visible, block the player from holding/reclaiming focus and
     // release it so the Compose overlay's buttons can take focus from the D-pad.
     val upNextVisible = nextEpisode != null && upNextSecondsLeft != null && !upNextDismissed && !advancingToNext
-    LaunchedEffect(upNextVisible) {
-        if (upNextVisible) {
+    val errorVisible = playbackError != null
+    LaunchedEffect(upNextVisible, errorVisible) {
+        if (errorVisible) {
+            playerView.hideController()
+            playerView.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+            playerView.isFocusable = false
+            playerView.clearFocus()
+            delay(120)
+            runCatching { errorFocus.requestFocus() }
+        } else if (upNextVisible) {
             playerView.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
             playerView.isFocusable = false
             playerView.clearFocus()
@@ -1301,6 +1418,28 @@ fun PlayerScreen(
             factory = { playerView },
             modifier = Modifier.fillMaxSize(),
         )
+        if (!mediaStarted && playbackError == null) {
+            // No media is set until the plan round trip returns, so PlayerView
+            // shows no buffering spinner of its own yet.
+            CircularProgressIndicator(color = Accent, modifier = Modifier.align(Alignment.Center))
+        }
+        playbackError?.let { message ->
+            PlaybackErrorCard(
+                message = message,
+                focusRequester = errorFocus,
+                onRetry = {
+                    playbackError = null
+                    fallbackRetried = false
+                    requestPlaybackPlan(selectedBandwidth, logicalPositionMs(), forceModeForBandwidth(selectedBandwidth), wasPlaying = true)
+                },
+                onTranscode = {
+                    playbackError = null
+                    fallbackRetried = false
+                    requestPlaybackPlan(selectedBandwidth, logicalPositionMs(), "transcode", wasPlaying = true)
+                },
+                onBack = { exitPlayer() },
+            )
+        }
         pendingSeekTargetMs?.let { target ->
             Text(
                 text = fmtClock(target),
@@ -1325,6 +1464,35 @@ fun PlayerScreen(
                 onDismiss = { upNextDismissed = true },
             )
             BackHandler { upNextDismissed = true }
+        }
+    }
+}
+
+@Composable
+private fun PlaybackErrorCard(
+    message: String,
+    focusRequester: FocusRequester,
+    onRetry: () -> Unit,
+    onTranscode: () -> Unit,
+    onBack: () -> Unit,
+) {
+    Box(Modifier.fillMaxSize().background(Color(0xB0000000)), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier
+                .widthIn(max = 560.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Color(0xF00B0E14))
+                .border(1.dp, Color.White.copy(alpha = .14f), RoundedCornerShape(14.dp))
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text("Couldn't play this", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Text(message, color = Color(0xFFB8C0CA), fontSize = 15.sp, maxLines = 4, overflow = TextOverflow.Ellipsis)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                FocusButton(label = "Retry", primary = true, modifier = Modifier.focusRequester(focusRequester), onClick = onRetry)
+                FocusButton(label = "Try transcoding", primary = false, onClick = onTranscode)
+                FocusButton(label = "Back", primary = false, onClick = onBack)
+            }
         }
     }
 }

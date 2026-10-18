@@ -525,6 +525,8 @@ class Api(private val session: Session) {
                 title = o.optString("title"),
                 default = o.optBoolean("default"),
                 forced = o.optBoolean("forced"),
+                channels = o.optInt("channels"),
+                profile = o.optString("profile"),
             )
         }
     }

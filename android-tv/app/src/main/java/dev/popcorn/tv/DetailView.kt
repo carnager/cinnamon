@@ -140,11 +140,7 @@ fun DetailView(
             .onSuccess { list ->
                 streams.clear()
                 streams.addAll(list)
-                val audios = list.filter { it.type == "audio" }
-                val defAudio = audios.firstOrNull { langMatches(it.language, PlaybackPrefs.audioLang) }
-                    ?: audios.firstOrNull { it.default }
-                    ?: audios.firstOrNull()
-                selectedAudio = defAudio?.index
+                selectedAudio = preferredAudioIndex(list.filter { it.type == "audio" })
                 selectedSubtitle = preferredSubtitleIndex(list.filter { it.type == "subtitle" })
                 streamsLoaded = true
             }

@@ -113,6 +113,14 @@ fun StreamInfo.looksForced(): Boolean {
     return title.contains("forced", ignoreCase = true) && !negatedForced.containsMatchIn(title)
 }
 
+// preferredAudioIndex picks the preferred-language audio track, else the
+// file's default, else the first.
+fun preferredAudioIndex(audios: List<StreamInfo>): Int? {
+    return (audios.firstOrNull { langMatches(it.language, PlaybackPrefs.audioLang) }
+        ?: audios.firstOrNull { it.default }
+        ?: audios.firstOrNull())?.index
+}
+
 // preferredSubtitleIndex resolves the stored preference against a file's
 // subtitle tracks. A forced pick never falls back to the full track; a plain
 // language pick prefers the full track but takes a forced one over nothing.

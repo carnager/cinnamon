@@ -199,7 +199,7 @@ fun DetailView(
         // Full-screen backdrop
         if (detailItem.backdropPath.isNotBlank() && session != null) {
             SizedAsyncImage(
-                model = imageUrl(session, detailItem.id, "backdrop", detailItem.backdropMtimeUnix),
+                model = imageUrl(session, detailItem.id, "backdrop", detailItem.backdropMtimeUnix, ArtworkBackdrop),
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
@@ -209,7 +209,7 @@ fun DetailView(
             )
         } else if (detailItem.posterPath.isNotBlank() && session != null) {
             SizedAsyncImage(
-                model = imageUrl(session, detailItem.id, "poster", detailItem.posterMtimeUnix),
+                model = imageUrl(session, detailItem.id, "poster", detailItem.posterMtimeUnix, ArtworkBackground),
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,

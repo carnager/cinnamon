@@ -24,6 +24,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import android.os.SystemClock
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -161,6 +162,10 @@ fun PopcornApp() {
     var seasonFocusEpisode by remember { mutableStateOf<Long?>(null) }
     var visibleContentRefresh by remember { mutableStateOf(0L) }
     var lastScanSignature by remember { mutableStateOf("") }
+    // The composition outlives onStop, so polling loops check this and idle
+    // while the app is in the background instead of hitting the server.
+    var appVisible by remember { mutableStateOf(true) }
+    var lastResumeRefreshAt by remember { mutableStateOf(0L) }
 
     fun showKey(show: ShowSummary): String = "${show.libraryId}\n${show.title.lowercase()}"
 
@@ -168,12 +173,16 @@ fun PopcornApp() {
         scope.launch {
             runCatching {
                 val api = Api(activeSession)
-                val progress = api.progressList()
-                val showProgress = api.showProgress()
+                val (progress, showProgress, ratings) = coroutineScope {
+                    val progress = async { api.progressList() }
+                    val showProgress = async { api.showProgress() }
+                    val ratings = async { api.userRatings() }
+                    Triple(progress.await(), showProgress.await(), ratings.await())
+                }
                 completedItems = progress.filter { it.completed }.map { it.itemId }.toSet()
                 resumeFractionById = resumeFractionMap(progress)
                 completedShows = showProgress.filter { it.completed }.map { "${it.libraryId}\n${it.showTitle.lowercase()}" }.toSet()
-                userItemRatings = api.userRatings().filter { it.kind != "show" && it.itemId > 0 }.associate { it.itemId to it.rating }
+                userItemRatings = ratings.filter { it.kind != "show" && it.itemId > 0 }.associate { it.itemId to it.rating }
             }
         }
     }
@@ -226,8 +235,10 @@ fun PopcornApp() {
         watchlistTvShows = payload.watchlist.shows
         watchlistItems = payload.watchlist.items.map { it.id }.toSet()
         watchlistShows = payload.watchlist.shows.map { showKey(it) }.toSet()
-        AppCache.writeHomeSections(context, activeSession, payload.sectionsJson)
-        AppCache.writeLibraries(context, activeSession, payload.libraries)
+        scope.launch(Dispatchers.IO) {
+            AppCache.writeHomeSections(context, activeSession, payload.sectionsJson)
+            AppCache.writeLibraries(context, activeSession, payload.libraries)
+        }
         if (showHome) screen = Screen.Home
         loading = false
         error = ""
@@ -559,7 +570,9 @@ fun PopcornApp() {
         val currentDevice = registered ?: deviceId
         if (currentDevice.isBlank()) return@LaunchedEffect
         while (true) {
-            delay(700)
+            // Fast only while playing, where the phone is used as a remote.
+            delay(if (screen is Screen.Player) 700 else 2_000)
+            if (!appVisible) continue
             runCatching { api.remoteCommands(currentDevice, lastRemoteCommandId) }
                 .onSuccess { commands ->
                     for (command in commands) {
@@ -593,11 +606,15 @@ fun PopcornApp() {
         if (!preserveFocusKey) libraryFocusKey = null
         scope.launch {
             error = ""
-            loading = true
             val previousLibraryID = activeLibrary?.id
             activeLibrary = library
-            items = emptyList()
-            shows = emptyList()
+            // A refresh of the library on screen (scan finished, resume) keeps
+            // the grid up until the new page arrives instead of blanking it.
+            val refreshInPlace = preserveFocusKey && library.id == previousLibraryID
+            if (!refreshInPlace) {
+                items = emptyList()
+                shows = emptyList()
+            }
             val shouldResetFilters = resetFiltersOnLibraryChange && page == 0 && library.id != previousLibraryID
             val activeGenre = if (shouldResetFilters) {
                 ""
@@ -617,15 +634,23 @@ fun PopcornApp() {
             libraryFullyLoaded = false
             loadingMore = false
             screen = Screen.LibraryPage(library)
+            loading = items.isEmpty() && shows.isEmpty()
             runCatching {
                 refreshProgress(activeSession)
                 refreshWatchlist(activeSession)
                 val api = Api(activeSession)
                 val pageSize = 500
                 val offset = pageIndex
-                libraryGenres = api.genres(library.id)
-                libraryDecades = api.decades(library.id, if (library.type == "tv") "tv" else "movie")
-                libraryAlphabet = if (activeSort.isBlank()) api.alphabet(library.id, if (library.type == "tv") "tv" else "movie", activeGenre, activeDecades) else emptyList()
+                val kind = if (library.type == "tv") "tv" else "movie"
+                // Independent requests: fetch them together, not one by one.
+                coroutineScope {
+                    val genres = async { api.genres(library.id) }
+                    val decades = async { api.decades(library.id, kind) }
+                    val alphabet = async { if (activeSort.isBlank()) api.alphabet(library.id, kind, activeGenre, activeDecades) else emptyList() }
+                    libraryGenres = genres.await()
+                    libraryDecades = decades.await()
+                    libraryAlphabet = alphabet.await()
+                }
                 if (library.type == "tv") {
                     val pageItems = api.showsPage(library.id, pageSize, offset, activeGenre, activeSort, activeMinRating, activeSeenStatus, activeDecades)
                     if (generation != loadGeneration) return@launch
@@ -647,25 +672,26 @@ fun PopcornApp() {
                     runCatching {
                         val api = Api(activeSession)
                         val pageSize = 500
-                        val canUpdateLibraryCache = pageIndex == 0 && activeGenre.isBlank() && activeSort.isBlank() && activeMinRating <= 0.0 && activeSeenStatus.isBlank() && activeDecades.isBlank()
                         var offset = pageIndex + if (library.type == "tv") shows.size else items.size
+                        // Accumulate here and publish one list per page; the old
+                        // `list + page` re-copied and re-deduplicated everything.
+                        val shownShows = ArrayList(shows)
+                        val seenShows = shows.mapTo(HashSet()) { showKey(it) }
+                        val shownItems = ArrayList(items)
+                        val seenItems = items.mapTo(HashSet()) { it.id }
                         while (true) {
                             if (library.type == "tv") {
                                 val pageItems = api.showsPage(library.id, pageSize, offset, activeGenre, activeSort, activeMinRating, activeSeenStatus, activeDecades)
                                 if (generation != loadGeneration) return@launch
-                                shows = (shows + pageItems).distinctBy { showKey(it) }
-                                if (canUpdateLibraryCache) {
-                                    AppCache.writeShows(context, activeSession, library.id, shows, pageItems.size < pageSize)
-                                }
+                                pageItems.filterTo(shownShows) { seenShows.add(showKey(it)) }
+                                shows = shownShows.toList()
                                 if (pageItems.size < pageSize) break
                                 offset += pageSize
                             } else {
                                 val pageItems = api.itemsPage(library.id, pageSize, offset, activeGenre, activeSort, activeMinRating, activeSeenStatus, activeDecades)
                                 if (generation != loadGeneration) return@launch
-                                items = (items + pageItems).distinctBy { it.id }
-                                if (canUpdateLibraryCache) {
-                                    AppCache.writeItems(context, activeSession, library.id, items, pageItems.size < pageSize)
-                                }
+                                pageItems.filterTo(shownItems) { seenItems.add(it.id) }
+                                items = shownItems.toList()
                                 if (pageItems.size < pageSize) break
                                 offset += pageSize
                             }
@@ -713,7 +739,8 @@ fun PopcornApp() {
         val api = Api(active)
         lastScanSignature = runCatching { scanSignature(api.scanStatus()) }.getOrDefault("")
         while (true) {
-            delay(4_000)
+            delay(15_000)
+            if (!appVisible) continue
             val statuses = runCatching { api.scanStatus() }.getOrNull() ?: continue
             if (statuses.any { it.status == "running" }) continue
             val signature = scanSignature(statuses)
@@ -736,15 +763,23 @@ fun PopcornApp() {
             onDispose { }
         } else {
             val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_START) appVisible = true
+                if (event == Lifecycle.Event.ON_STOP) appVisible = false
                 if (event == Lifecycle.Event.ON_RESUME) {
                     refreshProgress(activeSession)
                     refreshWatchlist(activeSession)
-                    refreshUpdateAvailable(activeSession)
-                    when (val current = screen) {
-                        Screen.Home -> if (libraries.isNotEmpty()) loadHome(activeSession, libraries)
-                        is Screen.LibraryPage -> loadLibraryPage(current.library, activeSession, pageIndex, selectedGenre, selectedSort, selectedMinRating, selectedSeenStatus, preserveFocusKey = true)
-                        is Screen.Show, is Screen.Season -> visibleContentRefresh += 1
-                        else -> Unit
+                    // Resume fires after every trailer, screensaver and settings
+                    // detour; reloading whole screens each time cost a spinner and
+                    // the scroll position. Progress and watchlist above are enough;
+                    // content refreshes at most every few minutes.
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lastResumeRefreshAt >= 5 * 60_000L) {
+                        lastResumeRefreshAt = now
+                        when (screen) {
+                            Screen.Home -> if (libraries.isNotEmpty()) loadHome(activeSession, libraries)
+                            is Screen.Show, is Screen.Season -> visibleContentRefresh += 1
+                            else -> Unit
+                        }
                     }
                 }
             }
@@ -757,7 +792,7 @@ fun PopcornApp() {
         val active = session ?: return@LaunchedEffect
         delay(8000)
         while (true) {
-            updateAvailable = runCatching { Api(active).tvUpdate(appVersionCode(context)).available }.getOrDefault(false)
+            if (appVisible) updateAvailable = runCatching { Api(active).tvUpdate(appVersionCode(context)).available }.getOrDefault(false)
             delay(5 * 60 * 1000)
         }
     }

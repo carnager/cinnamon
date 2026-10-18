@@ -364,8 +364,8 @@ fun ShowHeader(
     Box(Modifier.fillMaxWidth().height(304.dp)) {
         val episodeBackdropUrl = if (focusedEpisode != null && session != null) {
             when {
-                focusedEpisode.backdropPath.isNotBlank() -> imageUrl(session, focusedEpisode.id, "backdrop", focusedEpisode.backdropMtimeUnix)
-                focusedEpisode.posterPath.isNotBlank() -> imageUrl(session, focusedEpisode.id, "poster", focusedEpisode.posterMtimeUnix)
+                focusedEpisode.backdropPath.isNotBlank() -> imageUrl(session, focusedEpisode.id, "backdrop", focusedEpisode.backdropMtimeUnix, ArtworkBackdrop)
+                focusedEpisode.posterPath.isNotBlank() -> imageUrl(session, focusedEpisode.id, "poster", focusedEpisode.posterMtimeUnix, ArtworkBackdrop)
                 else -> ""
             }
         } else {
@@ -383,7 +383,7 @@ fun ShowHeader(
             )
         } else if (show.backdropItemId > 0 && session != null) {
             SizedAsyncImage(
-                model = imageUrl(session, show.backdropItemId, "backdrop", show.backdropMtimeUnix),
+                model = imageUrl(session, show.backdropItemId, "backdrop", show.backdropMtimeUnix, ArtworkBackdrop),
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,

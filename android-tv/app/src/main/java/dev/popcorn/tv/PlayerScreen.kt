@@ -1180,7 +1180,13 @@ fun PlayerScreen(
         nativeDurationView?.visibility = if (planUsesHls) View.GONE else View.VISIBLE
         positionView?.visibility = if (planUsesHls) View.VISIBLE else View.GONE
         durationView?.visibility = if (planUsesHls) View.VISIBLE else View.GONE
+        var shownPlaying: Boolean? = null
         while (true) {
+            // Nothing to update while the OSD is hidden.
+            if (!playerView.isControllerFullyVisible) {
+                delay(250)
+                continue
+            }
             val duration = logicalDurationMs()
             val position = pendingSeekTargetMs ?: logicalPositionMs()
             if (duration > 0) {
@@ -1198,13 +1204,16 @@ fun PlayerScreen(
                     nativePositionView?.text = fmtClock(position)
                 }
             }
-            playPauseButton?.setImageResource(
-                if (exoPlayer.isPlaying) {
-                    androidx.media3.ui.R.drawable.exo_icon_pause
-                } else {
-                    androidx.media3.ui.R.drawable.exo_icon_play
-                },
-            )
+            if (shownPlaying != exoPlayer.isPlaying) {
+                shownPlaying = exoPlayer.isPlaying
+                playPauseButton?.setImageResource(
+                    if (exoPlayer.isPlaying) {
+                        androidx.media3.ui.R.drawable.exo_icon_pause
+                    } else {
+                        androidx.media3.ui.R.drawable.exo_icon_play
+                    },
+                )
+            }
             delay(250)
         }
     }
@@ -1237,7 +1246,11 @@ fun PlayerScreen(
         remoteCommand?.let { applyRemoteCommand(it) }
     }
 
+    // The phone remote shows this state: send it when it changes, plus a 3s
+    // heartbeat for its position readout, instead of a PUT every second.
     LaunchedEffect(deviceId, item.id, exoPlayer) {
+        var lastState = ""
+        var lastSentAt = 0L
         while (true) {
             delay(1_000)
             val state = when {
@@ -1246,7 +1259,12 @@ fun PlayerScreen(
                 exoPlayer.playbackState == Player.STATE_BUFFERING -> "buffering"
                 else -> "paused"
             }
-            reportRemoteState(state)
+            val now = SystemClock.elapsedRealtime()
+            if (state != lastState || now - lastSentAt >= 3_000) {
+                lastState = state
+                lastSentAt = now
+                reportRemoteState(state)
+            }
         }
     }
 

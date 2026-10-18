@@ -29,24 +29,12 @@ object AppCache {
         runCatching {
             val arr = JSONArray()
             libraries.forEach { arr.put(libraryToJson(it)) }
-            cacheFile(context, session, "libraries").writeText(arr.toString())
+            val file = cacheFile(context, session, "libraries")
+            file.writeText(arr.toString())
+            // Per-library item/show caches were written on every page load but
+            // never read; drop what older versions left behind.
+            file.parentFile?.listFiles { f -> f.name.startsWith("items_") || f.name.startsWith("shows_") }?.forEach { it.delete() }
         }
-    }
-
-    fun readItems(context: Context, session: Session, libraryId: String): CachedList<PopItem> {
-        return readCachedList(cacheFile(context, session, "items_$libraryId"), ::jsonToItem)
-    }
-
-    fun writeItems(context: Context, session: Session, libraryId: String, items: List<PopItem>, fullyLoaded: Boolean) {
-        writeCachedList(cacheFile(context, session, "items_$libraryId"), items, fullyLoaded, ::itemToJson)
-    }
-
-    fun readShows(context: Context, session: Session, libraryId: String): CachedList<ShowSummary> {
-        return readCachedList(cacheFile(context, session, "shows_$libraryId"), ::jsonToShow)
-    }
-
-    fun writeShows(context: Context, session: Session, libraryId: String, shows: List<ShowSummary>, fullyLoaded: Boolean) {
-        writeCachedList(cacheFile(context, session, "shows_$libraryId"), shows, fullyLoaded, ::showToJson)
     }
 
     fun readHomeSections(context: Context, session: Session): List<HomeSection> {
@@ -57,25 +45,6 @@ object AppCache {
 
     fun writeHomeSections(context: Context, session: Session, sectionsJson: String) {
         runCatching { cacheFile(context, session, "home_sections").writeText(sectionsJson) }
-    }
-
-    private fun <T> readCachedList(file: File, parser: (JSONObject) -> T): CachedList<T> {
-        return runCatching {
-            val root = JSONObject(file.readText())
-            val arr = root.getJSONArray("entries")
-            CachedList(
-                entries = (0 until arr.length()).map { parser(arr.getJSONObject(it)) },
-                fullyLoaded = root.optBoolean("fullyLoaded", false),
-            )
-        }.getOrDefault(CachedList(emptyList(), false))
-    }
-
-    private fun <T> writeCachedList(file: File, entries: List<T>, fullyLoaded: Boolean, writer: (T) -> JSONObject) {
-        runCatching {
-            val arr = JSONArray()
-            entries.forEach { arr.put(writer(it)) }
-            file.writeText(JSONObject().put("fullyLoaded", fullyLoaded).put("entries", arr).toString())
-        }
     }
 
     private fun cacheFile(context: Context, session: Session, name: String): File {
@@ -122,23 +91,6 @@ private fun jsonToShow(o: JSONObject): ShowSummary {
         year = o.optInt("year"),
         endYear = o.optInt("endYear"),
     )
-}
-
-private fun showToJson(show: ShowSummary): JSONObject {
-    return JSONObject()
-        .put("libraryId", show.libraryId)
-        .put("title", show.title)
-        .put("year", show.year)
-        .put("endYear", show.endYear)
-        .put("episodeCount", show.episodeCount)
-        .put("seasonCount", show.seasonCount)
-        .put("posterItemId", show.posterItemId)
-        .put("posterMtimeUnix", show.posterMtimeUnix)
-        .put("backdropItemId", show.backdropItemId)
-        .put("backdropMtimeUnix", show.backdropMtimeUnix)
-        .put("overview", show.overview)
-        .put("genres", show.genres)
-        .put("rating", show.rating)
 }
 
 private fun jsonToHomeLayout(o: JSONObject): HomeLayout {
@@ -235,43 +187,6 @@ private fun jsonToItem(o: JSONObject): PopItem {
             )
         },
     )
-}
-
-private fun itemToJson(item: PopItem): JSONObject {
-    return JSONObject()
-        .put("id", item.id)
-        .put("libraryId", item.libraryId)
-        .put("kind", item.kind)
-        .put("title", item.title)
-        .put("originalTitle", item.originalTitle)
-        .put("year", item.year)
-        .put("durationMs", item.durationMs)
-        .put("videoCodec", item.videoCodec)
-        .put("audioCodec", item.audioCodec)
-        .put("imdbId", item.imdbId)
-        .put("tmdbId", item.tmdbId)
-        .put("tvdbId", item.tvdbId)
-        .put("width", item.width)
-        .put("height", item.height)
-        .put("posterPath", item.posterPath)
-        .put("posterMtimeUnix", item.posterMtimeUnix)
-        .put("backdropPath", item.backdropPath)
-        .put("backdropMtimeUnix", item.backdropMtimeUnix)
-        .put("overview", item.overview)
-        .put("tagline", item.tagline)
-        .put("officialRating", item.officialRating)
-        .put("genres", item.genres)
-        .put("tags", item.tags)
-        .put("studios", item.studios)
-        .put("directors", item.directors)
-        .put("writers", item.writers)
-        .put("countries", item.countries)
-        .put("premiered", item.premiered)
-        .put("rating", item.rating)
-        .put("showTitle", item.showTitle)
-        .put("seasonNumber", item.seasonNumber)
-        .put("episodeNumber", item.episodeNumber)
-        .put("episodeTitle", item.episodeTitle)
 }
 
 private fun jsonToActor(o: JSONObject): Actor {

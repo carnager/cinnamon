@@ -158,10 +158,17 @@ fun notInterestedKey(show: ShowSummary): String = "show:${show.libraryId.trim().
 
 // Artwork width the server will generate for card-sized images (see
 // internal/server/thumbs.go — requests snap up to the nearest bucket, 400 or
-// 800). Source posters are routinely 1000x1500, so a shelf of cards otherwise
-// pulls megabytes per row. Full-screen backdrops omit the width and keep the
-// original, which a 1080p panel can actually use.
+// 800, 1280). Source posters are routinely 1000x1500, so a shelf of cards
+// otherwise pulls megabytes per row.
 const val ArtworkCard = 400
+
+// Full-screen backdrops. Originals are often 3840x2160: an 8MB+ bitmap to
+// fetch and decode on a 32-bit TV box, evicting posters from the memory cache,
+// and invisible as such behind the gradients they sit under.
+const val ArtworkBackdrop = 1280
+
+// Dimmed, blurred-looking page backgrounds (library grid) need even less.
+const val ArtworkBackground = 800
 
 fun imageUrl(session: Session?, itemId: Long, kind: String, version: Long = 0, width: Int = 0): String {
     if (session == null || itemId <= 0) return ""

@@ -15,7 +15,9 @@ import (
 
 // thumbWidths lists the only sizes the server will generate. Requests snap up
 // to the nearest bucket so arbitrary ?w= values cannot blow up the cache.
-var thumbWidths = []int{200, 400, 800}
+// 1280 serves full-screen backdrops: behind the TV app's gradients it is
+// indistinguishable from a 4K original at a fraction of the decode cost.
+var thumbWidths = []int{200, 400, 800, 1280}
 
 // thumbMaxAge bounds cache growth: artwork churn leaves orphaned entries
 // behind (the cache key includes the source mtime), so anything this old is

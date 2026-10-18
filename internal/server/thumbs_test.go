@@ -33,7 +33,9 @@ func TestNormalizeThumbWidth(t *testing.T) {
 		{"400", 400},
 		{"401", 800},
 		{"800", 800},
-		{"5000", 800},
+		{"801", 1280},
+		{"1280", 1280},
+		{"5000", 1280},
 	}
 	for _, tc := range cases {
 		if got := normalizeThumbWidth(tc.raw); got != tc.want {

@@ -90,6 +90,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
+import androidx.compose.runtime.State
+import androidx.compose.ui.graphics.CompositingStrategy
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -725,7 +727,9 @@ fun LibraryPageView(
     onShowMenu: (ShowSummary, FocusRequester?) -> Unit,
 ) {
     var restoreGridFocus by remember(activeLibrary.id, pageIndex, selectedGenre) { mutableStateOf<FocusRequester?>(null) }
-    var focusedBackdrop by remember(activeLibrary.id) { mutableStateOf<BrowseBackdropPreview?>(null) }
+    // Held as a State object and read only inside BrowseBackdropLayer: reading
+    // it here recomposed the whole library page on every D-pad move.
+    val focusedBackdrop = remember(activeLibrary.id) { mutableStateOf<BrowseBackdropPreview?>(null) }
     var focusedAlphabetLetter by remember(activeLibrary.id, pageIndex, selectedGenre, selectedSort) { mutableStateOf<String?>(null) }
     var suppressSideNavigationExpansion by remember { mutableStateOf(false) }
     var refocusAlphabetAfterJump by remember { mutableStateOf(false) }
@@ -839,7 +843,7 @@ fun LibraryPageView(
                                 gridEntryFocusPending = false
                                 restoreGridFocus = focusRequester
                                 focusedAlphabetLetter = railAlphabetLetter(show.title)
-                                focusedBackdrop = show.backdropPreview()
+                                focusedBackdrop.value = show.backdropPreview()
                             },
                             onLeftEdge = if (column == 0) {
                                 {
@@ -900,7 +904,7 @@ fun LibraryPageView(
                                 gridEntryFocusPending = false
                                 restoreGridFocus = focusRequester
                                 focusedAlphabetLetter = railAlphabetLetter(item.title)
-                                focusedBackdrop = item.backdropPreview()
+                                focusedBackdrop.value = item.backdropPreview()
                             },
                             onLeftEdge = if (column == 0) {
                                 {
@@ -948,15 +952,29 @@ private fun ShowSummary.backdropPreview(): BrowseBackdropPreview? = when {
 }
 
 @Composable
-private fun BrowseBackdropLayer(session: Session?, preview: BrowseBackdropPreview?) {
-    if (session != null && preview != null) {
+private fun BrowseBackdropLayer(session: Session?, target: State<BrowseBackdropPreview?>) {
+    // Follow focus only once it settles: scrolling through a row used to fetch
+    // and decode a backdrop for every card passed.
+    var preview by remember { mutableStateOf<BrowseBackdropPreview?>(null) }
+    val wanted = target.value
+    LaunchedEffect(wanted) {
+        if (preview != null) delay(400)
+        preview = wanted
+    }
+    val shown = preview
+    if (session != null && shown != null) {
         SizedAsyncImage(
-            model = imageUrl(session, preview.itemId, preview.type, preview.version),
+            model = imageUrl(session, shown.itemId, shown.type, shown.version, ArtworkBackground),
             contentDescription = null,
-            modifier = Modifier.fillMaxSize().graphicsLayer { alpha = .14f },
+            // ModulateAlpha draws the image at 14% directly instead of through
+            // a full-screen offscreen buffer every frame.
+            modifier = Modifier.fillMaxSize().graphicsLayer {
+                alpha = .14f
+                compositingStrategy = CompositingStrategy.ModulateAlpha
+            },
             contentScale = ContentScale.Crop,
-            widthPx = if (preview.type == "backdrop") 1920 else 900,
-            heightPx = if (preview.type == "backdrop") 1080 else 900,
+            widthPx = if (shown.type == "backdrop") 960 else 600,
+            heightPx = if (shown.type == "backdrop") 540 else 600,
             authToken = session.token,
         )
     }
@@ -1688,7 +1706,7 @@ private fun HomeHero(
             Box(Modifier.fillMaxSize()) {
                 if (session != null) {
                     SizedAsyncImage(
-                        model = imageUrl(session, current.backdropId, "backdrop", current.backdropVersion),
+                        model = imageUrl(session, current.backdropId, "backdrop", current.backdropVersion, ArtworkBackdrop),
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,

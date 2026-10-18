@@ -290,7 +290,6 @@ data class PopItem(
     val actors: List<Actor> = emptyList(),
 )
 
-data class CachedList<T>(val entries: List<T>, val fullyLoaded: Boolean)
 data class AppUpdateInfo(
     val configured: Boolean,
     val available: Boolean,

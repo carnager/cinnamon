@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -536,14 +537,27 @@ private fun DetailHeroContent(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // One press plays: Resume when there is a resume point, from
+                // the start otherwise. Restarting and resetting moved to their
+                // own button instead of a sheet in front of every play.
                 PlayButton(
-                    label = "Play",
+                    label = if (canResume) "Resume" else "Play",
                     detail = if (canResume) fmtClock(resumePositionMs) else null,
                     focusRequester = playFocus,
                     onUp = { requestDetailFocus(descriptionFocus) },
                     onDown = { requestDetailFocus(castFocus) },
-                    onClick = { if (hasSavedProgress) resumeMenuOpen = true else onPlayFromStart() },
+                    onClick = { if (canResume) onResume() else onPlayFromStart() },
                 )
+                if (hasSavedProgress) {
+                    ActionToggle(
+                        label = "Start over",
+                        icon = Icons.Filled.Replay,
+                        active = false,
+                        onUp = { requestDetailFocus(descriptionFocus) },
+                        onDown = { requestDetailFocus(castFocus) },
+                        onClick = { resumeMenuOpen = true },
+                    )
+                }
                 ActionToggle(
                     label = "Trailer",
                     icon = Icons.Filled.PlayCircleOutline,
@@ -607,14 +621,8 @@ private fun DetailHeroContent(
     if (resumeMenuOpen) {
         TvSelectionShelf(
             title = "PLAYBACK",
-            subtitle = "Continue watching?",
+            subtitle = "Start over?",
             options = buildList {
-                if (canResume) {
-                    add(TvSelectionOption("Resume from ${fmtClock(resumePositionMs)}", selected = true) {
-                        resumeMenuOpen = false
-                        onResume()
-                    })
-                }
                 add(TvSelectionOption("Play from beginning") {
                     resumeMenuOpen = false
                     onPlayFromStart()

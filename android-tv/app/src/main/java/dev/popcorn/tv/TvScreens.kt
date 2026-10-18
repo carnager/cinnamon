@@ -185,6 +185,15 @@ fun ShowView(
         val verb = if ((resumeProgress[episode.id] ?: 0f) > 0f) "Continue" else "Play"
         "$verb S%02dE%02d".format(episode.seasonNumber, episode.episodeNumber)
     }.orEmpty()
+    // Opening a show from a shelf: the likely next step is "Continue SxxEyy",
+    // so start there rather than on the season tabs.
+    val hasNextEpisode = nextEpisode != null
+    LaunchedEffect(hasNextEpisode) {
+        if (hasNextEpisode && !startWithEpisodes) {
+            delay(250)
+            requestTvFocus(actionFocus)
+        }
+    }
 
     Box(Modifier.fillMaxSize().background(Bg)) {
         Column(Modifier.fillMaxSize()) {
@@ -909,18 +918,9 @@ private fun EpisodeLandscapeCard(
                 EpisodeStill(session, item, Modifier.fillMaxSize())
                 PosterCornerMarks(watched, watchlisted, item.rating)
                 val progress = LocalResumeProgress.current[item.id] ?: 0f
+                // No ▶ badge: OK opens the episode's page, and the badge
+                // promised playback.
                 if (progress > 0f) PosterProgressBar(progress)
-                Box(
-                    Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(8.dp)
-                        .size(28.dp)
-                        .clip(RoundedCornerShape(99.dp))
-                        .background(Color.White.copy(alpha = .92f)),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(Icons.Filled.PlayArrow, contentDescription = "Play episode", tint = Bg, modifier = Modifier.size(17.dp))
-                }
             }
             Column(
                 Modifier.weight(1f).padding(horizontal = 13.dp, vertical = 10.dp),

@@ -286,13 +286,24 @@ fun PlayerScreen(
 
     mpvPlayer?.onDiagnostic = { event, message, extra -> logClient(event, message = message.take(230), extra = extra) }
 
-    fun boundarySeekTarget(currentMs: Long, forward: Boolean): Long {
-        val step = 30_000L
-        return if (forward) {
-            ((currentMs / step) + 1L) * step
-        } else {
-            (((currentMs - 1L).coerceAtLeast(0L) / step) * step).coerceAtLeast(0L)
-        }
+    // Seek steps follow the TV convention: a tap moves 10s from the target
+    // already shown, and holding speeds up. It used to snap to 30s boundaries
+    // (at 12:17, LEFT went back 17s), add 30s per key repeat (~10 minutes per
+    // second held) and run past the end of the film.
+    var seekRepeat by remember(item.id) { mutableStateOf(0) }
+
+    fun seekStepMs(repeat: Int): Long = when {
+        repeat < 5 -> 10_000L
+        repeat < 15 -> 30_000L
+        repeat < 30 -> 60_000L
+        else -> 120_000L
+    }
+
+    fun relativeSeekTarget(currentMs: Long, forward: Boolean, repeat: Int = 0): Long {
+        val step = seekStepMs(repeat)
+        val target = if (forward) currentMs + step else currentMs - step
+        val duration = logicalDurationMs()
+        return if (duration > 0) target.coerceIn(0L, (duration - 5_000L).coerceAtLeast(0L)) else target.coerceAtLeast(0L)
     }
 
     fun isHiddenSeekKeyCode(keyCode: Int): Boolean = keyCode == AndroidKeyEvent.KEYCODE_DPAD_LEFT ||
@@ -309,7 +320,11 @@ fun PlayerScreen(
         if (event.action != AndroidKeyEvent.ACTION_DOWN) return false
         val lastDown = pressedSeekKeys[event.keyCode]
         if (event.repeatCount == 0 && lastDown != null && event.eventTime - lastDown < 80L) return false
+        // Key repeat arrives ~20/s; about 8 steps a second keeps a hold
+        // controllable.
+        if (event.repeatCount > 0 && lastDown != null && event.eventTime - lastDown < 120L) return false
         pressedSeekKeys[event.keyCode] = event.eventTime
+        seekRepeat = event.repeatCount
         return true
     }
 
@@ -600,9 +615,9 @@ fun PlayerScreen(
         val current = currentTargetMs ?: logicalPositionMs()
         return when (keyCode) {
             AndroidKeyEvent.KEYCODE_DPAD_LEFT,
-            AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> boundarySeekTarget(current, forward = false)
+            AndroidKeyEvent.KEYCODE_MEDIA_REWIND -> relativeSeekTarget(current, forward = false, repeat = seekRepeat)
             AndroidKeyEvent.KEYCODE_DPAD_RIGHT,
-            AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> boundarySeekTarget(current, forward = true)
+            AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> relativeSeekTarget(current, forward = true, repeat = seekRepeat)
             else -> null
         }
     }
@@ -706,12 +721,17 @@ fun PlayerScreen(
         nextEpisode = episodeAfter(episodes, item)
     }
 
-    // Surface the Up Next countdown over the last seconds of playback.
+    // Surface the Up Next countdown. With a credits chapter (mpv reads the
+    // file's chapters) the card appears when the credits start and counts
+    // down 15s of actual playback, then advances; otherwise it covers the
+    // last 25s and the end of the file advances. Paused, the count holds.
     LaunchedEffect(item.id, nextEpisode, exoPlayer) {
         if (nextEpisode == null) {
             upNextSecondsLeft = null
             return@LaunchedEffect
         }
+        var creditsStartMs: Long? = null
+        var creditsPlayedMs = 0L
         while (true) {
             delay(500)
             if (upNextDismissed || advancingToNext) {
@@ -719,14 +739,31 @@ fun PlayerScreen(
                 continue
             }
             val duration = logicalDurationMs()
-            val remaining = duration - logicalPositionMs()
-            upNextSecondsLeft = if (duration > 0 &&
-                exoPlayer.playbackState == Player.STATE_READY &&
-                remaining in 1..UpNextLeadMs
-            ) {
-                ((remaining + 999) / 1000).toInt()
-            } else {
-                null
+            val position = logicalPositionMs()
+            val remaining = duration - position
+            val ready = duration > 0 && exoPlayer.playbackState == Player.STATE_READY
+            // Chapter times are file times: only meaningful when direct-playing.
+            if (creditsStartMs == null && ready && mpvPlayer != null && !planUsesHls) {
+                creditsStartMs = mpvPlayer.creditsStartMs()?.takeIf { it > duration * 0.7 && it < duration - 10_000 } ?: -1L
+            }
+            val credits = creditsStartMs?.takeIf { it > 0 }
+            upNextSecondsLeft = when {
+                !ready -> null
+                credits != null && position >= credits -> {
+                    if (exoPlayer.isPlaying) creditsPlayedMs += 500
+                    val left = ((UpNextCreditsMs - creditsPlayedMs + 999) / 1000).toInt()
+                    if (left <= 0) {
+                        playNextEpisode()
+                        null
+                    } else {
+                        left
+                    }
+                }
+                credits == null && remaining in 1..UpNextLeadMs -> ((remaining + 999) / 1000).toInt()
+                else -> {
+                    if (credits != null) creditsPlayedMs = 0L
+                    null
+                }
             }
         }
     }
@@ -1158,12 +1195,12 @@ fun PlayerScreen(
         }
         playerView.findViewById<View>(R.id.popcorn_rew)?.setOnKeyListener(controllerKeyListener)
         playerView.findViewById<View>(R.id.popcorn_rew)?.setOnClickListener {
-            seekToLogical(boundarySeekTarget(logicalPositionMs(), forward = false))
+            seekToLogical(relativeSeekTarget(logicalPositionMs(), forward = false))
             scheduleControllerAutoHide()
         }
         playerView.findViewById<View>(R.id.popcorn_ffwd)?.setOnKeyListener(controllerKeyListener)
         playerView.findViewById<View>(R.id.popcorn_ffwd)?.setOnClickListener {
-            seekToLogical(boundarySeekTarget(logicalPositionMs(), forward = true))
+            seekToLogical(relativeSeekTarget(logicalPositionMs(), forward = true))
             scheduleControllerAutoHide()
         }
         activeTimeBar?.setOnKeyListener(timeBarKeyListener)
@@ -1441,8 +1478,10 @@ fun PlayerScreen(
             )
         }
         pendingSeekTargetMs?.let { target ->
+            val offset = target - logicalPositionMs()
+            val sign = if (offset >= 0) "+" else "\u2212"
             Text(
-                text = fmtClock(target),
+                text = "${fmtClock(target)}   $sign${fmtClock(kotlin.math.abs(offset))}",
                 color = Color.White,
                 fontSize = 36.sp,
                 fontWeight = FontWeight.Bold,
@@ -1499,6 +1538,9 @@ private fun PlaybackErrorCard(
 
 // Window before the end of an episode during which the Up Next card appears.
 private const val UpNextLeadMs = 25_000L
+
+// Credits played before Up Next advances, when the file marks its credits.
+private const val UpNextCreditsMs = 15_000L
 
 // Next episode in show order: prefer the position in the returned list, fall
 // back to the first episode after the current one by (season, episode).

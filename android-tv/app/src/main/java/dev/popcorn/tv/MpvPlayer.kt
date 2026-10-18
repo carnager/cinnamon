@@ -27,6 +27,8 @@ import java.util.Locale
 //
 // Tracks are addressed by ffmpeg stream index (what the server reports), not
 // through media3 track selection: see selectTracks / selectExternalSubtitle.
+private val creditsChapter = Regex("""^\s*(end\s*credits|credits|ending|ed|outro|abspann|nachspann)\b""", RegexOption.IGNORE_CASE)
+
 @OptIn(UnstableApi::class)
 class MpvPlayer(
     context: Context,
@@ -330,6 +332,20 @@ class MpvPlayer(
         Thread({
             if (!released) runCatching { mpv.command(arrayOf("sub-add", config.uri.toString(), "select", wanted, config.language.orEmpty())) }
         }, "mpv-sub-add").start()
+    }
+
+    // Start of the end credits, from the file's chapter titles (anime and
+    // most Blu-ray rips mark them), or null.
+    fun creditsStartMs(): Long? {
+        if (released || !fileLoaded) return null
+        val count = mpv.getPropertyInt("chapter-list/count") ?: return null
+        for (i in 0 until count) {
+            val title = mpv.getPropertyString("chapter-list/$i/title").orEmpty()
+            if (!creditsChapter.containsMatchIn(title)) continue
+            val time = mpv.getPropertyDouble("chapter-list/$i/time") ?: continue
+            return (time * 1000).toLong()
+        }
+        return null
     }
 
     // ── mpv plumbing ──

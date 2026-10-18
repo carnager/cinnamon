@@ -334,6 +334,44 @@ class MpvPlayer(
         }, "mpv-sub-add").start()
     }
 
+    // ── adjustments surfaced in the player's settings menu ──
+
+    var audioDelayMs: Int = 0
+        set(value) {
+            field = value
+            if (!released) mpv.setPropertyDouble("audio-delay", value / 1000.0)
+        }
+
+    var subtitleDelayMs: Int = 0
+        set(value) {
+            field = value
+            if (!released) mpv.setPropertyDouble("sub-delay", value / 1000.0)
+        }
+
+    var subtitleScalePercent: Int = 100
+        set(value) {
+            field = value
+            if (!released) mpv.setPropertyDouble("sub-scale", value / 100.0)
+        }
+
+    // What is actually playing, for the "Playback info" panel.
+    fun playbackInfo(): List<Pair<String, String>> {
+        if (released || !fileLoaded) return emptyList()
+        fun p(name: String) = runCatching { mpv.getPropertyString(name) }.getOrNull().orEmpty()
+        val w = p("video-params/w")
+        val h = p("video-params/h")
+        return listOf(
+            "Video" to listOf(p("video-codec").substringBefore(" /").substringBefore(" ("), if (w.isNotBlank()) "${w}x$h" else "", p("video-params/pixelformat")).filter { it.isNotBlank() }.joinToString(" · "),
+            "Decoder" to (p("hwdec-current").takeIf { it.isNotBlank() && it != "no" }?.let { "hardware ($it)" } ?: "software"),
+            "Audio" to listOf(p("audio-codec-name"), p("audio-params/channel-count").takeIf { it.isNotBlank() }?.let { "${it}ch" }.orEmpty(), p("audio-params/samplerate").takeIf { it.isNotBlank() }?.let { "$it Hz" }.orEmpty()).filter { it.isNotBlank() }.joinToString(" · "),
+            "Audio out" to p("current-ao"),
+            "Subtitles" to p("current-tracks/sub/codec").ifBlank { "off" },
+            "Dropped frames" to "${p("frame-drop-count").ifBlank { "0" }} output · ${p("decoder-frame-drop-count").ifBlank { "0" }} decoder",
+            "Buffered" to (p("demuxer-cache-duration").toDoubleOrNull()?.let { "%.0f s".format(Locale.US, it) } ?: "-"),
+            "Container" to p("file-format"),
+        ).filter { it.second.isNotBlank() }
+    }
+
     // Start of the end credits, from the file's chapter titles (anime and
     // most Blu-ray rips mark them), or null.
     fun creditsStartMs(): Long? {
@@ -429,6 +467,9 @@ class MpvPlayer(
             mpv.command(arrayOf("seek", seconds(target), "absolute"))
         }
         externalAdded.clear()
+        mpv.setPropertyDouble("audio-delay", audioDelayMs / 1000.0)
+        mpv.setPropertyDouble("sub-scale", subtitleScalePercent / 100.0)
+        mpv.setPropertyDouble("sub-delay", subtitleDelayMs / 1000.0)
         applyTrackSelection()
         val info = JSONObject()
         listOf("file-format", "video-codec", "audio-codec-name", "hwdec-current", "current-vo", "current-ao", "track-list/count").forEach { name ->

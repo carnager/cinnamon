@@ -191,6 +191,59 @@ fun showNativeBandwidthMenu(
     )
 }
 
+// mpv adjustments. Each value list opens as its own page; picking a value
+// applies it and closes the menu.
+fun showNativeMpvSettingsMenu(
+    playerView: PlayerView,
+    player: MpvPlayer,
+    returnFocus: View?,
+    onAudioDelay: (Int) -> Unit,
+    onSubtitleScale: (Int) -> Unit,
+    onClosed: () -> Unit,
+) {
+    fun ms(value: Int) = if (value == 0) "0 ms" else "%+d ms".format(value)
+    fun reopen() = showNativeMpvSettingsMenu(playerView, player, returnFocus, onAudioDelay, onSubtitleScale, onClosed)
+    fun values(title: String, options: List<Int>, current: Int, label: (Int) -> String, apply: (Int) -> Unit) {
+        showNativeChoiceMenu(
+            playerView = playerView,
+            title = title,
+            choices = options.map { value -> NativeChoice(label(value), value == current) { apply(value) } },
+            returnFocus = returnFocus,
+            onClosed = onClosed,
+        )
+    }
+    val choices = listOf(
+        NativeChoice("Audio delay", false, "${ms(player.audioDelayMs)} · remembered") {
+            playerView.post {
+                values("Audio delay", (-500..500 step 25).toList(), player.audioDelayMs, ::ms) { onAudioDelay(it) }
+            }
+        },
+        NativeChoice("Subtitle delay", false, "${ms(player.subtitleDelayMs)} · this video") {
+            playerView.post {
+                values("Subtitle delay", (-5000..5000 step 250).toList(), player.subtitleDelayMs, ::ms) { player.subtitleDelayMs = it }
+            }
+        },
+        NativeChoice("Subtitle size", false, "${player.subtitleScalePercent}%") {
+            playerView.post {
+                values("Subtitle size", listOf(60, 75, 90, 100, 115, 130, 150, 175), player.subtitleScalePercent, { "$it%" }) { onSubtitleScale(it) }
+            }
+        },
+        NativeChoice("Playback info", false, "Codecs, decoder, dropped frames") {
+            playerView.post {
+                showNativeChoiceMenu(
+                    playerView = playerView,
+                    title = "Playback info",
+                    choices = player.playbackInfo().map { (k, v) -> NativeChoice(k, false, v) { playerView.post { reopen() } } }
+                        .ifEmpty { listOf(NativeChoice("Nothing playing yet", false) {}) },
+                    returnFocus = returnFocus,
+                    onClosed = onClosed,
+                )
+            }
+        },
+    )
+    showNativeChoiceMenu(playerView, "Playback settings", choices, returnFocus, onClosed)
+}
+
 private data class NativeChoice(val label: String, val selected: Boolean, val detail: String = "", val action: () -> Unit)
 
 private fun showNativeChoiceMenu(

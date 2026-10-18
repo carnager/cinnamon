@@ -165,7 +165,12 @@ fun PlayerScreen(
     }
 
     val exoPlayer: Player = remember {
-        if (useMpv) return@remember MpvPlayer(context, session?.token.orEmpty())
+        if (useMpv) {
+            return@remember MpvPlayer(context, session?.token.orEmpty()).apply {
+                audioDelayMs = PlaybackPrefs.audioDelayMs
+                subtitleScalePercent = PlaybackPrefs.subtitleScalePercent
+            }
+        }
         val httpFactory = DefaultHttpDataSource.Factory().apply {
             if (session != null && session.token.isNotBlank()) {
                 setDefaultRequestProperties(mapOf("Authorization" to "Bearer ${session.token}"))
@@ -1268,6 +1273,27 @@ fun PlayerScreen(
             )
         }
         bandwidthButton?.setOnKeyListener(controllerKeyListener)
+        val settingsButton = playerView.findViewById<View>(R.id.popcorn_settings)
+        settingsButton?.visibility = if (mpvPlayer != null) View.VISIBLE else View.GONE
+        settingsButton?.setOnKeyListener(controllerKeyListener)
+        settingsButton?.setOnClickListener {
+            val engine = mpvPlayer ?: return@setOnClickListener
+            scheduleControllerAutoHide()
+            showNativeMpvSettingsMenu(
+                playerView = playerView,
+                player = engine,
+                returnFocus = settingsButton,
+                onAudioDelay = {
+                    engine.audioDelayMs = it
+                    PlaybackPrefs.setAudioDelay(context, it)
+                },
+                onSubtitleScale = {
+                    engine.subtitleScalePercent = it
+                    PlaybackPrefs.setSubtitleScale(context, it)
+                },
+                onClosed = ::scheduleControllerAutoHide,
+            )
+        }
 
         onDispose {
             playerView.setOnKeyListener(null)
@@ -1288,6 +1314,8 @@ fun PlayerScreen(
             subtitleButton?.setOnKeyListener(null)
             bandwidthButton?.setOnClickListener(null)
             bandwidthButton?.setOnKeyListener(null)
+            playerView.findViewById<View>(R.id.popcorn_settings)?.setOnClickListener(null)
+            playerView.findViewById<View>(R.id.popcorn_settings)?.setOnKeyListener(null)
         }
     }
 

@@ -73,6 +73,13 @@
                 android:contentDescription="@string/player_audio"
                 android:src="@drawable/exo_ic_audiotrack" />
 
+            <ImageButton
+                android:id="@+id/popcorn_settings"
+                style="@style/PopcornPlayerButton"
+                android:contentDescription="@string/player_settings"
+                android:src="@drawable/exo_ic_settings"
+                android:visibility="gone" />
+
             <TextView
                 android:id="@+id/popcorn_bandwidth"
                 style="@style/PopcornPlayerTextButton"

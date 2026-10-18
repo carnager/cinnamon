@@ -36,9 +36,28 @@ object PlaybackPrefs {
 
     val useMpv: Boolean get() = engine == ENGINE_MPV
 
+    // mpv-only: audio delay compensates the AV receiver's processing (a
+    // property of the setup, so it is remembered); subtitle size likewise.
+    var audioDelayMs by mutableStateOf(0)
+        private set
+    var subtitleScalePercent by mutableStateOf(100)
+        private set
+
+    fun setAudioDelay(context: Context, value: Int) {
+        audioDelayMs = value
+        context.getSharedPreferences("popcorn", Context.MODE_PRIVATE).edit().putInt("prefAudioDelayMs", value).apply()
+    }
+
+    fun setSubtitleScale(context: Context, value: Int) {
+        subtitleScalePercent = value
+        context.getSharedPreferences("popcorn", Context.MODE_PRIVATE).edit().putInt("prefSubScalePercent", value).apply()
+    }
+
     fun load(context: Context) {
         val prefs = context.getSharedPreferences("popcorn", Context.MODE_PRIVATE)
         engine = prefs.getString("prefEngine", ENGINE_MPV) ?: ENGINE_MPV
+        audioDelayMs = prefs.getInt("prefAudioDelayMs", 0)
+        subtitleScalePercent = prefs.getInt("prefSubScalePercent", 100)
         audioLang = prefs.getString("prefAudioLang", "") ?: ""
         subtitleLang = prefs.getString("prefSubtitleLang", SUBS_OFF) ?: SUBS_OFF
     }

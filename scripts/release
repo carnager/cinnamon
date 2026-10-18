@@ -329,7 +329,7 @@ if [[ "$build_android" == 1 ]]; then
     tv_apk="$out_dir/popcorn-tv-$version.apk"
     cp "$repo_root/android-tv/app/build/outputs/apk/release/app-release.apk" "$tv_apk"
     tv_abis="$(apk_abis "$tv_apk")"
-    expected_tv_abis="arm64-v8a,armeabi-v7a"
+    expected_tv_abis="armeabi-v7a"
     if [[ "$tv_abis" != "$expected_tv_abis" ]]; then
       echo "Android TV APK contains unexpected native ABIs: ${tv_abis:-none}" >&2
       echo "Expected $expected_tv_abis. Check android-tv/app/build.gradle.kts ndk.abiFilters." >&2

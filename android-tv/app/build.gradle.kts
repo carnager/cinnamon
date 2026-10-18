@@ -25,9 +25,13 @@ android {
         targetSdk = 36
         versionCode = popcornAndroidVersionCode
         versionName = popcornAndroidVersionName
+        // Both targets (Shield, Google TV Streamer) run a 32-bit userspace:
+        // ro.zygote=zygote32, empty abilist64. A 64-bit .so can never load
+        // there, which is why the first libmpv attempt (arm64-only) failed.
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            abiFilters += listOf("armeabi-v7a")
         }
+        buildConfigField("boolean", "USE_MPV", "false")
     }
 
     signingConfigs {
@@ -56,6 +60,18 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+        }
+        // Side-by-side libmpv test build: its own package, so it never
+        // touches the release install or its in-app updates.
+        // Release settings (R8, not debuggable — a debuggable Compose build is
+        // visibly sluggish on the Streamer), signed with the debug key.
+        create("mpv") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            applicationIdSuffix = ".mpv"
+            versionNameSuffix = "-mpv"
+            matchingFallbacks += listOf("release")
+            buildConfigField("boolean", "USE_MPV", "true")
         }
     }
 
@@ -87,6 +103,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.5.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.5.1")
     implementation("androidx.media3:media3-ui:1.5.1")
+    implementation("dev.jdtech.mpv:libmpv:1.0.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("com.google.zxing:core:3.5.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.1")

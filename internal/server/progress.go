@@ -34,6 +34,18 @@ func (a *App) progressShows(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// showsNewEpisodes lists shows with episodes added since the user last
+// watched them, for the TV app's "new" badge on show cards.
+func (a *App) showsNewEpisodes(w http.ResponseWriter, r *http.Request) {
+	user, ok := a.requireUser(w, r)
+	if !ok {
+		return
+	}
+	a.writeCachedJSON(w, r, cacheKey(r, "showsNewEpisodes", user.ID), 15*time.Second, func() (any, error) {
+		return a.store.NewEpisodeCounts(r.Context(), user.ID)
+	})
+}
+
 func (a *App) progressGet(w http.ResponseWriter, r *http.Request) {
 	user, ok := a.requireUser(w, r)
 	if !ok {

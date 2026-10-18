@@ -1,6 +1,7 @@
 package media
 
 import (
+	"fmt"
 	"context"
 	"os"
 	"path/filepath"
@@ -1218,4 +1219,60 @@ func mustShows(t *testing.T, store *Store, ctx context.Context, status string, u
 		t.Fatalf("list shows (%s): %v", status, err)
 	}
 	return shows
+}
+
+func TestNewEpisodeCountsOnlyCountsEpisodesAddedSinceLastWatch(t *testing.T) {
+	store, ctx := newTestStore(t)
+	userID := insertTestUser(t, store, "viewer")
+	episode := func(show string, number int) Item {
+		return upsertTestItem(t, ctx, store, Item{
+			LibraryID:     "tv",
+			Kind:          "episode",
+			Title:         fmt.Sprintf("%s E%d", show, number),
+			SortTitle:     fmt.Sprintf("%s %02d", show, number),
+			Path:          fmt.Sprintf("/media/tv/%s/e%02d.mkv", show, number),
+			ShowTitle:     show,
+			SeasonNumber:  1,
+			EpisodeNumber: number,
+		})
+	}
+	setCreated := func(item Item, at string) {
+		if _, err := store.DB().Exec(`UPDATE media_items SET created_at = ? WHERE id = ?`, at, item.ID); err != nil {
+			t.Fatalf("set created_at: %v", err)
+		}
+	}
+	watched := episode("Watched", 1)
+	backlog := episode("Watched", 2)
+	fresh := episode("Watched", 3)
+	freshSeen := episode("Watched", 4)
+	untouched := episode("Untouched", 1)
+	setCreated(watched, "2026-01-01 10:00:00")
+	setCreated(backlog, "2026-01-01 10:00:00")
+	setCreated(fresh, "2026-03-01 10:00:00")
+	setCreated(freshSeen, "2026-03-01 10:00:00")
+	setCreated(untouched, "2026-03-01 10:00:00")
+
+	if _, err := store.SaveProgress(ctx, userID, watched.ID, 1000, 1000, true); err != nil {
+		t.Fatalf("save progress: %v", err)
+	}
+	if _, err := store.DB().Exec(`UPDATE playback_progress SET updated_at = '2026-02-01 10:00:00' WHERE user_id = ?`, userID); err != nil {
+		t.Fatalf("set progress time: %v", err)
+	}
+	// E4 arrived after the last watch too, but is already completed.
+	if _, err := store.SaveProgress(ctx, userID, freshSeen.ID, 1000, 1000, true); err != nil {
+		t.Fatalf("save progress: %v", err)
+	}
+	if _, err := store.DB().Exec(`UPDATE playback_progress SET updated_at = '2026-02-01 10:00:00' WHERE user_id = ? AND item_id = ?`, userID, freshSeen.ID); err != nil {
+		t.Fatalf("set progress time: %v", err)
+	}
+
+	counts, err := store.NewEpisodeCounts(ctx, userID)
+	if err != nil {
+		t.Fatalf("new episode counts: %v", err)
+	}
+	// Backlog predates the last watch, the fresh-but-seen one is completed,
+	// and the untouched show was never watched: only E3 counts.
+	if len(counts) != 1 || counts[0].ShowTitle != "Watched" || counts[0].Count != 1 {
+		t.Fatalf("counts = %#v, want Watched:1", counts)
+	}
 }

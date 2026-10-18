@@ -2201,6 +2201,41 @@ ORDER BY MAX(p.updated_at) IS NULL, MAX(p.updated_at) DESC, mi.library_id, mi.sh
 	return out, rows.Err()
 }
 
+// NewEpisodeCounts reports, per show the user has watched any episode of,
+// how many unwatched episodes were added (created_at, i.e. first scanned)
+// after their latest watch activity on that show. Both timestamps come from
+// SQLite's CURRENT_TIMESTAMP, so they compare as text.
+func (s *Store) NewEpisodeCounts(ctx context.Context, userID int64) ([]ShowNewEpisodes, error) {
+	rows, err := s.db.QueryContext(ctx, `
+WITH watched AS (
+	SELECT mi.library_id, mi.show_title, MAX(pp.updated_at) AS last_watched
+	FROM playback_progress pp
+	JOIN media_items mi ON mi.id = pp.item_id
+	WHERE pp.user_id = ? AND mi.kind = 'episode' AND COALESCE(mi.show_title, '') != ''
+	GROUP BY mi.library_id, mi.show_title
+)
+SELECT w.library_id, w.show_title, COUNT(*)
+FROM watched w
+JOIN media_items mi ON mi.library_id = w.library_id AND mi.show_title = w.show_title AND mi.kind = 'episode'
+LEFT JOIN playback_progress pp ON pp.user_id = ? AND pp.item_id = mi.id
+WHERE mi.created_at > w.last_watched AND COALESCE(pp.completed, 0) = 0
+GROUP BY w.library_id, w.show_title
+ORDER BY w.library_id, w.show_title`, userID, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ShowNewEpisodes{}
+	for rows.Next() {
+		var entry ShowNewEpisodes
+		if err := rows.Scan(&entry.LibraryID, &entry.ShowTitle, &entry.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, entry)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) NextUnwatchedEpisodesForShows(ctx context.Context, userID int64, shows []ShowProgress, limit int) ([]Item, error) {
 	if len(shows) == 0 || limit == 0 {
 		return nil, nil

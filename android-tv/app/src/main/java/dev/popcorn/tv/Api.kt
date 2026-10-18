@@ -624,6 +624,14 @@ class Api(private val session: Session) {
         out
     }
 
+    suspend fun newEpisodeCounts(): Map<String, Int> = withContext(Dispatchers.IO) {
+        val arr = requestArray("/api/shows/new-episodes")
+        (0 until arr.length()).associate { i ->
+            val o = arr.getJSONObject(i)
+            "${o.optString("libraryId")}\n${o.optString("showTitle").lowercase()}" to o.optInt("count")
+        }.filterValues { it > 0 }
+    }
+
     suspend fun showProgress(): List<ShowProgress> = withContext(Dispatchers.IO) {
         parseShowProgressList(requestArray("/api/progress/tv"))
     }

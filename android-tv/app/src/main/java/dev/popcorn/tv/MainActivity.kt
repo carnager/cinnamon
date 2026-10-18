@@ -183,6 +183,7 @@ fun PopcornApp() {
     // while the app is in the background instead of hitting the server.
     var appVisible by remember { mutableStateOf(true) }
     var lastResumeRefreshAt by remember { mutableStateOf(0L) }
+    var newEpisodesByShow by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
     // Corner brand: name for a few seconds after start, then just the mark.
     LaunchedEffect(Unit) {
         delay(4_000)
@@ -217,6 +218,9 @@ fun PopcornApp() {
                     val progress = async { api.progressList() }
                     val showProgress = async { api.showProgress() }
                     val ratings = async { api.userRatings() }
+                    // Optional: an older server without the endpoint just shows no badges.
+                    val newEpisodes = async { runCatching { api.newEpisodeCounts() }.getOrDefault(emptyMap()) }
+                    newEpisodesByShow = newEpisodes.await()
                     Triple(progress.await(), showProgress.await(), ratings.await())
                 }
                 completedItems = progress.filter { it.completed }.map { it.itemId }.toSet()
@@ -1088,7 +1092,7 @@ fun PopcornApp() {
         }
     }
 
-    CompositionLocalProvider(LocalResumeProgress provides resumeFractionById, LocalNotInterested provides recommendationExclusionKeys) {
+    CompositionLocalProvider(LocalResumeProgress provides resumeFractionById, LocalNotInterested provides recommendationExclusionKeys, LocalNewEpisodes provides newEpisodesByShow) {
     when (val current = screen) {
         Screen.Loading -> LoadingView(
             error = error,

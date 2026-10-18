@@ -249,6 +249,14 @@ type ShowProgress struct {
 	LastWatched      string `json:"lastWatched,omitempty"`
 }
 
+// ShowNewEpisodes counts a show's unwatched episodes added since the user last
+// watched any of it. Only shows the user has watched something of appear.
+type ShowNewEpisodes struct {
+	LibraryID string `json:"libraryId"`
+	ShowTitle string `json:"showTitle"`
+	Count     int    `json:"count"`
+}
+
 type TraktAccount struct {
 	UserID       int64  `json:"-"`
 	AccessToken  string `json:"-"`

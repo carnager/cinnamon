@@ -341,6 +341,22 @@ fun ShowCard(
         Box {
             Poster(session, show.posterItemId, Modifier.fillMaxWidth(), show.posterMtimeUnix)
             PosterCornerMarks(watched, watchlisted, show.rating, notInterested = notInterestedKey(show) in LocalNotInterested.current)
+            val newCount = LocalNewEpisodes.current[newEpisodesKey(show)] ?: 0
+            if (newCount > 0) {
+                // Episodes added since you last watched this show.
+                Text(
+                    "$newCount NEW",
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Black,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(6.dp)
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(Accent)
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
         }
         Spacer(Modifier.height(5.dp))
         Text(show.title, color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)

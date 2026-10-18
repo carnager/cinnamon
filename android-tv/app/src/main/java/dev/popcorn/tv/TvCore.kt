@@ -152,6 +152,13 @@ val LocalResumeProgress = compositionLocalOf { emptyMap<Long, Float>() }
 // poster can mark what was set to Not Interested, the same way as above.
 val LocalNotInterested = compositionLocalOf { emptySet<String>() }
 
+// Shows with episodes added since the viewer last watched them, keyed like
+// showKey ("<libraryId>\n<title lowercased>") with the count: the "N NEW"
+// badge on show cards.
+val LocalNewEpisodes = compositionLocalOf { emptyMap<String, Int>() }
+
+fun newEpisodesKey(show: ShowSummary): String = "${show.libraryId}\n${show.title.lowercase()}"
+
 fun notInterestedKey(item: PopItem): String? = if (item.kind == "movie") "item:${item.id}" else null
 
 fun notInterestedKey(show: ShowSummary): String = "show:${show.libraryId.trim().lowercase()}:${show.title.trim().lowercase()}"

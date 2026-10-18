@@ -177,6 +177,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/progress", a.progressList)
 	mux.HandleFunc("GET /api/history", a.watchHistory)
 	mux.HandleFunc("GET /api/progress/tv", a.progressShows)
+	mux.HandleFunc("GET /api/shows/new-episodes", a.showsNewEpisodes)
 	mux.HandleFunc("PUT /api/progress/tv", a.progressShowSave)
 	mux.HandleFunc("DELETE /api/progress/tv", a.progressShowDelete)
 	mux.HandleFunc("PUT /api/progress/tv/season", a.progressSeasonSave)

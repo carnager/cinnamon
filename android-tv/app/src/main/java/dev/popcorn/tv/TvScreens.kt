@@ -67,6 +67,8 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import kotlinx.coroutines.delay
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.key
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -381,8 +383,11 @@ fun ShowView(
             onExit = { requestTvFocus(actionFocus) },
         )
 
+        // Fades out while the page is shifted, so content sliding up doesn't
+        // run underneath it.
+        val brandAlpha by animateFloatAsState(if (shift > 8) 0f else 1f, tween(180), label = "brandAlpha")
         CinnamonBrand(
-            modifier = Modifier.align(Alignment.TopStart).padding(start = 26.dp, top = 24.dp),
+            modifier = Modifier.align(Alignment.TopStart).padding(start = 26.dp, top = 24.dp).graphicsLayer { alpha = brandAlpha },
             markSize = 42,
             fontSize = 21,
         )

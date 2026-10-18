@@ -953,7 +953,10 @@ fun PopcornApp() {
 
     fun returnFromDetail(s: Screen.Detail) {
         lastDetail = null
-        screen = if (s.fromShelf != null) {
+        screen = if (s.fromDetail != null) {
+            // Opened from another title's "More like this" row.
+            s.fromDetail
+        } else if (s.fromShelf != null) {
             s.fromShelf
         } else if (s.fromActor != null) {
             Screen.Actor(s.fromActor)
@@ -1430,6 +1433,7 @@ fun PopcornApp() {
             onMoreLikeThis = { items ->
                 screen = Screen.ItemShelf("More like this", items, returnTo = current)
             },
+            onSimilarItem = { similarItem -> screen = Screen.Detail(similarItem, null, fromDetail = current) },
         )
         is Screen.Actor -> ActorView(
             session = session,

@@ -79,6 +79,9 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.foundation.onFocusedBoundsChanged
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -118,6 +121,7 @@ fun DetailView(
     onLogout: () -> Unit,
     onActor: (Actor) -> Unit,
     onMoreLikeThis: (List<PopItem>) -> Unit,
+    onSimilarItem: (PopItem) -> Unit = {},
 ) {
     val streams = remember { mutableStateListOf<StreamInfo>() }
     var detailItem by remember(item.id) { mutableStateOf(item) }
@@ -137,6 +141,7 @@ fun DetailView(
     val descriptionFocus = remember { FocusRequester() }
     val playFocus = remember { FocusRequester() }
     val castFocus = remember { FocusRequester() }
+    val similarFocus = remember { FocusRequester() }
     val navFocus = remember { FocusRequester() }
 
     LaunchedEffect(item.id) {
@@ -301,8 +306,11 @@ fun DetailView(
             onExit = { requestDetailFocus(playFocus) },
         )
 
+        // Fades out while the page is shifted, so content sliding up doesn't
+        // run underneath it.
+        val brandAlpha by animateFloatAsState(if (detailShift > 8) 0f else 1f, tween(180), label = "brandAlpha")
         CinnamonBrand(
-            modifier = Modifier.align(Alignment.TopStart).padding(start = 26.dp, top = 24.dp),
+            modifier = Modifier.align(Alignment.TopStart).padding(start = 26.dp, top = 24.dp).graphicsLayer { alpha = brandAlpha },
             markSize = 42,
             fontSize = 21,
         )
@@ -348,7 +356,7 @@ fun DetailView(
                 recommendationExcluded = recommendationExcluded,
                 userRating = userRating,
                 onRateMenu = { ratingMenuOpen = true },
-                showSimilar = similar.isNotEmpty(),
+                showSimilar = false,
                 onAudio = { audioMenuOpen = true },
                 onSubtitle = { subtitleMenuOpen = true },
                 onFullText = { fullTextOpen = true },
@@ -374,10 +382,36 @@ fun DetailView(
                     actors = detailItem.actors,
                     firstFocusRequester = castFocus,
                     onUp = { requestDetailFocus(descriptionFocus) || requestDetailFocus(audioFocus) },
+                    onDown = { requestDetailFocus(similarFocus) },
                     onActor = onActor,
                 )
             }
-            // Keeps the cast row clear of the bottom overscan edge.
+            // "More like this" as a row on the page instead of an action
+            // button: the button was cut off at the right edge whenever
+            // "Start over" was present, and opened a separate shelf page.
+            if (similar.isNotEmpty()) {
+                Spacer(Modifier.height(18.dp))
+                Text("More like this", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(4.dp))
+                LazyRow(
+                    // Room for the focused card's scale-up on all sides.
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    itemsIndexed(similar.take(20), key = { _, it -> it.id }) { index, similarItem ->
+                        Box(Modifier.width(122.dp)) {
+                            ItemCard(
+                                session = session,
+                                item = similarItem,
+                                focusRequester = if (index == 0) similarFocus else null,
+                                onUp = { requestDetailFocus(castFocus) || requestDetailFocus(descriptionFocus) },
+                                onClick = { onSimilarItem(similarItem) },
+                            )
+                        }
+                    }
+                }
+            }
+            // Keeps the last row clear of the bottom overscan edge.
             Spacer(Modifier.height(36.dp))
         }
         }

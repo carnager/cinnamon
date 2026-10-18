@@ -185,7 +185,7 @@ fun Pill(text: String, selected: Boolean, badge: String? = null, modifier: Modif
 @Composable
 fun RatingBadge(rating: Double, small: Boolean = false) {
     Text(
-        "\u2605 ${"%.1f".format(rating)}",
+        "\u2605 ${formatRating(rating)}",
         color = Accent,
         fontWeight = FontWeight.Bold,
         fontSize = if (small) 9.sp else 11.sp,
@@ -278,4 +278,13 @@ fun MessageBanner(text: String, isError: Boolean) {
                 .padding(horizontal = 22.dp, vertical = 14.dp),
         )
     }
+}
+
+private val decimalSeparator = java.text.DecimalFormatSymbols.getInstance().decimalSeparator
+
+// "%.1f".format allocates a Formatter per call; posters call this for every
+// card on every recomposition. Same output, locale separator included.
+fun formatRating(value: Double): String {
+    val tenths = kotlin.math.round(value * 10).toLong()
+    return "${tenths / 10}$decimalSeparator${kotlin.math.abs(tenths % 10)}"
 }

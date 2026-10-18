@@ -432,7 +432,7 @@ fun BoxScope.PosterCornerMarks(watched: Boolean, watchlisted: Boolean, rating: D
             // not.
             HaloIcon(Icons.Filled.Star, null, 12.dp, tint = Accent)
             Text(
-                "%.1f".format(rating),
+                formatRating(rating),
                 color = Color.White,
                 fontWeight = FontWeight.Black,
                 fontSize = 12.sp,

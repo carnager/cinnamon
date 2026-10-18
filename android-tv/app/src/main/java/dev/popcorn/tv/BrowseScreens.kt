@@ -2021,14 +2021,17 @@ fun CuratedLanding(
             // actually holds more than that, and opens the rest. A shelf of
             // three has nothing behind it and says so by having no More.
             val moreVisible = section.contentSize() > HomeShelfLimit
+            // Stable list instances so shelves can skip recomposition.
+            val shelfShows = remember(section) { section.shows.take(HomeShelfLimit) }
+            val shelfItems = remember(section) { section.items.take(HomeShelfLimit) }
             if (section.shows.isNotEmpty()) {
                 PosterShelf(
                     section.title,
                     section.subtitle,
-                    section.shows.take(HomeShelfLimit),
+                    shelfShows,
                     key = { it.title },
                     autoFocusFirst = firstShelf || restoring,
-                    focusIndex = if (restoring) section.shows.take(HomeShelfLimit).indexOfFirst { it.title == restoreKey }.coerceAtLeast(0) else 0,
+                    focusIndex = if (restoring) shelfShows.indexOfFirst { it.title == restoreKey }.coerceAtLeast(0) else 0,
                     moreVisible = moreVisible,
                     onMore = { onMore(section) },
                 ) { show, autoFocus ->
@@ -2042,10 +2045,10 @@ fun CuratedLanding(
                 PosterShelf(
                     section.title,
                     section.subtitle,
-                    section.items.take(HomeShelfLimit),
+                    shelfItems,
                     key = { it.id },
                     autoFocusFirst = firstShelf || restoring,
-                    focusIndex = if (restoring) section.items.take(HomeShelfLimit).indexOfFirst { it.id == restoreKey }.coerceAtLeast(0) else 0,
+                    focusIndex = if (restoring) shelfItems.indexOfFirst { it.id == restoreKey }.coerceAtLeast(0) else 0,
                     moreVisible = moreVisible,
                     onMore = { onMore(section) },
                 ) { item, autoFocus ->

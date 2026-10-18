@@ -371,11 +371,19 @@ fun ShowHeader(
         show.rating
     }
 
+    // The header image follows the focused episode once focus settles:
+    // moving along the carousel fetched and decoded a backdrop per card.
+    var backdropEpisode by remember { mutableStateOf(focusedEpisode) }
+    LaunchedEffect(focusedEpisode?.id) {
+        if (backdropEpisode != null && focusedEpisode != null) delay(300)
+        backdropEpisode = focusedEpisode
+    }
     Box(Modifier.fillMaxWidth().height(304.dp)) {
-        val episodeBackdropUrl = if (focusedEpisode != null && session != null) {
+        val shownEpisode = backdropEpisode
+        val episodeBackdropUrl = if (shownEpisode != null && session != null) {
             when {
-                focusedEpisode.backdropPath.isNotBlank() -> imageUrl(session, focusedEpisode.id, "backdrop", focusedEpisode.backdropMtimeUnix, ArtworkBackdrop)
-                focusedEpisode.posterPath.isNotBlank() -> imageUrl(session, focusedEpisode.id, "poster", focusedEpisode.posterMtimeUnix, ArtworkBackdrop)
+                shownEpisode.backdropPath.isNotBlank() -> imageUrl(session, shownEpisode.id, "backdrop", shownEpisode.backdropMtimeUnix, ArtworkBackdrop)
+                shownEpisode.posterPath.isNotBlank() -> imageUrl(session, shownEpisode.id, "poster", shownEpisode.posterMtimeUnix, ArtworkBackdrop)
                 else -> ""
             }
         } else {
@@ -937,6 +945,14 @@ private fun ThemeMusicPlayer(session: Session?, show: ShowSummary) {
     val url = remember(session?.server, show.libraryId, show.title) {
         themeUrl(session, show.libraryId, show.title)
     }
+    // Build the player once the page has settled, not in the same frames
+    // that lay out the show page.
+    var started by remember(url) { mutableStateOf(false) }
+    LaunchedEffect(url) {
+        delay(800)
+        started = true
+    }
+    if (!started) return
     val player = remember(url, session?.token) {
         val httpFactory = DefaultHttpDataSource.Factory().apply {
             val token = session?.token.orEmpty()

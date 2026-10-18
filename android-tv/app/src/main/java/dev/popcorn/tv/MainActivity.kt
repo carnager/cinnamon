@@ -130,6 +130,8 @@ fun PopcornApp() {
     var updateAvailable by remember { mutableStateOf(false) }
     var updateDialogOpen by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    // Informational counterpart to error ("Library update started").
+    var notice by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var searchReturnScreen by remember { mutableStateOf<Screen>(Screen.Home) }
@@ -172,6 +174,22 @@ fun PopcornApp() {
     var lastResumeRefreshAt by remember { mutableStateOf(0L) }
 
     fun showKey(show: ShowSummary): String = "${show.libraryId}\n${show.title.lowercase()}"
+
+    // Signing out forgets the account, not the setup: clearing all prefs
+    // reset the server address to the emulator default (retyped with a
+    // D-pad), and dropped the remote device id, so the phone app saw a new
+    // duplicate TV.
+    fun logout() {
+        prefs.edit()
+            .remove("token")
+            .remove("displayName")
+            .remove("isAdmin")
+            .remove("userId")
+            .remove("avatar")
+            .apply()
+        session = null
+        screen = Screen.Login
+    }
 
     fun refreshProgress(activeSession: Session) {
         scope.launch {
@@ -730,7 +748,7 @@ fun PopcornApp() {
             runCatching {
                 val api = Api(active)
                 api.scanLibraries()
-                error = "Library update started"
+                notice = "Library update started"
                 waitForLibraryUpdate(api)
                 refreshVisibleContent(active)
             }
@@ -1023,7 +1041,10 @@ fun PopcornApp() {
     }
 
     BackHandler(
+        // ArrangeHome has its own handler above (unwind, then save); this one
+        // was registered later and won, discarding the arrangement.
         enabled = screen !is Screen.Home &&
+            screen !is Screen.ArrangeHome &&
             screen !is Screen.Login &&
             screen !is Screen.Watchlist &&
             screen !is Screen.LibraryPage &&
@@ -1047,6 +1068,7 @@ fun PopcornApp() {
         Screen.Loading -> LoadingView(error)
         Screen.Login -> LoginView(
             initialServer = prefs.getString("server", "http://10.0.2.2:8097") ?: "http://10.0.2.2:8097",
+            initialUsername = prefs.getString("username", "") ?: "",
             error = error,
             onLogin = { server, username, password ->
                 scope.launch {
@@ -1090,11 +1112,7 @@ fun PopcornApp() {
             onSearch = ::openSearch,
             onUpdates = { updateDialogOpen = true },
             onScan = ::scanLibraries,
-            onLogout = {
-                prefs.edit().clear().apply()
-                session = null
-                screen = Screen.Login
-            },
+            onLogout = ::logout,
             onMore = ::openShelfTarget,
             onPlayItem = { item ->
                 scope.launch {
@@ -1188,11 +1206,7 @@ fun PopcornApp() {
             onSearch = ::openSearch,
             onUpdates = { updateDialogOpen = true },
             onScan = ::scanLibraries,
-            onLogout = {
-                prefs.edit().clear().apply()
-                session = null
-                screen = Screen.Login
-            },
+            onLogout = ::logout,
             onItem = { screen = Screen.Detail(it, null, fromWatchlist = true) },
             onShow = {
                 showFocusSeason = null
@@ -1215,11 +1229,7 @@ fun PopcornApp() {
             onSearch = ::openSearch,
             onUpdates = { updateDialogOpen = true },
             onScan = ::scanLibraries,
-            onLogout = {
-                prefs.edit().clear().apply()
-                session = null
-                screen = Screen.Login
-            },
+            onLogout = ::logout,
             onItem = { screen = Screen.Detail(it, null, fromHistory = true) },
         )
         is Screen.LibraryPage -> LibraryPageView(
@@ -1255,11 +1265,7 @@ fun PopcornApp() {
             onSearch = ::openSearch,
             onUpdates = { updateDialogOpen = true },
             onScan = ::scanLibraries,
-            onLogout = {
-                prefs.edit().clear().apply()
-                session = null
-                screen = Screen.Login
-            },
+            onLogout = ::logout,
             onPreviousPage = { session?.let { loadLibraryPage(current.library, it, pageIndex - 1) } },
             onNextPage = { session?.let { loadLibraryPage(current.library, it, pageIndex + 1) } },
             onFilters = { sort, seenStatus, minRating, genre, decades ->
@@ -1330,11 +1336,7 @@ fun PopcornApp() {
             onSearch = ::openSearch,
             onUpdates = { updateDialogOpen = true },
             onScan = ::scanLibraries,
-            onLogout = {
-                prefs.edit().clear().apply()
-                session = null
-                screen = Screen.Login
-            },
+            onLogout = ::logout,
             onShowWatchlistChange = {
                 session?.let { active -> setShowWatchlisted(active, current.show, !watchlistShows.contains(showKey(current.show))) }
             },
@@ -1379,11 +1381,7 @@ fun PopcornApp() {
             onSearch = ::openSearch,
             onUpdates = { updateDialogOpen = true },
             onScan = ::scanLibraries,
-            onLogout = {
-                prefs.edit().clear().apply()
-                session = null
-                screen = Screen.Login
-            },
+            onLogout = ::logout,
             onShowWatchlistChange = {
                 session?.let { active -> setShowWatchlisted(active, current.show, !watchlistShows.contains(showKey(current.show))) }
             },
@@ -1442,11 +1440,7 @@ fun PopcornApp() {
             onHistory = { screen = Screen.History },
             onUpdates = { updateDialogOpen = true },
             onScan = ::scanLibraries,
-            onLogout = {
-                prefs.edit().clear().apply()
-                session = null
-                screen = Screen.Login
-            },
+            onLogout = ::logout,
             onActor = { actor ->
                 lastActorReturnScreen = current
                 screen = Screen.Actor(actor)
@@ -1716,6 +1710,26 @@ fun PopcornApp() {
             onDismiss = { updateDialogOpen = false },
             onUpdateStarted = { updateAvailable = false },
         )
+    }
+
+    // One app-wide message banner. Screens used to draw the error string
+    // inside their content Box, where Home's opaque hero covered it and the
+    // grids overlapped it — failures were effectively silent.
+    val bannerVisible = screen !is Screen.Loading && screen !is Screen.Login && screen !is Screen.Player
+    LaunchedEffect(error, bannerVisible) {
+        if (error.isNotBlank() && bannerVisible) {
+            delay(6_000)
+            error = ""
+        }
+    }
+    LaunchedEffect(notice) {
+        if (notice.isNotBlank()) {
+            delay(4_000)
+            notice = ""
+        }
+    }
+    if (bannerVisible) {
+        MessageBanner(text = error.ifBlank { notice }, isError = error.isNotBlank())
     }
 }
 

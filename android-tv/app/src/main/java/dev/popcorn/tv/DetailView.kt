@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -1308,6 +1309,10 @@ private fun TvSelectionShelf(
     onDismiss: () -> Unit,
 ) {
     val firstFocus = remember { FocusRequester() }
+    // Open on the current value, not row 0: in the rating sheet row 0 is
+    // "Remove rating", one reflexive OK away from deleting it.
+    val focusIndex = remember(title, options.size) { options.indexOfFirst { it.selected }.coerceAtLeast(0) }
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (focusIndex - 2).coerceAtLeast(0))
     BackHandler(onBack = onDismiss)
     LaunchedEffect(title, options.size) {
         delay(45)
@@ -1331,16 +1336,16 @@ private fun TvSelectionShelf(
                     .border(1.dp, Color.White.copy(alpha = .10f))
                     .padding(horizontal = 28.dp, vertical = 42.dp),
             ) {
-                Text(title, color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                Text(title, color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(7.dp))
                 Text(subtitle, color = TextColor, fontSize = 22.sp, fontWeight = FontWeight.Black)
                 Spacer(Modifier.height(18.dp))
-                LazyColumn(Modifier.fillMaxWidth().weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                LazyColumn(Modifier.fillMaxWidth().weight(1f), state = listState, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     itemsIndexed(options) { index, option ->
                         TrackRow(
                             label = option.label,
                             selected = option.selected,
-                            modifier = if (index == 0) Modifier.focusRequester(firstFocus) else Modifier,
+                            modifier = if (index == focusIndex) Modifier.focusRequester(firstFocus) else Modifier,
                             onClick = option.action,
                         )
                     }

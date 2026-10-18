@@ -99,6 +99,11 @@ fun <T> PosterGrid(
         if (targetKey == null) 0 else entries.indexOfFirst { key(it) == targetKey }.coerceAtLeast(0)
     }
     val gridState = rememberLazyGridState(initialFirstVisibleItemIndex = initialGridIndex)
+    // Alphabet jumps scroll the list already loaded and focus the first title
+    // of the letter. They used to reload the library from the letter's
+    // offset: titles before it vanished and every jump cost four requests.
+    var jumpFocusIndex by remember { mutableStateOf<Int?>(null) }
+    val gridScope = rememberCoroutineScope()
     val alphabetIndex = remember(entries, alphabetTitle, alphabetEntries, onAlphabet) {
         if (alphabetEntries.isNotEmpty()) {
             alphabetEntries.associateBy { it.letter }
@@ -143,14 +148,27 @@ fun <T> PosterGrid(
                         initialFocusPending = false
                     }
                 }
+                if (index == jumpFocusIndex) {
+                    LaunchedEffect(jumpFocusIndex) {
+                        delay(60)
+                        runCatching { focusRequester.requestFocus() }
+                        jumpFocusIndex = null
+                    }
+                }
                 content(item, focusNow, column, firstRow, rightEdge, focusRequester)
             }
         }
         if (alphabetIndex.isNotEmpty()) {
             AlphabetRail(
                 index = alphabetIndex,
-                gridState = gridState,
-                onAlphabet = onAlphabet,
+                onJump = { offset ->
+                    // Background paging may still be filling the list.
+                    val target = offset.coerceAtMost(entries.lastIndex).coerceAtLeast(0)
+                    gridScope.launch {
+                        gridState.scrollToItem(target)
+                        jumpFocusIndex = target
+                    }
+                },
                 focusRequester = alphabetFocusRequester,
                 requestedFocusLetter = selectedAlphabetLetter,
                 restoreFocus = restoreFocus,
@@ -177,8 +195,7 @@ private fun String.withoutLeadingArticle(): String {
 @Composable
 private fun AlphabetRail(
     index: Map<String, AlphabetEntry>,
-    gridState: LazyGridState,
-    onAlphabet: ((AlphabetEntry) -> Unit)?,
+    onJump: (Int) -> Unit,
     focusRequester: FocusRequester? = null,
     requestedFocusLetter: String? = null,
     restoreFocus: (() -> Boolean)? = null,
@@ -219,19 +236,7 @@ private fun AlphabetRail(
                         }
                     }
                     .tvActivate {
-                        if (target != null) {
-                            if (onAlphabet != null) {
-                                onAlphabet(target)
-                                if (focusRequester != null) {
-                                    scope.launch {
-                                        delay(180)
-                                        runCatching { focusRequester.requestFocus() }
-                                    }
-                                }
-                            } else {
-                                scope.launch { gridState.scrollToItem(target.offset) }
-                            }
-                        }
+                        if (target != null) onJump(target.offset)
                     },
                 contentAlignment = Alignment.Center,
             ) {

@@ -47,9 +47,9 @@ import java.net.ServerSocket
 import java.util.UUID
 
 @Composable
-fun LoginView(initialServer: String, error: String, onLogin: (String, String, String) -> Unit, onQrLogin: (Session) -> Unit) {
+fun LoginView(initialServer: String, initialUsername: String = "", error: String, onLogin: (String, String, String) -> Unit, onQrLogin: (Session) -> Unit) {
     var server by remember { mutableStateOf(initialServer) }
-    var username by remember { mutableStateOf("admin") }
+    var username by remember { mutableStateOf(initialUsername.ifBlank { "admin" }) }
     var password by remember { mutableStateOf("") }
     var mode by remember { mutableStateOf("choose") }
     var setupPayload by remember { mutableStateOf("") }

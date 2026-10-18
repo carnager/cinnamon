@@ -1264,7 +1264,21 @@ private fun ThemeMusicPlayer(session: Session?, show: ShowSummary) {
                 playWhenReady = true
             }
     }
-    androidx.compose.runtime.DisposableEffect(player) {
-        onDispose { player.release() }
+    // The composition outlives onStop, so without this the theme kept looping
+    // over the launcher after the Home button.
+    val lifecycle = (context as? androidx.activity.ComponentActivity)?.lifecycle
+    androidx.compose.runtime.DisposableEffect(player, lifecycle) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> player.pause()
+                androidx.lifecycle.Lifecycle.Event.ON_START -> player.play()
+                else -> Unit
+            }
+        }
+        lifecycle?.addObserver(observer)
+        onDispose {
+            lifecycle?.removeObserver(observer)
+            player.release()
+        }
     }
 }

@@ -90,6 +90,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import android.os.SystemClock
 import androidx.compose.runtime.State
 import androidx.compose.ui.graphics.CompositingStrategy
 import kotlinx.coroutines.launch
@@ -162,9 +164,6 @@ fun HomeView(
             Pill(text = "Arrange", selected = false, onClick = onArrange)
         },
     ) {
-        if (error.isNotBlank()) {
-            Text(error, color = ErrorRed, modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp), fontSize = 13.sp)
-        }
         if (loading) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
@@ -216,12 +215,13 @@ fun AppChrome(
     val fallbackNavFocusRequester = remember { FocusRequester() }
     val resolvedNavFocusRequester = navFocusRequester ?: fallbackNavFocusRequester
     var sideNavigationHasFocus by remember { mutableStateOf(false) }
-    BackHandler(enabled = backShortcutEnabled) {
+    // TV convention: Back from content goes to the rail, Back on the rail of
+    // another tab goes Home, and Back on Home's rail leaves the app (the
+    // handler steps aside). It used to bounce focus between rail and content
+    // forever, so the app could only be left with the Home button.
+    BackHandler(enabled = backShortcutEnabled && !(sideNavigationHasFocus && selected == "home")) {
         if (sideNavigationHasFocus) {
-            val restored = onSideNavigationExit?.invoke() == true
-            if (!restored) {
-                runCatching { resolvedNavFocusRequester.requestFocus() }
-            }
+            onHome()
         } else {
             runCatching { resolvedNavFocusRequester.requestFocus() }
         }
@@ -460,9 +460,6 @@ fun WatchlistView(
             restoreContentFocus?.let { target -> runCatching { target.requestFocus() }.isSuccess } ?: false
         },
     ) {
-        if (error.isNotBlank()) {
-            Text(error, color = ErrorRed, modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp), fontSize = 13.sp)
-        }
         if (movies.isEmpty() && shows.isEmpty()) {
             EmptyState("No watchlist items")
         } else {
@@ -799,9 +796,6 @@ fun LibraryPageView(
                 )
             },
         ) {
-            if (error.isNotBlank()) {
-                Text(error, color = ErrorRed, modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp), fontSize = 13.sp)
-            }
             Box(Modifier.fillMaxSize()) {
                 if (loading) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1066,6 +1060,27 @@ fun LibraryFilterBar(
         else -> "Genre: ${selectedGenres.size} selected"
     }
     val selectedDecadeList = splitSelectedGenres(selectedDecades)
+    // Multi-select pages collect ticks and apply once when the drawer closes;
+    // each tick used to reload the whole library (spinner, four requests).
+    var pendingGenres by remember { mutableStateOf<List<String>?>(null) }
+    var pendingDecades by remember { mutableStateOf<List<String>?>(null) }
+    fun closeFilterDrawer() {
+        val genresChanged = pendingGenres?.let { it != selectedGenres } == true
+        val decadesChanged = pendingDecades?.let { it != selectedDecadeList } == true
+        if (genresChanged || decadesChanged) {
+            applyingFilter()
+            onApply(
+                selectedSort,
+                selectedSeenStatus,
+                selectedMinRating,
+                (pendingGenres ?: selectedGenres).joinToString(","),
+                (pendingDecades ?: selectedDecadeList).joinToString(","),
+            )
+        }
+        pendingGenres = null
+        pendingDecades = null
+        closeDrawer(restoreImmediately = !(genresChanged || decadesChanged))
+    }
     val decadeLabel = when (selectedDecadeList.size) {
         0 -> "Decade: All"
         1 -> "Decade: ${selectedDecadeList.first()}s"
@@ -1096,8 +1111,8 @@ fun LibraryFilterBar(
                 sort = selectedSort,
                 seen = selectedSeenStatus,
                 rating = selectedMinRating,
-                selectedGenres = selectedGenres,
-                selectedDecades = selectedDecadeList,
+                selectedGenres = pendingGenres ?: selectedGenres,
+                selectedDecades = pendingDecades ?: selectedDecadeList,
                 genres = genres,
                 decades = decades,
                 onSort = { value ->
@@ -1115,15 +1130,9 @@ fun LibraryFilterBar(
                     onApply(selectedSort, selectedSeenStatus, value, selectedGenre, selectedDecades)
                     closeDrawer(restoreImmediately = false)
                 },
-                onGenres = { values ->
-                    applyingFilter()
-                    onApply(selectedSort, selectedSeenStatus, selectedMinRating, values.joinToString(","), selectedDecades)
-                },
-                onDecades = { values ->
-                    applyingFilter()
-                    onApply(selectedSort, selectedSeenStatus, selectedMinRating, selectedGenre, values.joinToString(","))
-                },
-                onClose = { closeDrawer() },
+                onGenres = { values -> pendingGenres = values },
+                onDecades = { values -> pendingDecades = values },
+                onClose = { closeFilterDrawer() },
             )
         }
     }
@@ -1337,7 +1346,7 @@ private fun AvatarButton(url: String, session: Session?, selected: Boolean, focu
     }
 }
 
-private enum class UserMenuPage { Root, Audio, Subtitles, PhoneLogin, NotInterested }
+private enum class UserMenuPage { Root, Audio, Subtitles, PhoneLogin, NotInterested, ConfirmLogout }
 
 data class UserDrawerEntry(
     val label: String,
@@ -1382,7 +1391,7 @@ private fun UserMenuDrawer(
             }))
             if (session?.isAdmin == true) add(UserDrawerEntry("Update libraries", Icons.Filled.Refresh, action = onScan))
             if (showUpdate) add(UserDrawerEntry("Update app", Icons.Filled.SystemUpdate, action = onUpdates))
-            add(UserDrawerEntry("Logout", Icons.AutoMirrored.Filled.Logout, action = onLogout))
+            add(UserDrawerEntry("Logout", Icons.AutoMirrored.Filled.Logout, action = { onPage(UserMenuPage.ConfirmLogout) }))
         }
         UserMenuPage.Audio -> listOf(UserDrawerEntry("Back", Icons.AutoMirrored.Filled.ArrowBack, action = { onPage(UserMenuPage.Root) })) +
             audioOptions.map { option ->
@@ -1399,6 +1408,11 @@ private fun UserMenuDrawer(
                 }
             }
         UserMenuPage.PhoneLogin -> emptyList()
+        // Cancel first, so a reflexive OK doesn't sign out.
+        UserMenuPage.ConfirmLogout -> listOf(
+            UserDrawerEntry("Cancel", Icons.AutoMirrored.Filled.ArrowBack, action = { onPage(UserMenuPage.Root) }),
+            UserDrawerEntry("Sign out", Icons.AutoMirrored.Filled.Logout, "Server address is kept", action = onLogout),
+        )
         UserMenuPage.NotInterested -> listOf(
             UserDrawerEntry("Back", Icons.AutoMirrored.Filled.ArrowBack, action = { onPage(UserMenuPage.Root) }),
         ) + exclusions.map { entry ->
@@ -1473,6 +1487,7 @@ private fun UserMenuDrawer(
                         UserMenuPage.Subtitles -> "PREFERRED SUBTITLES"
                         UserMenuPage.PhoneLogin -> "SIGN IN A PHONE"
                         UserMenuPage.NotInterested -> "NOT INTERESTED"
+                        UserMenuPage.ConfirmLogout -> "LOGOUT"
                     },
                     color = Accent,
                     fontSize = 10.sp,
@@ -1484,6 +1499,7 @@ private fun UserMenuDrawer(
                         UserMenuPage.Root -> session.userDisplayName()
                         UserMenuPage.PhoneLogin -> "Cinnamon Android"
                         UserMenuPage.NotInterested -> if (exclusionsLoading) "Loading…" else "${exclusions.size} excluded"
+                        UserMenuPage.ConfirmLogout -> "Sign out of ${session.userDisplayName()}?"
                         else -> "Playback languages"
                     },
                     color = TextColor,
@@ -1654,9 +1670,14 @@ private fun HomeHero(
             runCatching { heroRequester.requestFocus() }
         }
     }
-    LaunchedEffect(picks, index) {
-        if (picks.size > 1) {
-            delay(12_000)
+    // Rotate only while the hero has focus and the viewer has left it alone
+    // for a while: it used to switch every 12s regardless, so OK could start
+    // a different title than the one just read, and the decode + crossfade
+    // hitched shelf scrolling further down.
+    var lastHeroKeyAt by remember { mutableStateOf(0L) }
+    LaunchedEffect(picks, index, heroFocused, lastHeroKeyAt) {
+        if (picks.size > 1 && heroFocused) {
+            delay(20_000)
             onIndexChange((index + 1) % picks.size)
         }
     }
@@ -1675,6 +1696,7 @@ private fun HomeHero(
                 if (it.isFocused) onContentFocus(heroRequester)
             }
             .focusable()
+            .onPreviewKeyEvent { lastHeroKeyAt = SystemClock.elapsedRealtime(); false }
             .onKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
                 when (event.key) {

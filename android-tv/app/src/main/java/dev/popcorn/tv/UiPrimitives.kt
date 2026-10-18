@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -260,5 +261,24 @@ fun LoadingView(error: String) {
         } else {
             Text(error, color = ErrorRed, fontSize = 14.sp)
         }
+    }
+}
+
+@Composable
+fun MessageBanner(text: String, isError: Boolean) {
+    if (text.isBlank()) return
+    Box(Modifier.fillMaxSize().padding(bottom = 40.dp), contentAlignment = Alignment.BottomCenter) {
+        Text(
+            text = text,
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .widthIn(max = 720.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (isError) Color(0xF0471A1A) else Color(0xF0172029))
+                .border(1.dp, if (isError) ErrorRed.copy(alpha = .7f) else Color.White.copy(alpha = .16f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 22.dp, vertical = 14.dp),
+        )
     }
 }

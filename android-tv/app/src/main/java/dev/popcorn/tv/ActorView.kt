@@ -1,4 +1,18 @@
 package dev.popcorn.tv
+import kotlinx.coroutines.delay
+import androidx.activity.compose.BackHandler
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.onFocusedBoundsChanged
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateIntAsState
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -39,6 +53,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ActorView(
     session: Session?,
@@ -67,47 +82,87 @@ fun ActorView(
         loading = false
     }
 
-    LazyColumn(
+    // Same page model as detail and show pages: one column shifted to keep
+    // the focused element on screen (preferring the top), no scroll
+    // container to jitter, focus starting on the first title. The old
+    // on-screen Back button is gone — the remote has one.
+    var viewportPx by remember { mutableStateOf(0) }
+    var contentPx by remember { mutableStateOf(0) }
+    var targetShift by remember(actor.name) { mutableStateOf(0) }
+    val shift by animateIntAsState(
+        targetValue = targetShift.coerceIn(0, (contentPx - viewportPx).coerceAtLeast(0)),
+        animationSpec = tween(durationMillis = 220),
+        label = "actorShift",
+    )
+    var columnCoords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+    val density = LocalDensity.current
+    fun followFocus(focused: LayoutCoordinates?) {
+        val column = columnCoords ?: return
+        if (focused == null || !focused.isAttached || !column.isAttached) return
+        val rect = column.localBoundingBoxOf(focused, clipBounds = false)
+        val topMargin = with(density) { 24.dp.toPx() }
+        val bottomMargin = with(density) { 40.dp.toPx() }
+        val viewport = viewportPx.toFloat()
+        targetShift = if (rect.bottom + bottomMargin <= viewport) {
+            0
+        } else {
+            minOf(rect.bottom + bottomMargin - viewport, rect.top - topMargin).coerceAtLeast(0f).toInt()
+        }
+    }
+    var bioOpen by remember(actor.name) { mutableStateOf(false) }
+    val bioFocus = remember { FocusRequester() }
+    val firstTitleFocus = remember { FocusRequester() }
+    val loaded = detail
+    LaunchedEffect(loaded) {
+        if (loaded == null) return@LaunchedEffect
+        delay(200)
+        runCatching { firstTitleFocus.requestFocus() }.onFailure { runCatching { bioFocus.requestFocus() } }
+    }
+    BackHandler(enabled = !bioOpen, onBack = onBack)
+
+    Box(
         Modifier
             .fillMaxSize()
             .background(Bg)
-            .padding(horizontal = 52.dp),
+            .clipToBounds()
+            .onSizeChanged { viewportPx = it.height },
     ) {
-        item {
-            Spacer(Modifier.height(42.dp))
-            FocusButton("Back", primary = false, onClick = onBack)
-            Spacer(Modifier.height(24.dp))
-        }
-
-        when {
-            loading -> item {
-                Box(Modifier.fillMaxWidth().height(260.dp), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .wrapContentHeight(Alignment.Top, unbounded = true)
+                .onSizeChanged { contentPx = it.height }
+                .offset { IntOffset(0, -shift) }
+                .onGloballyPositioned { columnCoords = it }
+                .onFocusedBoundsChanged { followFocus(it) }
+                .padding(horizontal = 52.dp),
+        ) {
+            Spacer(Modifier.height(48.dp))
+            when {
+                loading -> Box(Modifier.fillMaxWidth().height(260.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
                 }
-            }
-            error.isNotBlank() -> item {
-                Text(error, color = ErrorRed, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            }
-            detail != null -> {
-                val actorDetail = detail!!
-                item {
-                    ActorHero(session, actorDetail)
-                }
-                if (actorDetail.movies.isNotEmpty()) {
-                    item {
-                        Spacer(Modifier.height(30.dp))
-                        ActorSectionHeader("Movies", actorDetail.movies.size)
+                error.isNotBlank() -> Text(error, color = ErrorRed, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                loaded != null -> {
+                    ActorHero(session, loaded, bioFocus = bioFocus, onBio = { bioOpen = true }, onBioDown = {
+                        runCatching { firstTitleFocus.requestFocus() }.isSuccess
+                    })
+                    if (loaded.movies.isNotEmpty()) {
+                        Spacer(Modifier.height(28.dp))
+                        ActorSectionHeader("Movies", loaded.movies.size)
                         LazyRow(
-                            contentPadding = PaddingValues(horizontal = 10.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            // Vertical room for the focused card's scale-up.
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            itemsIndexed(actorDetail.movies) { _, item ->
-                                Box(Modifier.width(130.dp).padding(horizontal = 4.dp)) {
+                            itemsIndexed(loaded.movies, key = { _, item -> item.id }) { index, item ->
+                                Box(Modifier.width(130.dp)) {
                                     ItemCard(
                                         session = session,
                                         item = item,
                                         watched = completedItems.contains(item.id),
                                         watchlisted = watchlistItems.contains(item.id),
+                                        focusRequester = if (index == 0) firstTitleFocus else null,
                                         onClick = { onItem(item) },
                                         onLongClick = { requester -> onItemMenu(item, requester) },
                                     )
@@ -115,22 +170,21 @@ fun ActorView(
                             }
                         }
                     }
-                }
-                if (actorDetail.shows.isNotEmpty()) {
-                    item {
-                        Spacer(Modifier.height(30.dp))
-                        ActorSectionHeader("Shows", actorDetail.shows.size)
+                    if (loaded.shows.isNotEmpty()) {
+                        Spacer(Modifier.height(24.dp))
+                        ActorSectionHeader("Shows", loaded.shows.size)
                         LazyRow(
-                            contentPadding = PaddingValues(horizontal = 10.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            itemsIndexed(actorDetail.shows) { _, show ->
-                                Box(Modifier.width(130.dp).padding(horizontal = 4.dp)) {
+                            itemsIndexed(loaded.shows, key = { _, show -> "${show.libraryId}:${show.title}" }) { index, show ->
+                                Box(Modifier.width(130.dp)) {
                                     ShowCard(
                                         session = session,
                                         show = show,
                                         watched = completedShows.contains("${show.libraryId}\n${show.title.lowercase()}"),
                                         watchlisted = watchlistShows.contains("${show.libraryId}\n${show.title.lowercase()}"),
+                                        focusRequester = if (index == 0 && loaded.movies.isEmpty()) firstTitleFocus else null,
                                         onClick = { onShow(show) },
                                         onLongClick = { requester -> onShowMenu(show, requester) },
                                     )
@@ -140,13 +194,25 @@ fun ActorView(
                     }
                 }
             }
+            Spacer(Modifier.height(40.dp))
         }
-        item { Spacer(Modifier.height(70.dp)) }
+    }
+    if (bioOpen && loaded != null) {
+        ShowFullTextDialog(
+            title = loaded.actor.name,
+            subtitle = loaded.info.knownForDepartment,
+            overview = loaded.info.biography,
+            facts = listOfNotNull(
+                loaded.info.birthday.takeIf { it.isNotBlank() }?.let { "Born" to it },
+                loaded.info.placeOfBirth.takeIf { it.isNotBlank() }?.let { "Place of birth" to it },
+            ),
+            onDismiss = { bioOpen = false },
+        )
     }
 }
 
 @Composable
-private fun ActorHero(session: Session?, detail: ActorDetail) {
+private fun ActorHero(session: Session?, detail: ActorDetail, bioFocus: FocusRequester, onBio: () -> Unit, onBioDown: () -> Boolean) {
     val profileUrl = actorImageUrl(session, detail.profileUrl)
     Row(
         Modifier.widthIn(max = 980.dp),
@@ -190,15 +256,20 @@ private fun ActorHero(session: Session?, detail: ActorDetail) {
                 Spacer(Modifier.height(8.dp))
                 Text("as ${detail.actor.role}", color = Muted, fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
-            Spacer(Modifier.height(16.dp))
-            Text(
-                detail.info.biography.ifBlank { "No biography available." },
-                color = TextColor.copy(alpha = .82f),
-                fontSize = 15.sp,
-                lineHeight = 22.sp,
-                maxLines = 6,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Spacer(Modifier.height(10.dp))
+            if (detail.info.biography.isNotBlank()) {
+                // Focusable: OK opens the whole biography.
+                FocusableDescriptionPanel(
+                    overview = detail.info.biography,
+                    maxLines = 7,
+                    maxWidth = 760.dp,
+                    focusRequester = bioFocus,
+                    onDown = onBioDown,
+                    onClick = onBio,
+                )
+            } else {
+                Text("No biography available.", color = Muted, fontSize = 15.sp)
+            }
         }
     }
 }

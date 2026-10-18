@@ -412,7 +412,7 @@ fun ShowView(
 }
 
 @Composable
-private fun ShowFullTextDialog(
+fun ShowFullTextDialog(
     title: String,
     subtitle: String,
     overview: String,

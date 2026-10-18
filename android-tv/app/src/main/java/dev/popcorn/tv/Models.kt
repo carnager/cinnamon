@@ -19,7 +19,11 @@ data class StreamInfo(
         val parts = mutableListOf<String>()
         if (lang.isNotBlank()) parts.add(lang)
         // Release titles often just repeat the language ("German", "GER - SUBS").
-        if (title.isNotBlank() && !title.contains(lang, ignoreCase = true) && !title.equals(language, ignoreCase = true)) parts.add(title)
+        // ...or the format shown on the second line ("DTS" beside "DTS 5.1").
+        val format = friendlyCodec(codec, profile)
+        if (title.isNotBlank() && !title.contains(lang, ignoreCase = true) && !title.equals(language, ignoreCase = true) &&
+            !format.contains(title, ignoreCase = true) && !title.equals(codec, ignoreCase = true)
+        ) parts.add(title)
         if (forced && parts.none { it.contains("forced", ignoreCase = true) }) parts.add("Forced")
         return parts.joinToString(" \u00b7 ").ifBlank { "Track $index" }
     }
@@ -34,6 +38,10 @@ data class StreamInfo(
     }
 
     fun label(): String = listOf(primaryLabel(), detailLabel()).filter { it.isNotBlank() }.joinToString(" \u00b7 ")
+
+    // Compact form for the detail page's selector buttons: no "Default".
+    fun shortLabel(): String = listOf(primaryLabel(), detailLabel().split(" \u00b7 ").filterNot { it == "Default" }.joinToString(" \u00b7 "))
+        .filter { it.isNotBlank() }.joinToString(" \u00b7 ")
 }
 
 private fun languageDisplayName(code: String): String {

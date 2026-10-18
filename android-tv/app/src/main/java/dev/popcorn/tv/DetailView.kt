@@ -1172,7 +1172,7 @@ fun TrackChoiceDialog(
 }
 
 fun selectedTrackLabel(tracks: List<StreamInfo>, selected: Int?, fallback: String): String {
-    return tracks.firstOrNull { it.index == selected }?.label() ?: fallback
+    return tracks.firstOrNull { it.index == selected }?.shortLabel() ?: fallback
 }
 
 @Composable

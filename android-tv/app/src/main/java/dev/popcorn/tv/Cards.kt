@@ -161,6 +161,12 @@ fun <T> PosterGrid(
         if (alphabetIndex.isNotEmpty()) {
             AlphabetRail(
                 index = alphabetIndex,
+                // Moving along the letters scrolls the grid behind the rail;
+                // focus stays on the rail until OK or Left.
+                onPreview = { offset ->
+                    val target = offset.coerceAtMost(entries.lastIndex).coerceAtLeast(0)
+                    gridScope.launch { gridState.scrollToItem(target) }
+                },
                 onJump = { offset ->
                     // Background paging may still be filling the list.
                     val target = offset.coerceAtMost(entries.lastIndex).coerceAtLeast(0)
@@ -174,7 +180,7 @@ fun <T> PosterGrid(
                 restoreFocus = restoreFocus,
                 availableHeight = maxHeight,
                 // Inside the TV overscan margin (was 10dp from the screen edge).
-                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 26.dp),
+                modifier = Modifier.align(Alignment.TopEnd).padding(end = 26.dp, top = 8.dp),
             )
         }
     }
@@ -196,6 +202,7 @@ private fun String.withoutLeadingArticle(): String {
 @Composable
 private fun AlphabetRail(
     index: Map<String, AlphabetEntry>,
+    onPreview: (Int) -> Unit,
     onJump: (Int) -> Unit,
     focusRequester: FocusRequester? = null,
     requestedFocusLetter: String? = null,
@@ -207,7 +214,10 @@ private fun AlphabetRail(
     val letters = listOf("#") + ('A'..'Z').map { it.toString() }
     val firstEnabledLetter = letters.firstOrNull { index[it] != null }
     val focusLetter = requestedFocusLetter?.takeIf { index[it] != null } ?: firstEnabledLetter
-    val letterHeight = ((availableHeight - 6.dp) / letters.size).coerceAtMost(16.dp)
+    // Fit all 27 entries above the bottom overscan margin; the rail used to
+    // run off the screen with "Z" cut off.
+    val letterHeight = ((availableHeight - 6.dp - 44.dp) / letters.size).coerceIn(10.dp, 16.dp)
+    var previewJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     Column(
         modifier
             .width(36.dp)
@@ -227,13 +237,28 @@ private fun AlphabetRail(
                     .then(if (letter == focusLetter && focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
                     .clip(RoundedCornerShape(6.dp))
                     .background(if (focused && target != null) Accent else Color.Transparent)
-                    .onFocusChanged { focused = it.isFocused }
+                    .onFocusChanged {
+                        focused = it.isFocused
+                        if (it.isFocused && target != null) {
+                            previewJob?.cancel()
+                            previewJob = scope.launch {
+                                delay(220)
+                                onPreview(target.offset)
+                            }
+                        }
+                    }
                     .focusable(enabled = target != null)
                     .onKeyEvent {
-                        if (it.type == KeyEventType.KeyDown && it.key == Key.DirectionLeft && restoreFocus != null) {
-                            restoreFocus()
-                        } else {
-                            false
+                        when {
+                            it.type != KeyEventType.KeyDown || it.key != Key.DirectionLeft -> false
+                            // Into the grid at this letter, where it now shows.
+                            target != null -> {
+                                previewJob?.cancel()
+                                onJump(target.offset)
+                                true
+                            }
+                            restoreFocus != null -> restoreFocus()
+                            else -> false
                         }
                     }
                     .tvActivate {
@@ -249,7 +274,7 @@ private fun AlphabetRail(
                         else -> TextColor
                     },
                     fontSize = 12.sp,
-                    lineHeight = 9.sp,
+                    lineHeight = 12.sp,
                     fontWeight = FontWeight.Black,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 )

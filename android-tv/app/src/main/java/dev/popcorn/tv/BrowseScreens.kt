@@ -90,6 +90,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
+import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
@@ -1970,6 +1976,7 @@ private fun HeroActionButton(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CuratedLanding(
     session: Session?,
@@ -2030,6 +2037,19 @@ fun CuratedLanding(
             initialFocusPending = false
         }
     }
+    // Shelves pivot: the focused card's row settles at one fixed height near
+    // the top, with its shelf title fully visible, instead of wherever
+    // minimal bring-into-view leaves it (half rows and cut titles above).
+    // Rows keep the default horizontal behaviour (see PosterShelf).
+    val density = LocalDensity.current
+    val defaultSpec = LocalBringIntoViewSpec.current
+    val pivotSpec = remember(density) {
+        val pivotPx = with(density) { 44.dp.toPx() }
+        object : BringIntoViewSpec {
+            override fun calculateScrollDistance(offset: Float, size: Float, containerSize: Float): Float = offset - pivotPx
+        }
+    }
+    CompositionLocalProvider(LocalBringIntoViewSpec provides pivotSpec, LocalRowBringIntoViewSpec provides defaultSpec) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         state = listState,
@@ -2112,7 +2132,11 @@ fun CuratedLanding(
             }
         }
     }
+    }
 }
+
+// The bring-into-view behaviour rows should use inside a pivoting column.
+val LocalRowBringIntoViewSpec = compositionLocalOf<BringIntoViewSpec?> { null }
 
 object HistoryMemory {
     var history: WatchHistory? = null
@@ -2214,6 +2238,7 @@ fun ItemShelfView(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun <T> PosterShelf(
     title: String,
@@ -2239,6 +2264,8 @@ fun <T> PosterShelf(
             Text(title, color = TextColor, fontSize = 16.sp, fontWeight = FontWeight.Black)
             Text(subtitle, color = Muted, fontSize = 12.sp, modifier = Modifier.padding(bottom = 2.dp))
         }
+        val rowSpec = LocalRowBringIntoViewSpec.current ?: LocalBringIntoViewSpec.current
+        CompositionLocalProvider(LocalBringIntoViewSpec provides rowSpec) {
         LazyRow(
             modifier = Modifier.fillMaxWidth(),
             state = rowState,
@@ -2258,6 +2285,7 @@ fun <T> PosterShelf(
                     }
                 }
             }
+        }
         }
     }
 }

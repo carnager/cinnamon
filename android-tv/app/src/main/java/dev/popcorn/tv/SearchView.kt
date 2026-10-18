@@ -42,6 +42,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.async
 
 private sealed interface SearchResult {
     data class Show(val show: ShowSummary) : SearchResult
@@ -76,8 +78,9 @@ fun SearchView(
     var options by remember { mutableStateOf(SearchOptions()) }
     val searchFocus = remember { FocusRequester() }
     val fields = options.fields.sorted().joinToString(",")
-    val combinedResults: List<SearchResult> =
+    val combinedResults: List<SearchResult> = remember(showResults, movieResults) {
         showResults.map { SearchResult.Show(it) } + movieResults.map { SearchResult.Movie(it) }
+    }
 
     BackHandler(onBack = onBack)
 
@@ -87,23 +90,30 @@ fun SearchView(
     }
 
     LaunchedEffect(query, session, fields, options.scope) {
-        onQueryChange(query)
         val active = session
         val q = query.trim()
         if (active == null || q.length < 2) {
+            onQueryChange(query)
             movieResults = emptyList()
             showResults = emptyList()
             error = ""
             loading = false
             return@LaunchedEffect
         }
-        loading = true
+        // Debounce first and keep the previous results up meanwhile: setting
+        // loading before the delay swapped the grid for a spinner per key.
         delay(250)
+        // Stored for Back-to-search only after typing settles; writing it per
+        // key recomposed the whole app from the root.
+        onQueryChange(query)
+        loading = combinedResults.isEmpty()
         runCatching {
             val api = Api(active)
-            val shows = if (options.scope != "movies") api.searchShows(q, fields) else emptyList()
-            val movies = if (options.scope != "tv") api.searchMovies(q, fields) else emptyList()
-            shows to movies
+            coroutineScope {
+                val shows = async { if (options.scope != "movies") api.searchShows(q, fields) else emptyList() }
+                val movies = async { if (options.scope != "tv") api.searchMovies(q, fields) else emptyList() }
+                shows.await() to movies.await()
+            }
         }
             .onSuccess { (shows, movies) ->
                 showResults = shows

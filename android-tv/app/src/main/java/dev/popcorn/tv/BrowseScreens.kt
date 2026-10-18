@@ -90,6 +90,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.zIndex
@@ -443,6 +444,23 @@ fun WatchlistView(
 ) {
     var initialFocusPending by remember(movies.firstOrNull()?.id, shows.firstOrNull()?.title) { mutableStateOf(true) }
     var restoreContentFocus by remember { mutableStateOf<FocusRequester?>(null) }
+    // Back from a detail page lands on the card that was opened (see
+    // HomeFocusMemory), not on the first card.
+    val movieKeys = remember(movies) { movies.map { "movie:${it.id}" } }
+    val showKeys = remember(shows) { shows.map { "show:${it.libraryId}:${it.title}" } }
+    val targetKey = remember(movieKeys, showKeys) {
+        WatchlistFocusMemory.key?.takeIf { it in movieKeys || it in showKeys } ?: movieKeys.firstOrNull() ?: showKeys.firstOrNull()
+    }
+    val watchlistGridState = remember(movieKeys, showKeys) {
+        val movieAt = movieKeys.indexOf(targetKey)
+        val showAt = showKeys.indexOf(targetKey)
+        val gridIndex = when {
+            movieAt >= 0 -> 2 + movieAt
+            showAt >= 0 -> 1 + (if (movieKeys.isNotEmpty()) 1 + movieKeys.size else 0) + 1 + showAt
+            else -> 0
+        }
+        LazyGridState(firstVisibleItemIndex = gridIndex)
+    }
     AppChrome(
         session,
         libraries,
@@ -465,6 +483,7 @@ fun WatchlistView(
         } else {
             LazyVerticalGrid(
             columns = GridCells.Adaptive(120.dp),
+            state = watchlistGridState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 32.dp, end = 32.dp, top = 16.dp, bottom = 28.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -479,7 +498,7 @@ fun WatchlistView(
                 }
                 gridItemsIndexed(movies, key = { _, item -> "movie:${item.id}" }) { index, item ->
                     val requester = remember { FocusRequester() }
-                    val focusNow = initialFocusPending && index == 0
+                    val focusNow = initialFocusPending && movieKeys.getOrNull(index) == targetKey
                     ItemCard(
                         session = session,
                         item = item,
@@ -490,6 +509,7 @@ fun WatchlistView(
                         onFocus = {
                             restoreContentFocus = requester
                             if (focusNow) initialFocusPending = false
+                            WatchlistFocusMemory.key = "movie:${item.id}"
                         },
                         onClick = { onItem(item) },
                         onLongClick = { requester -> onItemMenu(item, requester) },
@@ -502,7 +522,7 @@ fun WatchlistView(
                 }
                 gridItemsIndexed(shows, key = { _, show -> "show:${show.libraryId}:${show.title}" }) { index, show ->
                     val requester = remember { FocusRequester() }
-                    val focusNow = initialFocusPending && movies.isEmpty() && index == 0
+                    val focusNow = initialFocusPending && showKeys.getOrNull(index) == targetKey
                     ShowCard(
                         session = session,
                         show = show,
@@ -513,6 +533,7 @@ fun WatchlistView(
                         onFocus = {
                             restoreContentFocus = requester
                             if (focusNow) initialFocusPending = false
+                            WatchlistFocusMemory.key = "show:${show.libraryId}:${show.title}"
                         },
                         onClick = { onShow(show) },
                         onLongClick = { requester -> onShowMenu(show, requester) },
@@ -553,18 +574,25 @@ fun HistoryView(
     onLogout: () -> Unit,
     onItem: (PopItem) -> Unit,
 ) {
-    var history by remember(session?.token) { mutableStateOf<WatchHistory?>(null) }
+    // Shown from the last load at once and refreshed behind it: every visit
+    // (including Back from an entry's detail page) used to be a spinner and
+    // a list reset to the top.
+    var history by remember(session?.token) { mutableStateOf(HistoryMemory.history.takeIf { HistoryMemory.token == session?.token }) }
     var error by remember(session?.token) { mutableStateOf("") }
     var restoreContentFocus by remember { mutableStateOf<FocusRequester?>(null) }
+    val restoreIndex = remember { HistoryMemory.focusIndex }
+    val historyListState = rememberLazyListState(initialFirstVisibleItemIndex = restoreIndex)
 
     LaunchedEffect(session?.token) {
         val active = session ?: return@LaunchedEffect
         runCatching { Api(active).watchHistory() }
             .onSuccess {
                 history = it
+                HistoryMemory.history = it
+                HistoryMemory.token = active.token
                 error = ""
             }
-            .onFailure { error = it.message ?: "Failed to load watch history" }
+            .onFailure { if (history == null) error = it.message ?: "Failed to load watch history" }
     }
 
     AppChrome(
@@ -594,6 +622,7 @@ fun HistoryView(
                 val result = history!!
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
+                    state = historyListState,
                     contentPadding = PaddingValues(start = 32.dp, end = 32.dp, top = 16.dp, bottom = 28.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
@@ -607,9 +636,12 @@ fun HistoryView(
                         val requester = remember { FocusRequester() }
                         HistoryListRow(
                             entry = entry,
-                            autoFocus = index == 0,
+                            autoFocus = index == restoreIndex.coerceAtMost(result.items.lastIndex),
                             focusRequester = requester,
-                            onFocus = { restoreContentFocus = requester },
+                            onFocus = {
+                                restoreContentFocus = requester
+                                HistoryMemory.focusIndex = index
+                            },
                             onClick = { entry.item?.let(onItem) },
                         )
                     }
@@ -2004,6 +2036,20 @@ fun CuratedLanding(
     }
 }
 
+object HistoryMemory {
+    var history: WatchHistory? = null
+    var token: String? = null
+    var focusIndex: Int = 0
+}
+
+object ShelfFocusMemory {
+    val byTitle = mutableMapOf<String, Long>()
+}
+
+object WatchlistFocusMemory {
+    var key: String? = null
+}
+
 // Where the viewer was on Home. Plain fields, not Compose state: it is
 // written on every focus move and only read when Home is composed again,
 // so recording it must not recompose anything.
@@ -2038,6 +2084,11 @@ fun ItemShelfView(
     onItemMenu: (PopItem, FocusRequester?) -> Unit,
 ) {
     var initialFocusPending by remember(items.firstOrNull()?.id) { mutableStateOf(true) }
+    // Per shelf title: back from a detail page lands on the opened card.
+    val targetId = remember(items, title) {
+        ShelfFocusMemory.byTitle[title]?.takeIf { id -> items.any { it.id == id } } ?: items.firstOrNull()?.id
+    }
+    val shelfGridState = remember(items, title) { LazyGridState(firstVisibleItemIndex = items.indexOfFirst { it.id == targetId }.coerceAtLeast(0)) }
     Column(Modifier.fillMaxSize().background(Bg)) {
         Row(
             Modifier
@@ -2057,6 +2108,7 @@ fun ItemShelfView(
         }
         LazyVerticalGrid(
             columns = GridCells.Adaptive(122.dp),
+            state = shelfGridState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 32.dp, vertical = 18.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -2064,7 +2116,7 @@ fun ItemShelfView(
         ) {
             gridItemsIndexed(items, key = { _, item -> item.id }) { index, item ->
                 val requester = remember { FocusRequester() }
-                val focusNow = initialFocusPending && index == 0
+                val focusNow = initialFocusPending && item.id == targetId
                 ItemCard(
                     session = session,
                     item = item,
@@ -2072,7 +2124,10 @@ fun ItemShelfView(
                     watchlisted = watchlistItems.contains(item.id),
                     autoFocus = focusNow,
                     focusRequester = requester,
-                    onFocus = { if (focusNow) initialFocusPending = false },
+                    onFocus = {
+                        if (focusNow) initialFocusPending = false
+                        ShelfFocusMemory.byTitle[title] = item.id
+                    },
                     onClick = { onItem(item) },
                     onLongClick = { onItemMenu(item, requester) },
                 )

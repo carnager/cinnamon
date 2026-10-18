@@ -390,6 +390,7 @@ fun ShowView(
             modifier = Modifier.align(Alignment.TopStart).padding(start = 26.dp, top = 24.dp).graphicsLayer { alpha = brandAlpha },
             markSize = 42,
             fontSize = 21,
+            collapsible = true,
         )
     }
 

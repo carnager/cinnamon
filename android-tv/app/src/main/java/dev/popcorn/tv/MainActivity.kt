@@ -183,6 +183,11 @@ fun PopcornApp() {
     // while the app is in the background instead of hitting the server.
     var appVisible by remember { mutableStateOf(true) }
     var lastResumeRefreshAt by remember { mutableStateOf(0L) }
+    // Corner brand: name for a few seconds after start, then just the mark.
+    LaunchedEffect(Unit) {
+        delay(4_000)
+        BrandChrome.expanded = false
+    }
     // Bumped by "Retry now" on the startup screen to restart the load loop.
     var startupAttempt by remember { mutableStateOf(0) }
 

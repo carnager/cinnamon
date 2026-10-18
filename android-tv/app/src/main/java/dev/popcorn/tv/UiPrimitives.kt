@@ -50,6 +50,10 @@ fun CinnamonBrand(
     showName: Boolean = true,
     markSize: Int = 38,
     fontSize: Int = 20,
+    // Corner brand over browsing screens: the name shows at app start, then
+    // collapses into the mark, which sits above the side rail — the full
+    // wordmark covered grid content scrolling beneath it.
+    collapsible: Boolean = false,
 ) {
     Row(
         modifier = modifier,
@@ -71,7 +75,11 @@ fun CinnamonBrand(
                 )
             }
         }
-        if (showName) {
+        androidx.compose.animation.AnimatedVisibility(
+            visible = showName && (!collapsible || BrandChrome.expanded),
+            enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.expandHorizontally(),
+            exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.shrinkHorizontally(),
+        ) {
             Text(
                 "Cinnamon",
                 color = TextColor,
@@ -287,4 +295,9 @@ private val decimalSeparator = java.text.DecimalFormatSymbols.getInstance().deci
 fun formatRating(value: Double): String {
     val tenths = kotlin.math.round(value * 10).toLong()
     return "${tenths / 10}$decimalSeparator${kotlin.math.abs(tenths % 10)}"
+}
+
+// App-wide: whether corner brands still show the name (see CinnamonBrand).
+object BrandChrome {
+    var expanded by mutableStateOf(true)
 }

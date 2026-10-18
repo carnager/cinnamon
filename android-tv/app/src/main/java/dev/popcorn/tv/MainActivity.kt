@@ -182,6 +182,8 @@ fun PopcornApp() {
     // while the app is in the background instead of hitting the server.
     var appVisible by remember { mutableStateOf(true) }
     var lastResumeRefreshAt by remember { mutableStateOf(0L) }
+    // Bumped by "Retry now" on the startup screen to restart the load loop.
+    var startupAttempt by remember { mutableStateOf(0) }
 
     fun showKey(show: ShowSummary): String = "${show.libraryId}\n${show.title.lowercase()}"
 
@@ -742,7 +744,7 @@ fun PopcornApp() {
             Screen.Home -> if (libraries.isNotEmpty()) loadHome(activeSession, libraries)
             Screen.Watchlist -> refreshWatchlist(activeSession)
             is Screen.LibraryPage -> loadLibraryPage(current.library, activeSession, pageIndex, selectedGenre, selectedSort, selectedMinRating, selectedSeenStatus, preserveFocusKey = true)
-            is Screen.Show, is Screen.Season -> visibleContentRefresh += 1
+            is Screen.Show -> visibleContentRefresh += 1
             is Screen.Detail -> scope.launch {
                 runCatching { Api(activeSession).item(current.item.id) }
                     .onSuccess { refreshed -> screen = current.copy(item = refreshed) }
@@ -809,7 +811,7 @@ fun PopcornApp() {
                         lastResumeRefreshAt = now
                         when (screen) {
                             Screen.Home -> if (libraries.isNotEmpty()) loadHome(activeSession, libraries)
-                            is Screen.Show, is Screen.Season -> visibleContentRefresh += 1
+                            is Screen.Show -> visibleContentRefresh += 1
                             else -> Unit
                         }
                     }
@@ -839,7 +841,7 @@ fun PopcornApp() {
         loadHome(active, libraries)
     }
 
-    LaunchedEffect(session) {
+    LaunchedEffect(session, startupAttempt) {
         val active = session ?: return@LaunchedEffect
         loading = true
         val cachedLibraries = withContext(Dispatchers.IO) { AppCache.readLibraries(context, active) }
@@ -1061,9 +1063,7 @@ fun PopcornApp() {
             screen !is Screen.Search,
     ) {
         when (val s = screen) {
-            Screen.Updates -> screen = Screen.Home
             is Screen.Show -> screen = if (s.fromActor != null) Screen.Actor(s.fromActor) else if (s.fromSearch) Screen.Search else if (s.fromWatchlist) Screen.Watchlist else if (s.fromHome) Screen.Home else if (activeLibrary?.type == "tv") Screen.LibraryPage(activeLibrary!!) else Screen.Home
-            is Screen.Season -> screen = Screen.Show(s.show, fromHome = s.fromHome, fromSearch = s.fromSearch, fromWatchlist = s.fromWatchlist, fromActor = s.fromActor)
             is Screen.Detail -> returnFromDetail(s)
             is Screen.ItemShelf -> screen = s.returnTo ?: Screen.Home
             is Screen.Actor -> screen = backFromActor(s.actor)
@@ -1075,7 +1075,15 @@ fun PopcornApp() {
 
     CompositionLocalProvider(LocalResumeProgress provides resumeFractionById, LocalNotInterested provides recommendationExclusionKeys) {
     when (val current = screen) {
-        Screen.Loading -> LoadingView(error)
+        Screen.Loading -> LoadingView(
+            error = error,
+            server = session?.server.orEmpty(),
+            onRetry = {
+                error = ""
+                startupAttempt += 1
+            },
+            onSignOut = ::logout,
+        )
         Screen.Login -> LoginView(
             initialServer = prefs.getString("server", "http://10.0.2.2:8097") ?: "http://10.0.2.2:8097",
             initialUsername = prefs.getString("username", "") ?: "",
@@ -1312,7 +1320,6 @@ fun PopcornApp() {
             onItemMenu = { item, requester -> openItemWatchMenu(item, requester) },
             onShowMenu = { show, requester -> openShowWatchMenu(show, requester) },
         )
-        Screen.Updates -> UpdateView(session = session, onBack = { screen = Screen.Home })
         is Screen.ItemShelf -> ItemShelfView(
             session = session,
             title = current.title,
@@ -1335,51 +1342,6 @@ fun PopcornApp() {
             // Back from an episode's detail page or the player: land on that
             // episode, not on the season tab.
             startWithEpisodes = seasonFocusEpisode != null,
-            completedItems = completedItems,
-            watchlistItems = watchlistItems,
-            showWatched = completedShows.contains(showKey(current.show)),
-            showWatchlisted = watchlistShows.contains(showKey(current.show)),
-            recommendationExcluded = recommendationExclusionKeys.contains("show:${current.show.libraryId.trim().lowercase()}:${current.show.title.trim().lowercase()}"),
-            refreshToken = visibleContentRefresh,
-            onHome = { screen = Screen.Home },
-            onLibrary = { library -> session?.let { loadLibraryPage(library, it, 0, "") } },
-            onWatchlist = { screen = Screen.Watchlist },
-            onHistory = { screen = Screen.History },
-            onSearch = ::openSearch,
-            onUpdates = { updateDialogOpen = true },
-            onScan = ::scanLibraries,
-            onLogout = ::logout,
-            onShowWatchlistChange = {
-                session?.let { active -> setShowWatchlisted(active, current.show, !watchlistShows.contains(showKey(current.show))) }
-            },
-            onPreferenceChange = { preference -> session?.let { active -> setShowPreference(active, current.show, preference) } },
-            onSeason = { season ->
-                showFocusSeason = season.seasonNumber
-                seasonFocusEpisode = null
-            },
-            onSeasonMenu = { season, requester -> openSeasonWatchMenu(season, requester) },
-            // Recorded on click/play only: writing app-level state on every
-            // focus move recomposed the whole app per D-pad press.
-            onEpisodeFocus = {},
-            onPlayEpisode = { item ->
-                seasonFocusEpisode = item.id
-                playEpisode(item, current)
-            },
-            onEpisode = { item ->
-                lastDetail = null
-                seasonFocusEpisode = item.id
-                screen = Screen.Detail(item, current.show, fromHome = current.fromHome, fromSearch = current.fromSearch, fromWatchlist = current.fromWatchlist, fromActor = current.fromActor)
-            },
-            onEpisodeMenu = { episode, requester -> openItemWatchMenu(episode, requester) },
-        )
-        is Screen.Season -> ShowView(
-            session = session,
-            show = current.show,
-            libraries = libraries,
-            showUpdate = updateAvailable,
-            initialSeasonFocus = current.season.seasonNumber,
-            initialEpisodeFocus = seasonFocusEpisode,
-            startWithEpisodes = true,
             completedItems = completedItems,
             watchlistItems = watchlistItems,
             showWatched = completedShows.contains(showKey(current.show)),

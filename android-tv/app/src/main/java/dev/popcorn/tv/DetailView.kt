@@ -1051,24 +1051,6 @@ private fun DetailRatingRow(item: PopItem, ratings: ExternalRatings?) {
     }
 }
 
-@Composable
-private fun DetailFactPanel(item: PopItem) {
-    val rows = detailFactRows(item)
-    if (rows.isEmpty()) return
-
-    Spacer(Modifier.height(12.dp))
-    Column(
-        Modifier
-            .widthIn(max = 600.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(Color.Black.copy(alpha = .35f))
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        DetailFactRows(rows)
-    }
-}
-
 fun detailFactRows(item: PopItem): List<Pair<String, String>> {
     return listOfNotNull(
         item.tagline.takeIf { it.isNotBlank() }?.let { "Tagline" to it },

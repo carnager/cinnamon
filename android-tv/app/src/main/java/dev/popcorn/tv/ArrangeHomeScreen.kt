@@ -433,46 +433,6 @@ private fun ArrangePosterStrip(session: Session?, content: HomeSection?) {
     }
 }
 
-@Composable
-private fun ArrangeAction(
-    label: String,
-    primary: Boolean = false,
-    enabled: Boolean = true,
-    focusRequester: FocusRequester? = null,
-    onLeft: (() -> Boolean)? = null,
-    onClick: () -> Unit,
-) {
-    var focused by remember { mutableStateOf(false) }
-    Row(
-        Modifier
-            .height(42.dp)
-            .clip(RoundedCornerShape(11.dp))
-            .background(
-                when {
-                    focused -> Accent
-                    primary -> AccentDim
-                    else -> Surface2
-                }
-            )
-            .border(1.dp, if (focused) Color(0xFFFFA66A) else Color.Transparent, RoundedCornerShape(11.dp))
-            .onFocusChanged { focused = it.isFocused }
-            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
-            .focusable()
-            .onPreviewKeyEvent {
-                when {
-                    it.type != KeyEventType.KeyDown -> false
-                    it.key == Key.DirectionLeft && onLeft != null -> onLeft()
-                    else -> false
-                }
-            }
-            .tvActivate { if (enabled) onClick() }
-            .padding(horizontal = 20.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, color = TextColor, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
 // What you can do with one shelf, as a panel rather than buttons wedged under
 // the artwork — the same right-hand sheet the checklists use, so there is one
 // place to look and one way back.

@@ -473,20 +473,6 @@ private fun HaloIcon(icon: ImageVector, description: String?, size: Dp, tint: Co
 }
 
 @Composable
-fun BoxScope.PosterStatusBadges(watched: Boolean, watchlisted: Boolean) {
-    if (!watched && !watchlisted) return
-    Column(
-        Modifier
-            .align(Alignment.TopStart)
-            .padding(5.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        if (watched) PosterStateBadge(Icons.Filled.Check, "Seen", Accent, filled = true)
-        if (watchlisted) PosterStateBadge(Icons.Filled.Bookmark, "Watchlist", Teal)
-    }
-}
-
-@Composable
 private fun PosterStateBadge(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     description: String,
@@ -513,110 +499,6 @@ private fun PosterStateBadge(
             tint = if (filled) Bg else tint,
             modifier = Modifier.size(if (filled) 13.dp else 17.dp),
         )
-    }
-}
-
-@Composable
-fun EpisodeRow(session: Session?, item: PopItem, watched: Boolean = false, watchlisted: Boolean = false, autoFocus: Boolean = false, onFocus: (() -> Unit)? = null, onClick: () -> Unit, onLongClick: ((FocusRequester) -> Unit)? = null) {
-    var focused by remember { mutableStateOf(false) }
-    var longPressReady by remember { mutableStateOf(false) }
-    var longPressJob by remember { mutableStateOf<Job?>(null) }
-    val focusRequester = remember { FocusRequester() }
-    val scope = rememberCoroutineScope()
-    LaunchedEffect(autoFocus) {
-        if (autoFocus) {
-            delay(200)
-            focusRequester.requestFocus()
-        }
-    }
-    Row(
-        Modifier
-            .widthIn(max = TvDetailMaxWidth)
-            .fillMaxWidth()
-            .padding(horizontal = 32.dp, vertical = 2.dp)
-            .clip(CardShape)
-            .background(if (focused) Surface2 else SurfaceColor)
-            .border(2.dp, if (focused) FocusGlow else Color.Transparent, CardShape)
-            .focusRequester(focusRequester)
-            .onFocusChanged {
-                focused = it.isFocused
-                if (it.isFocused) onFocus?.invoke()
-                if (!it.isFocused) {
-                    longPressJob?.cancel()
-                    longPressJob = null
-                    longPressReady = false
-                }
-            }
-            .focusable()
-            .onKeyEvent {
-                when {
-                    isActivationKey(it.key) && it.type == KeyEventType.KeyDown -> {
-                        if (onLongClick != null) {
-                            if (longPressJob == null) {
-                                longPressReady = false
-                                longPressJob = scope.launch {
-                                    delay(650)
-                                    longPressReady = true
-                                }
-                            }
-                        }
-                        true
-                    }
-                    isActivationKey(it.key) && it.type == KeyEventType.KeyUp -> {
-                        longPressJob?.cancel()
-                        longPressJob = null
-                        if (longPressReady) {
-                            longPressReady = false
-                            onLongClick?.invoke(focusRequester)
-                        } else {
-                            onClick()
-                        }
-                        true
-                    }
-                    else -> false
-                }
-            }
-            .clickable(onClick = onClick)
-            .padding(8.dp),
-        verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Box(
-            Modifier.width(100.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(6.dp)).background(Surface2),
-            contentAlignment = Alignment.BottomStart,
-        ) {
-            if (session != null) {
-                val thumbUrl = if (item.backdropPath.isNotBlank()) {
-                    imageUrl(session, item.id, "backdrop", item.backdropMtimeUnix, ArtworkCard)
-                } else if (item.posterPath.isNotBlank()) {
-                    imageUrl(session, item.id, "poster", item.posterMtimeUnix, ArtworkCard)
-                } else null
-                if (thumbUrl != null) {
-                    SizedAsyncImage(model = thumbUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, widthPx = 260, heightPx = 150, authToken = session.token)
-                }
-            }
-            Text(
-                "%02d".format(item.episodeNumber),
-                color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(4.dp).background(Color.Black.copy(alpha = .7f), RoundedCornerShape(3.dp)).padding(horizontal = 4.dp, vertical = 1.dp),
-            )
-            PosterStatusBadges(watched, watchlisted)
-        }
-        Column(Modifier.weight(1f)) {
-            Text(item.episodeTitle.ifBlank { item.title }, color = TextColor, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
-            if (item.overview.isNotBlank()) {
-                Spacer(Modifier.height(2.dp))
-                Text(item.overview, color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 14.sp)
-            }
-        }
-        Column(horizontalAlignment = Alignment.End) {
-            val dur = fmtDuration(item.durationMs)
-            if (dur.isNotBlank()) Text(dur, color = Muted, fontSize = 12.sp)
-            if (item.rating > 0) {
-                Spacer(Modifier.height(2.dp))
-                RatingBadge(item.rating, small = true)
-            }
-        }
     }
 }
 

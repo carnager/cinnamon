@@ -1,0 +1,7 @@
+# Baseline profile for the app's own code. Release APKs are sideloaded or
+# installed by the in-app updater, so without this everything in
+# dev.popcorn.tv runs interpreted/JIT until the device's background dexopt —
+# a slow first start and janky first scrolls after every update on the
+# 32-bit TV boxes. profileinstaller (pulled in by Compose) applies it.
+HSPLdev/popcorn/tv/**;->**(**)**
+Ldev/popcorn/tv/**;

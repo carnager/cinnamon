@@ -1,6 +1,9 @@
 package dev.popcorn.tv
 
 import androidx.compose.foundation.background
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.focusable
@@ -208,24 +211,6 @@ fun SourceRatingBadge(label: String, value: String) {
 }
 
 @Composable
-fun PosterRating(rating: Double) {
-    Box(Modifier.fillMaxSize().padding(4.dp), contentAlignment = Alignment.TopEnd) {
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .background(Surface2)
-                .border(1.dp, Line.copy(alpha = .90f), RoundedCornerShape(4.dp))
-                .padding(horizontal = 5.dp, vertical = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("IMDb", color = Teal, fontWeight = FontWeight.Black, fontSize = 12.sp)
-            Text("%.1f".format(rating), color = TextColor, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-        }
-    }
-}
-
-@Composable
 fun TvTextField(value: String, label: String, password: Boolean = false, modifier: Modifier = Modifier, onChange: (String) -> Unit) {
     OutlinedTextField(
         value = value,
@@ -251,7 +236,7 @@ fun TvTextField(value: String, label: String, password: Boolean = false, modifie
 }
 
 @Composable
-fun LoadingView(error: String) {
+fun LoadingView(error: String, server: String = "", onRetry: () -> Unit = {}, onSignOut: () -> Unit = {}) {
     Box(Modifier.fillMaxSize().background(Bg), contentAlignment = Alignment.Center) {
         if (error.isBlank()) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -259,7 +244,19 @@ fun LoadingView(error: String) {
                 Text("Loading\u2026", color = Muted, fontSize = 14.sp)
             }
         } else {
-            Text(error, color = ErrorRed, fontSize = 14.sp)
+            // A server that stays down used to leave only this red line: no
+            // sign it was still trying, no way to change server or sign out.
+            val retryFocus = remember { FocusRequester() }
+            LaunchedEffect(Unit) { runCatching { retryFocus.requestFocus() } }
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                CircularProgressIndicator(color = Accent, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+                Text(error, color = ErrorRed, fontSize = 16.sp)
+                if (server.isNotBlank()) Text(server, color = Muted, fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    FocusButton(label = "Retry now", primary = true, modifier = Modifier.focusRequester(retryFocus), onClick = onRetry)
+                    FocusButton(label = "Change server / sign out", primary = false, onClick = onSignOut)
+                }
+            }
         }
     }
 }

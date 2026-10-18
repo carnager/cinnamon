@@ -363,13 +363,11 @@ sealed interface Screen {
     data object Home : Screen
     data object Watchlist : Screen
     data object History : Screen
-    data object Updates : Screen
     data object ArrangeHome : Screen
     data class LibraryPage(val library: Library) : Screen
     data class ItemShelf(val title: String, val items: List<PopItem>, val returnTo: Screen? = null) : Screen
     data object Search : Screen
     data class Show(val show: ShowSummary, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null) : Screen
-    data class Season(val show: ShowSummary, val season: SeasonSummary, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null) : Screen
     data class Detail(val item: PopItem, val fromShow: ShowSummary?, val fromHome: Boolean = false, val fromSearch: Boolean = false, val fromWatchlist: Boolean = false, val fromHistory: Boolean = false, val fromActor: dev.popcorn.tv.Actor? = null, val fromShelf: ItemShelf? = null) : Screen
     data class Actor(val actor: dev.popcorn.tv.Actor) : Screen
     // token distinguishes two requests to play the same item. The player is

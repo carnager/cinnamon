@@ -104,6 +104,12 @@ fun <T> PosterGrid(
     // offset: titles before it vanished and every jump cost four requests.
     var jumpFocusIndex by remember { mutableStateOf<Int?>(null) }
     val gridScope = rememberCoroutineScope()
+    // While moving along the alphabet rail: a large letter over the grid,
+    // and a short glow on the letter's first title, which usually shares a
+    // row with the end of the previous letter.
+    var previewLetter by remember { mutableStateOf<String?>(null) }
+    var highlightIndex by remember { mutableStateOf<Int?>(null) }
+    var previewClearJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val alphabetIndex = remember(entries, alphabetTitle, alphabetEntries, onAlphabet) {
         if (alphabetEntries.isNotEmpty()) {
             alphabetEntries.associateBy { it.letter }
@@ -155,7 +161,12 @@ fun <T> PosterGrid(
                         jumpFocusIndex = null
                     }
                 }
-                content(item, focusNow, column, firstRow, rightEdge, focusRequester)
+                Box {
+                    content(item, focusNow, column, firstRow, rightEdge, focusRequester)
+                    if (index == highlightIndex) {
+                        Box(Modifier.matchParentSize().border(3.dp, Accent, CardShape))
+                    }
+                }
             }
         }
         if (alphabetIndex.isNotEmpty()) {
@@ -163,9 +174,22 @@ fun <T> PosterGrid(
                 index = alphabetIndex,
                 // Moving along the letters scrolls the grid behind the rail;
                 // focus stays on the rail until OK or Left.
+                onLetter = { letter ->
+                    previewLetter = letter
+                    previewClearJob?.cancel()
+                    previewClearJob = gridScope.launch {
+                        delay(700)
+                        previewLetter = null
+                    }
+                },
                 onPreview = { offset ->
                     val target = offset.coerceAtMost(entries.lastIndex).coerceAtLeast(0)
-                    gridScope.launch { gridState.scrollToItem(target) }
+                    gridScope.launch {
+                        gridState.scrollToItem(target)
+                        highlightIndex = target
+                        delay(1_400)
+                        if (highlightIndex == target) highlightIndex = null
+                    }
                 },
                 onJump = { offset ->
                     // Background paging may still be filling the list.
@@ -181,6 +205,19 @@ fun <T> PosterGrid(
                 availableHeight = maxHeight,
                 // Inside the TV overscan margin (was 10dp from the screen edge).
                 modifier = Modifier.align(Alignment.TopEnd).padding(end = 26.dp, top = 8.dp),
+            )
+        }
+        previewLetter?.let { letter ->
+            Text(
+                letter,
+                color = Color.White,
+                fontSize = 96.sp,
+                fontWeight = FontWeight.Black,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Color(0xD0080C12))
+                    .padding(horizontal = 40.dp, vertical = 8.dp),
             )
         }
     }
@@ -202,6 +239,7 @@ private fun String.withoutLeadingArticle(): String {
 @Composable
 private fun AlphabetRail(
     index: Map<String, AlphabetEntry>,
+    onLetter: (String) -> Unit,
     onPreview: (Int) -> Unit,
     onJump: (Int) -> Unit,
     focusRequester: FocusRequester? = null,
@@ -240,6 +278,7 @@ private fun AlphabetRail(
                     .onFocusChanged {
                         focused = it.isFocused
                         if (it.isFocused && target != null) {
+                            onLetter(letter)
                             previewJob?.cancel()
                             previewJob = scope.launch {
                                 delay(220)

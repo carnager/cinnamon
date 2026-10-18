@@ -411,7 +411,7 @@ fun PageTopActions(headerActions: (@Composable () -> Unit)? = null) {
     Row(
         Modifier
             .fillMaxWidth()
-            .height(70.dp)
+            .height(64.dp)
             .padding(start = 26.dp, end = 32.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1741,7 +1741,9 @@ private fun HomeHero(
         Modifier
             .padding(start = 24.dp, end = 28.dp, top = 5.dp, bottom = 8.dp)
             .fillMaxWidth()
-            .height(324.dp)
+            // 324dp left room for only a sliver of the first shelf on a 540dp
+            // tall TV layout; at 250dp the first row of posters shows whole.
+            .height(250.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(Surface2)
             .border(2.dp, Color.Transparent, RoundedCornerShape(14.dp))
@@ -1810,8 +1812,8 @@ private fun HomeHero(
                     Modifier
                         .align(Alignment.TopStart)
                         .fillMaxWidth(.58f)
-                        .padding(start = 32.dp, end = 32.dp, top = 28.dp),
-                    verticalArrangement = Arrangement.spacedBy(9.dp),
+                        .padding(start = 32.dp, end = 32.dp, top = 20.dp),
+                    verticalArrangement = Arrangement.spacedBy(7.dp),
                 ) {
                     Text(
                         current.kick,
@@ -1829,14 +1831,14 @@ private fun HomeHero(
                     Text(
                         current.heading,
                         color = TextColor,
-                        fontSize = 32.sp,
-                        lineHeight = 35.sp,
+                        fontSize = 28.sp,
+                        lineHeight = 31.sp,
                         fontWeight = FontWeight.Black,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        if (current.rating > 0) Text("★ %.1f".format(current.rating), color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        if (current.rating > 0) Text("★ ${formatRating(current.rating)}", color = Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                         if (current.meta.isNotBlank()) {
                             Text(current.meta, color = Muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
@@ -1847,7 +1849,7 @@ private fun HomeHero(
                             color = TextColor.copy(alpha = .82f),
                             fontSize = 13.sp,
                             lineHeight = 18.sp,
-                            maxLines = 3,
+                            maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }

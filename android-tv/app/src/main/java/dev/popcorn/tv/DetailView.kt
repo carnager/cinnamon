@@ -79,6 +79,12 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.animation.core.animateIntAsState
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -193,6 +199,18 @@ fun DetailView(
         runCatching { playFocus.requestFocus() }
     }
 
+    var detailViewportPx by remember { mutableStateOf(0) }
+    var detailContentPx by remember { mutableStateOf(0) }
+    var detailShowBottom by remember(item.id) { mutableStateOf(false) }
+    val detailShift by animateIntAsState(
+        targetValue = if (detailShowBottom) (detailContentPx - detailViewportPx).coerceAtLeast(0) else 0,
+        animationSpec = tween(durationMillis = 220),
+        label = "detailShift",
+    )
+    fun scrollDetailTo(top: Boolean) {
+        detailShowBottom = !top
+    }
+
     Box(Modifier.fillMaxSize().background(Bg)) {
         // Full-screen backdrop
         if (detailItem.backdropPath.isNotBlank() && session != null) {
@@ -270,12 +288,28 @@ fun DetailView(
             fontSize = 21,
         )
 
-        Column(
+        // A long synopsis or original title used to push the cast row off
+        // screen. No scroll container here: bring-into-view would move it on
+        // every focus change and fight anything steering it, which is what
+        // makes scrolling TV pages jitter. Instead the column shifts between
+        // two resting positions — top while focus is in the upper part,
+        // bottom while it is in the cast row — and only when it overflows.
+        Box(
             Modifier
                 .fillMaxSize()
+                .clipToBounds()
+                .onSizeChanged { detailViewportPx = it.height },
+        ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .wrapContentHeight(Alignment.Top, unbounded = true)
+                .onSizeChanged { detailContentPx = it.height }
+                .offset { IntOffset(0, -detailShift) }
                 .padding(start = 116.dp, end = 34.dp),
         ) {
             Spacer(Modifier.height(82.dp))
+            Box(Modifier.onFocusChanged { if (it.hasFocus) scrollDetailTo(top = true) }) {
             DetailHeroContent(
                 session = session,
                 detailItem = detailItem,
@@ -314,18 +348,23 @@ fun DetailView(
                 },
                 onSimilar = { onMoreLikeThis(similar) },
             )
+            }
 
             if (detailItem.actors.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
-                CastStrip(
-                    session = session,
-                    actors = detailItem.actors,
-                    firstFocusRequester = castFocus,
-                    onUp = { runCatching { playFocus.requestFocus() }.isSuccess },
-                    onActor = onActor,
-                )
+                Box(Modifier.onFocusChanged { if (it.hasFocus) scrollDetailTo(top = false) }) {
+                    CastStrip(
+                        session = session,
+                        actors = detailItem.actors,
+                        firstFocusRequester = castFocus,
+                        onUp = { runCatching { playFocus.requestFocus() }.isSuccess },
+                        onActor = onActor,
+                    )
+                }
             }
-            Spacer(Modifier.height(24.dp))
+            // Keeps the cast row clear of the bottom overscan edge.
+            Spacer(Modifier.height(36.dp))
+        }
         }
 
         if (!streamsLoaded) {

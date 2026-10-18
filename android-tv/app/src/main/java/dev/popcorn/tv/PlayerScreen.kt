@@ -185,10 +185,13 @@ fun PlayerScreen(
     val playerView = remember {
         (LayoutInflater.from(context).inflate(R.layout.player_view, null) as PlayerView).apply {
             player = exoPlayer
-            useController = true
-            controllerAutoShow = true
-            controllerHideOnTouch = false
-            controllerShowTimeoutMs = 5000
+            // Video only: the controls are Compose (PlayerOsd), and keys
+            // with the controls hidden go through the activity's bridges.
+            // Focusable, this full-screen view won D-pad focus searches
+            // (Down from the progress bar landed here, not on the buttons).
+            useController = false
+            isFocusable = false
+            descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
             keepScreenOn = true
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             // mpv reports no video tracks, so PlayerView keeps its shutter
@@ -197,47 +200,23 @@ fun PlayerScreen(
         }
     }
 
-    val autoHideRunnable = remember(playerView, exoPlayer) {
-        object : Runnable {
-            override fun run() {
-                if (playerView.findViewWithTag<View>(NativeTrackMenuTag) != null) return
-                if (exoPlayer.isPlaying) {
-                    playerView.hideController()
-                    playerView.requestFocus()
-                } else if (playerView.isControllerFullyVisible) {
-                    // Not playing yet (still buffering); keep polling instead of leaving
-                    // the controller stuck visible forever.
-                    mainHandler.postDelayed(this, 1_000)
-                }
-            }
-        }
-    }
+    // On-screen controls state (PlayerOsd) and the side sheet for audio,
+    // subtitles, quality and settings.
+    var osdVisible by remember { mutableStateOf(true) }
+    var osdTouch by remember { mutableStateOf(0) }
+    var sheet by remember { mutableStateOf<PlayerSheetPage?>(null) }
+    val barFocus = remember { FocusRequester() }
+    val playButtonFocus = remember { FocusRequester() }
 
+    // Any interaction restarts the hide timer; it hides only while playing.
     fun scheduleControllerAutoHide() {
-        mainHandler.removeCallbacks(autoHideRunnable)
-        mainHandler.postDelayed(autoHideRunnable, 4_500)
+        osdTouch++
     }
 
-    fun focusPlayerControl(focusTimeBar: Boolean = false) {
-        playerView.post {
-            val focusTarget = if (focusTimeBar) {
-                playerView.findViewById<View>(R.id.popcorn_hls_progress)?.takeIf { planUsesHls }
-                    ?: playerView.findViewById<View>(R.id.popcorn_progress)
-            } else {
-                playerView.findViewById<View>(R.id.popcorn_play_pause)
-            }
-            val focused = focusTarget?.takeIf { it.isShown && it.isEnabled }?.requestFocus() ?: false
-            if (!focused) playerView.requestFocus()
-        }
-        playerView.postDelayed({
-            val fallbackTarget = if (focusTimeBar) {
-                playerView.findViewById<View>(R.id.popcorn_hls_progress)?.takeIf { planUsesHls }
-                    ?: playerView.findViewById<View>(R.id.popcorn_progress)
-            } else {
-                playerView.findViewById<View>(R.id.popcorn_play_pause)
-            }
-            fallbackTarget?.takeIf { it.isShown && it.isEnabled }?.requestFocus()
-        }, 120)
+    fun focusPlayerControl(@Suppress("UNUSED_PARAMETER") focusTimeBar: Boolean = false) {
+        // PlayerOsd focuses its progress bar whenever it becomes visible.
+        osdTouch++
+        runCatching { barFocus.requestFocus() }
     }
 
     fun logicalPositionMs(): Long {
@@ -506,12 +485,11 @@ fun PlayerScreen(
         }
         exoPlayer.playWhenReady = wasPlaying
         if (showController) {
-            playerView.showController()
+            osdVisible = true
             focusPlayerControl()
             scheduleControllerAutoHide()
         } else {
-            playerView.hideController()
-            playerView.requestFocus()
+            osdVisible = false
         }
         if (oldHlsSession != null && oldHlsSession != hlsSessionId) {
             reportScope.launch {
@@ -588,8 +566,7 @@ fun PlayerScreen(
                 }
                 exoPlayer.playWhenReady = shouldPlay
                 if (!showController) {
-                    playerView.hideController()
-                    playerView.requestFocus()
+                    osdVisible = false
                 }
                 if (oldHlsSession != null && oldHlsSession != hlsSessionId) {
                     reportScope.launch { stopHlsSession(activeSession, oldHlsSession) }
@@ -610,8 +587,7 @@ fun PlayerScreen(
         } else {
             exoPlayer.seekTo(target)
             if (!showController) {
-                playerView.hideController()
-                playerView.requestFocus()
+                osdVisible = false
             }
         }
     }
@@ -631,7 +607,7 @@ fun PlayerScreen(
         val target = pendingSeekTargetMs ?: return
         // The viewer may have brought the OSD up while the seek was pending;
         // a commit scheduled from hidden controls must not hide it again.
-        seekToLogical(target, showController = showController || playerView.isControllerFullyVisible)
+        seekToLogical(target, showController = showController || osdVisible)
     }
 
     fun schedulePendingSeekCommit(showController: Boolean) {
@@ -787,7 +763,7 @@ fun PlayerScreen(
     fun isHiddenSeekKey(keyCode: Int): Boolean = isHiddenSeekKeyCode(keyCode)
 
     fun previewSeekFromHiddenControls(keyCode: Int): Boolean {
-        if (playerView.findViewWithTag<View>(NativeTrackMenuTag) != null || playerView.isControllerFullyVisible) {
+        if (sheet != null || osdVisible) {
             return false
         }
         pendingSeekJob?.cancel()
@@ -796,10 +772,10 @@ fun PlayerScreen(
     }
 
     fun revealController(focusTimeBar: Boolean = false): Boolean {
-        if (playerView.findViewWithTag<View>(NativeTrackMenuTag) != null || playerView.isControllerFullyVisible) {
+        if (sheet != null || osdVisible) {
             return false
         }
-        playerView.showController()
+        osdVisible = true
         scheduleControllerAutoHide()
         focusPlayerControl(focusTimeBar)
         return true
@@ -814,7 +790,6 @@ fun PlayerScreen(
         exitingPlayer = true
         playbackPlanJob?.cancel()
         pendingSeekJob?.cancel()
-        mainHandler.removeCallbacks(autoHideRunnable)
         logClient("exit-player-stopping-engines")
         reportProgress("stopped")
         runCatching { exoPlayer.stop() }
@@ -825,11 +800,9 @@ fun PlayerScreen(
     // BACK with the OSD up only dismisses the OSD; playback exits when BACK
     // is pressed with the controls already hidden.
     fun dismissOsdOrExit(source: String) {
-        if (playerView.isControllerFullyVisible) {
+        if (osdVisible) {
             logClient("$source-hide-osd")
-            mainHandler.removeCallbacks(autoHideRunnable)
-            playerView.hideController()
-            playerView.requestFocus()
+            osdVisible = false
         } else {
             exitPlayer()
         }
@@ -843,9 +816,8 @@ fun PlayerScreen(
     DisposableEffect(Unit) {
         PlayerBackBridge.handler = { event ->
             when {
-                // The native track menu owns all keys while open; let events reach
-                // its view listeners so BACK closes the menu, not the player.
-                playerView.findViewWithTag<View>(NativeTrackMenuTag) != null -> false
+                // An open sheet takes Back (handled by the OSD bridge).
+                sheet != null -> false
                 // Back closes the Up Next card rather than the player.
                 upNextCardVisible() && isBackKey(event.keyCode) -> {
                     if (event.action == AndroidKeyEvent.ACTION_UP) upNextDismissed = true
@@ -869,7 +841,30 @@ fun PlayerScreen(
         }
         PlayerOsdBridge.handler = { event ->
             when {
-                playerView.findViewWithTag<View>(NativeTrackMenuTag) != null -> false
+                // Back steps out of a settings sub-page, then closes the sheet.
+                sheet != null && isBackKey(event.keyCode) -> {
+                    if (event.action == AndroidKeyEvent.ACTION_UP) {
+                        sheet = sheet?.parent
+                        osdTouch++
+                    }
+                    true
+                }
+                sheet != null -> false
+                // With no media3 controller these reach nobody otherwise.
+                event.keyCode == AndroidKeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || event.keyCode == AndroidKeyEvent.KEYCODE_MEDIA_PLAY || event.keyCode == AndroidKeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                    if (event.action == AndroidKeyEvent.ACTION_UP) {
+                        when {
+                            event.keyCode == AndroidKeyEvent.KEYCODE_MEDIA_PLAY -> exoPlayer.play()
+                            event.keyCode == AndroidKeyEvent.KEYCODE_MEDIA_PAUSE || exoPlayer.isPlaying -> {
+                                exoPlayer.pause()
+                                osdVisible = true
+                            }
+                            else -> exoPlayer.play()
+                        }
+                        osdTouch++
+                    }
+                    true
+                }
                 upNextCardVisible() && isBackKey(event.keyCode) -> {
                     if (event.action == AndroidKeyEvent.ACTION_UP) upNextDismissed = true
                     true
@@ -893,7 +888,7 @@ fun PlayerScreen(
                 }
                 // Media FF/REW seek with the OSD up too (media3 would call its own
                 // seekForward, which the mpv engine doesn't offer and HLS gets wrong).
-                (event.keyCode == AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD || event.keyCode == AndroidKeyEvent.KEYCODE_MEDIA_REWIND) && playerView.isControllerFullyVisible -> {
+                (event.keyCode == AndroidKeyEvent.KEYCODE_MEDIA_FAST_FORWARD || event.keyCode == AndroidKeyEvent.KEYCODE_MEDIA_REWIND) && osdVisible -> {
                     if (event.action == AndroidKeyEvent.ACTION_UP) {
                         pressedSeekKeys.remove(event.keyCode)
                         schedulePendingSeekCommit(showController = true)
@@ -904,7 +899,7 @@ fun PlayerScreen(
                     }
                     true
                 }
-                isHiddenSeekKey(event.keyCode) && !playerView.isControllerFullyVisible && playerView.findViewWithTag<View>(NativeTrackMenuTag) == null -> {
+                isHiddenSeekKey(event.keyCode) && !osdVisible && sheet == null -> {
                     if (event.action == AndroidKeyEvent.ACTION_UP) {
                         pressedSeekKeys.remove(event.keyCode)
                         schedulePendingSeekCommit(showController = false)
@@ -913,13 +908,13 @@ fun PlayerScreen(
                     }
                     true
                 }
-                isActionKey(event.keyCode) && !playerView.isControllerFullyVisible && playerView.findViewWithTag<View>(NativeTrackMenuTag) == null -> {
+                isActionKey(event.keyCode) && !osdVisible && sheet == null -> {
                     if (event.action == AndroidKeyEvent.ACTION_UP) {
                         if (exoPlayer.isPlaying) {
                             exoPlayer.pause()
                             // Paused, PlayerView shows its controls with nothing
                             // focused, and the next key was spent repairing focus.
-                            playerView.showController()
+                            osdVisible = true
                             focusPlayerControl()
                         } else {
                             exoPlayer.play()
@@ -927,25 +922,18 @@ fun PlayerScreen(
                     }
                     true
                 }
-                isRevealKey(event.keyCode) && !playerView.isControllerFullyVisible && playerView.findViewWithTag<View>(NativeTrackMenuTag) == null -> {
+                isRevealKey(event.keyCode) && !osdVisible && sheet == null -> {
                     if (event.action == AndroidKeyEvent.ACTION_UP) revealController()
                     true
                 }
-                event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP && !playerView.isControllerFullyVisible && playerView.findViewWithTag<View>(NativeTrackMenuTag) == null -> {
-                    // Swallow UP while the OSD is hidden: media3's PlayerView would consume
-                    // it and show the controller without focusing any of our controls.
+                event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP && !osdVisible && sheet == null -> {
+                    if (event.action == AndroidKeyEvent.ACTION_UP) revealController()
                     true
                 }
-                event.action == AndroidKeyEvent.ACTION_UP && playerView.isControllerFullyVisible -> {
-                    scheduleControllerAutoHide()
-                    val focused = playerView.findFocus()
-                    if (focused == null || focused === playerView) {
-                        logClient("osd-focus-repair", event)
-                        focusPlayerControl()
-                        true
-                    } else {
-                        false
-                    }
+                // Controls up: Compose handles the key; it only restarts the timer.
+                osdVisible -> {
+                    osdTouch++
+                    false
                 }
                 else -> false
             }
@@ -958,8 +946,6 @@ fun PlayerScreen(
             if (PlayerOsdBridge.handler != null) PlayerOsdBridge.handler = null
             playbackPlanJob?.cancel()
             pressedSeekKeys.clear()
-            mainHandler.removeCallbacks(autoHideRunnable)
-            closeNativeTrackMenu(playerView, restoreFocus = false)
             val oldHlsSession = hlsSessionId
             val activeSession = session
             if (oldHlsSession != null && activeSession != null) {
@@ -1082,314 +1068,31 @@ fun PlayerScreen(
         onDispose { exoPlayer.removeListener(listener) }
     }
 
-    DisposableEffect(playerView, selectedBandwidth, planUsesHls) {
-        val titleView = playerView.findViewById<TextView>(R.id.popcorn_title)
-        val clearLogoView = playerView.findViewById<ImageView>(R.id.popcorn_clearlogo)
-        val playPauseButton = playerView.findViewById<ImageButton>(R.id.popcorn_play_pause)
-        val audioButton = playerView.findViewById<View>(R.id.popcorn_audio)
-        val subtitleButton = playerView.findViewById<View>(R.id.popcorn_subtitles)
-        val bandwidthButton = playerView.findViewById<TextView>(R.id.popcorn_bandwidth)
-        val nativeTimeBar = playerView.findViewById<DefaultTimeBar>(R.id.popcorn_progress)
-        val hlsTimeBar = playerView.findViewById<DefaultTimeBar>(R.id.popcorn_hls_progress)
-        val nativePositionView = playerView.findViewById<TextView>(R.id.popcorn_position)
-        val nativeDurationView = playerView.findViewById<TextView>(R.id.popcorn_duration)
-        val hlsPositionView = playerView.findViewById<TextView>(R.id.popcorn_hls_position)
-        val hlsDurationView = playerView.findViewById<TextView>(R.id.popcorn_hls_duration)
-        val activeTimeBar = if (planUsesHls) hlsTimeBar else nativeTimeBar
-        fun updateDisplayedPosition(positionMs: Long) {
-            if (planUsesHls) {
-                hlsPositionView?.text = fmtClock(positionMs)
-                hlsTimeBar?.setPosition(positionMs)
-            } else {
-                nativePositionView?.text = fmtClock(positionMs)
-                nativeTimeBar?.setPosition(positionMs)
-            }
-        }
-
-        val controllerKeyListener = View.OnKeyListener { _, keyCode, event ->
-            if (playerView.findViewWithTag<View>(NativeTrackMenuTag) != null) return@OnKeyListener false
-            if (event.action != AndroidKeyEvent.ACTION_UP) return@OnKeyListener false
-
-            if (isRevealKey(keyCode) && revealController()) {
-                true
-            } else {
-                scheduleControllerAutoHide()
-                false
-            }
-        }
-        val timeBarKeyListener = View.OnKeyListener { _, keyCode, event ->
-            if (playerView.findViewWithTag<View>(NativeTrackMenuTag) != null) return@OnKeyListener false
-            if (keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP) {
-                if (event.action == AndroidKeyEvent.ACTION_DOWN) {
-                    playPauseButton?.takeIf { it.isShown && it.isEnabled }?.requestFocus()
-                    scheduleControllerAutoHide()
-                }
-                return@OnKeyListener true
-            }
-            if (isActionKey(keyCode)) {
-                when (event.action) {
-                    AndroidKeyEvent.ACTION_DOWN -> true
-                    AndroidKeyEvent.ACTION_UP -> {
-                        if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-                        activeTimeBar?.requestFocus()
-                        scheduleControllerAutoHide()
-                        true
-                    }
-                    else -> false
-                }
-            } else
-            if ((keyCode == AndroidKeyEvent.KEYCODE_DPAD_LEFT || keyCode == AndroidKeyEvent.KEYCODE_DPAD_RIGHT) && isHiddenSeekKey(keyCode)) {
-                if (event.action == AndroidKeyEvent.ACTION_UP) {
-                    pressedSeekKeys.remove(keyCode)
-                    schedulePendingSeekCommit(showController = true)
-                    return@OnKeyListener true
-                }
-                if (!shouldHandleSeekKey(event)) return@OnKeyListener true
-                pendingSeekJob?.cancel()
-                val target = pendingSeekTarget(pendingSeekTargetMs, keyCode) ?: return@OnKeyListener true
-                pendingSeekTargetMs = target
-                updateDisplayedPosition(target)
-                scheduleControllerAutoHide()
-                true
-            } else {
-                controllerKeyListener.onKey(null, keyCode, event)
-            }
-        }
-
-        titleView?.text = if (item.kind == "episode") {
-            val code = if (item.seasonNumber > 0 && item.episodeNumber > 0) "S%02dE%02d".format(item.seasonNumber, item.episodeNumber) else ""
-            listOf(item.showTitle, code, item.episodeTitle.ifBlank { item.title }).filter { it.isNotBlank() }.joinToString("  \u00b7  ")
-        } else {
-            item.title
-        }
-        if (clearLogoView != null && session != null) {
-            val request = ImageRequest.Builder(context)
-                .data(imageUrl(session, item.id, "clearlogo", item.posterMtimeUnix.coerceAtLeast(item.backdropMtimeUnix)))
-                .size(440, 192)
-                .addHeader("Authorization", "Bearer ${session.token}")
-                .target(clearLogoView)
-                .build()
-            context.imageLoader.enqueue(request)
-        }
-        bandwidthButton?.text = bandwidthLabel(selectedBandwidth)
-        playPauseButton?.setImageResource(
-            if (exoPlayer.isPlaying) {
-                androidx.media3.ui.R.drawable.exo_icon_pause
-            } else {
-                androidx.media3.ui.R.drawable.exo_icon_play
-            },
-        )
-        nativeTimeBar?.visibility = if (planUsesHls) View.GONE else View.VISIBLE
-        hlsTimeBar?.visibility = if (planUsesHls) View.VISIBLE else View.GONE
-        nativePositionView?.visibility = if (planUsesHls) View.GONE else View.VISIBLE
-        nativeDurationView?.visibility = if (planUsesHls) View.GONE else View.VISIBLE
-        hlsPositionView?.visibility = if (planUsesHls) View.VISIBLE else View.GONE
-        hlsDurationView?.visibility = if (planUsesHls) View.VISIBLE else View.GONE
-        playerView.setOnKeyListener(controllerKeyListener)
-        playPauseButton?.setOnKeyListener(controllerKeyListener)
-        playPauseButton?.setOnClickListener {
-            if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
-            playPauseButton.setImageResource(
-                if (exoPlayer.isPlaying) {
-                    androidx.media3.ui.R.drawable.exo_icon_pause
-                } else {
-                    androidx.media3.ui.R.drawable.exo_icon_play
-                },
-            )
-            scheduleControllerAutoHide()
-        }
-        playerView.findViewById<View>(R.id.popcorn_rew)?.setOnKeyListener(controllerKeyListener)
-        playerView.findViewById<View>(R.id.popcorn_rew)?.setOnClickListener {
-            seekToLogical(relativeSeekTarget(logicalPositionMs(), forward = false))
-            scheduleControllerAutoHide()
-        }
-        playerView.findViewById<View>(R.id.popcorn_ffwd)?.setOnKeyListener(controllerKeyListener)
-        playerView.findViewById<View>(R.id.popcorn_ffwd)?.setOnClickListener {
-            seekToLogical(relativeSeekTarget(logicalPositionMs(), forward = true))
-            scheduleControllerAutoHide()
-        }
-        activeTimeBar?.setOnKeyListener(timeBarKeyListener)
-        var timeBarScrubbing = false
-        val timeScrubListener = object : TimeBar.OnScrubListener {
-            override fun onScrubStart(timeBar: TimeBar, position: Long) {
-                timeBarScrubbing = true
-                updateDisplayedPosition(position.coerceAtLeast(0))
-            }
-            override fun onScrubMove(timeBar: TimeBar, position: Long) {
-                if (timeBarScrubbing) {
-                    updateDisplayedPosition(position.coerceAtLeast(0))
-                }
-            }
-            override fun onScrubStop(timeBar: TimeBar, position: Long, canceled: Boolean) {
-                val wasScrubbing = timeBarScrubbing
-                timeBarScrubbing = false
-                if (wasScrubbing && !canceled) {
-                    seekToLogical(position.coerceAtLeast(0))
-                } else {
-                    updateDisplayedPosition(logicalPositionMs())
-                }
-            }
-        }
-        hlsTimeBar?.addListener(timeScrubListener)
-        nativeTimeBar?.addListener(timeScrubListener)
-        nativeTimeBar?.setKeyTimeIncrement(30_000)
-        hlsTimeBar?.setKeyTimeIncrement(30_000)
-        audioButton?.setOnClickListener {
-            scheduleControllerAutoHide()
-            showNativeOriginalTrackMenu(
-                playerView = playerView,
-                title = "Audio Track",
-                tracks = originalStreams.filter { it.type == "audio" },
-                selectedIndex = selectedAudioIndex,
-                allowOff = false,
-                returnFocus = audioButton,
-                onSelected = { switchAudio(it) },
-                onClosed = ::scheduleControllerAutoHide,
-            )
-        }
-        audioButton?.setOnKeyListener(controllerKeyListener)
-        subtitleButton?.setOnClickListener {
-            scheduleControllerAutoHide()
-            showNativeOriginalTrackMenu(
-                playerView = playerView,
-                title = "Subtitle Track",
-                tracks = originalStreams.filter { it.type == "subtitle" },
-                selectedIndex = selectedSubtitleIndex,
-                allowOff = true,
-                returnFocus = subtitleButton,
-                onSelected = { switchSubtitle(it) },
-                onClosed = ::scheduleControllerAutoHide,
-            )
-        }
-        subtitleButton?.setOnKeyListener(controllerKeyListener)
-        bandwidthButton?.setOnClickListener {
-            scheduleControllerAutoHide()
-            showNativeBandwidthMenu(
-                playerView = playerView,
-                selectedBandwidth = selectedBandwidth,
-                returnFocus = bandwidthButton,
-                onSelected = { switchBandwidth(it) },
-                onClosed = ::scheduleControllerAutoHide,
-            )
-        }
-        bandwidthButton?.setOnKeyListener(controllerKeyListener)
-        val settingsButton = playerView.findViewById<View>(R.id.popcorn_settings)
-        settingsButton?.visibility = if (mpvPlayer != null) View.VISIBLE else View.GONE
-        settingsButton?.setOnKeyListener(controllerKeyListener)
-        settingsButton?.setOnClickListener {
-            val engine = mpvPlayer ?: return@setOnClickListener
-            scheduleControllerAutoHide()
-            showNativeMpvSettingsMenu(
-                playerView = playerView,
-                player = engine,
-                returnFocus = settingsButton,
-                onAudioDelay = {
-                    engine.audioDelayMs = it
-                    PlaybackPrefs.setAudioDelay(context, it)
-                },
-                onSubtitleScale = {
-                    engine.subtitleScalePercent = it
-                    PlaybackPrefs.setSubtitleScale(context, it)
-                },
-                onClosed = ::scheduleControllerAutoHide,
-            )
-        }
-
-        onDispose {
-            playerView.setOnKeyListener(null)
-            playerView.findViewById<View>(R.id.popcorn_play_pause)?.setOnKeyListener(null)
-            playerView.findViewById<View>(R.id.popcorn_play_pause)?.setOnClickListener(null)
-            playerView.findViewById<View>(R.id.popcorn_rew)?.setOnKeyListener(null)
-            playerView.findViewById<View>(R.id.popcorn_rew)?.setOnClickListener(null)
-            playerView.findViewById<View>(R.id.popcorn_ffwd)?.setOnKeyListener(null)
-            playerView.findViewById<View>(R.id.popcorn_ffwd)?.setOnClickListener(null)
-            nativeTimeBar?.setOnKeyListener(null)
-            hlsTimeBar?.setOnKeyListener(null)
-            hlsTimeBar?.removeListener(timeScrubListener)
-            nativeTimeBar?.removeListener(timeScrubListener)
-            pendingSeekJob?.cancel()
-            audioButton?.setOnClickListener(null)
-            audioButton?.setOnKeyListener(null)
-            subtitleButton?.setOnClickListener(null)
-            subtitleButton?.setOnKeyListener(null)
-            bandwidthButton?.setOnClickListener(null)
-            bandwidthButton?.setOnKeyListener(null)
-            playerView.findViewById<View>(R.id.popcorn_settings)?.setOnClickListener(null)
-            playerView.findViewById<View>(R.id.popcorn_settings)?.setOnKeyListener(null)
-        }
-    }
-
-    LaunchedEffect(selectedSubtitleIndex, playerView) {
-        playerView.findViewById<ImageButton>(R.id.popcorn_subtitles)?.setImageResource(
-            if (selectedSubtitleIndex == null) androidx.media3.ui.R.drawable.exo_ic_subtitle_off else androidx.media3.ui.R.drawable.exo_ic_subtitle_on,
-        )
-    }
-
-    // Say what the server is actually doing: "Direct" used to show for any
-    // uncapped plan, even when the file was being remuxed or transcoded.
-    LaunchedEffect(selectedBandwidth, activePlan?.mode, playerView) {
-        playerView.findViewById<TextView>(R.id.popcorn_bandwidth)?.text = when {
-            selectedBandwidth != null -> bandwidthLabel(selectedBandwidth)
-            activePlan?.mode == "remux" -> "Remux"
-            activePlan?.mode?.endsWith("transcode") == true -> "Transcode"
-            else -> bandwidthLabel(null)
-        }
-    }
-
-    LaunchedEffect(planUsesHls, playbackBaseMs, playerView, item.durationMs) {
-        val nativeTimeBar = playerView.findViewById<DefaultTimeBar>(R.id.popcorn_progress)
-        val playPauseButton = playerView.findViewById<ImageButton>(R.id.popcorn_play_pause)
-        val timeBar = playerView.findViewById<DefaultTimeBar>(R.id.popcorn_hls_progress)
-        val nativePositionView = playerView.findViewById<TextView>(R.id.popcorn_position)
-        val nativeDurationView = playerView.findViewById<TextView>(R.id.popcorn_duration)
-        val positionView = playerView.findViewById<TextView>(R.id.popcorn_hls_position)
-        val durationView = playerView.findViewById<TextView>(R.id.popcorn_hls_duration)
-        val endsView = playerView.findViewById<TextView>(R.id.popcorn_ends)
-        val clockFormat = android.text.format.DateFormat.getTimeFormat(context)
-        nativeTimeBar?.visibility = if (planUsesHls) View.GONE else View.VISIBLE
-        timeBar?.visibility = if (planUsesHls) View.VISIBLE else View.GONE
-        nativePositionView?.visibility = if (planUsesHls) View.GONE else View.VISIBLE
-        nativeDurationView?.visibility = if (planUsesHls) View.GONE else View.VISIBLE
-        positionView?.visibility = if (planUsesHls) View.VISIBLE else View.GONE
-        durationView?.visibility = if (planUsesHls) View.VISIBLE else View.GONE
-        var shownPlaying: Boolean? = null
-        while (true) {
-            // Nothing to update while the OSD is hidden.
-            if (!playerView.isControllerFullyVisible) {
-                delay(250)
-                continue
-            }
+    // Sampled for the on-screen controls while they are up.
+    var osdState by remember { mutableStateOf(OsdState(0, 0, 0, false, null, emptyList())) }
+    var chapterMarks by remember(item.id) { mutableStateOf<List<Long>>(emptyList()) }
+    LaunchedEffect(osdVisible, planUsesHls, playbackBaseMs) {
+        while (osdVisible) {
             val duration = logicalDurationMs()
-            val position = pendingSeekTargetMs ?: logicalPositionMs()
-            if (duration > 0) {
-                val remaining = (duration - position).coerceAtLeast(0)
-                endsView?.text = "-${fmtClock(remaining)}  \u00b7  ends ${clockFormat.format(java.util.Date(System.currentTimeMillis() + remaining))}"
-                if (planUsesHls) {
-                    timeBar?.setDuration(duration)
-                    timeBar?.setBufferedPosition(duration)
-                    timeBar?.setPosition(position)
-                    durationView?.text = fmtClock(duration)
-                    positionView?.text = fmtClock(position)
-                } else {
-                    nativeTimeBar?.setDuration(duration)
-                    nativeTimeBar?.setBufferedPosition(exoPlayer.bufferedPosition.coerceAtLeast(0))
-                    nativeTimeBar?.setPosition(position)
-                    nativeDurationView?.text = fmtClock(duration)
-                    nativePositionView?.text = fmtClock(position)
-                }
-            }
-            if (shownPlaying != exoPlayer.isPlaying) {
-                shownPlaying = exoPlayer.isPlaying
-                playPauseButton?.setImageResource(
-                    if (exoPlayer.isPlaying) {
-                        androidx.media3.ui.R.drawable.exo_icon_pause
-                    } else {
-                        androidx.media3.ui.R.drawable.exo_icon_play
-                    },
-                )
-            }
+            if (chapterMarks.isEmpty() && mpvPlayer != null && !planUsesHls) chapterMarks = mpvPlayer.chapterTimesMs()
+            osdState = OsdState(
+                positionMs = logicalPositionMs(),
+                durationMs = duration,
+                bufferedMs = if (planUsesHls) duration else exoPlayer.bufferedPosition.coerceAtLeast(0),
+                playing = exoPlayer.isPlaying,
+                pendingTargetMs = pendingSeekTargetMs,
+                chaptersMs = if (planUsesHls) emptyList() else chapterMarks,
+            )
             delay(250)
         }
+    }
+
+    // Hide after 4.5s without input, only while playing and with no sheet.
+    LaunchedEffect(osdVisible, osdTouch, sheet) {
+        if (!osdVisible || sheet != null) return@LaunchedEffect
+        delay(4_500)
+        while (!exoPlayer.isPlaying || pendingSeekTargetMs != null) delay(500)
+        osdVisible = false
     }
 
     LaunchedEffect(originalStreams.size, selectedAudioIndex, selectedSubtitleIndex, planUsesHls, exoPlayer) {
@@ -1442,12 +1145,6 @@ fun PlayerScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
-        delay(150)
-        playerView.showController()
-        focusPlayerControl()
-        scheduleControllerAutoHide()
-    }
 
     // The embedded PlayerView holds Android View focus during playback. While the
     // Up Next card is visible, block the player from holding/reclaiming focus and
@@ -1456,21 +1153,12 @@ fun PlayerScreen(
     val errorVisible = playbackError != null
     LaunchedEffect(upNextVisible, errorVisible) {
         if (errorVisible) {
-            playerView.hideController()
-            playerView.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
-            playerView.isFocusable = false
-            playerView.clearFocus()
+            osdVisible = false
             delay(120)
             runCatching { errorFocus.requestFocus() }
         } else if (upNextVisible) {
-            playerView.descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
-            playerView.isFocusable = false
-            playerView.clearFocus()
             delay(120)
             runCatching { upNextFocus.requestFocus() }
-        } else {
-            playerView.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
-            playerView.isFocusable = true
         }
     }
 
@@ -1483,6 +1171,138 @@ fun PlayerScreen(
             factory = { playerView },
             modifier = Modifier.fillMaxSize(),
         )
+        val audioTracks = originalStreams.filter { it.type == "audio" }
+        val subtitleTracks = originalStreams.filter { it.type == "subtitle" }
+        val isEpisode = item.kind == "episode"
+        PlayerOsd(
+            visible = osdVisible && playbackError == null && !upNextCardVisible(),
+            state = osdState,
+            title = if (isEpisode) item.showTitle.ifBlank { item.title } else item.title,
+            subtitle = if (isEpisode) {
+                listOf(
+                    if (item.seasonNumber > 0 && item.episodeNumber > 0) "S%02dE%02d".format(item.seasonNumber, item.episodeNumber) else "",
+                    item.episodeTitle.ifBlank { item.title },
+                ).filter { it.isNotBlank() }.joinToString("  \u00b7  ")
+            } else {
+                listOf(if (item.year > 0) item.year.toString() else "", fmtDuration(item.durationMs)).filter { it.isNotBlank() }.joinToString("  \u00b7  ")
+            },
+            logoUrl = imageUrl(session, item.id, "clearlogo", item.posterMtimeUnix.coerceAtLeast(item.backdropMtimeUnix)),
+            authToken = session?.token.orEmpty(),
+            subtitleValue = subtitleTracks.firstOrNull { it.index == selectedSubtitleIndex }?.primaryLabel() ?: "Off",
+            audioValue = audioTracks.firstOrNull { it.index == selectedAudioIndex }?.shortLabel() ?: "Audio",
+            qualityValue = when {
+                selectedBandwidth != null -> bandwidthLabel(selectedBandwidth)
+                activePlan?.mode == "remux" -> "Remux"
+                activePlan?.mode?.endsWith("transcode") == true -> "Transcode"
+                else -> "Direct"
+            },
+            showSettings = mpvPlayer != null,
+            nextLabel = nextEpisode?.let { next ->
+                if (next.seasonNumber > 0 && next.episodeNumber > 0) "S%02dE%02d".format(next.seasonNumber, next.episodeNumber) else "Next"
+            },
+            sheetOpen = sheet != null,
+            barFocus = barFocus,
+            playFocus = playButtonFocus,
+            onBarKey = { event ->
+                osdTouch++
+                when {
+                    isActionKey(event.keyCode) -> {
+                        if (event.action == AndroidKeyEvent.ACTION_UP) {
+                            if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play()
+                        }
+                        true
+                    }
+                    event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_LEFT || event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        if (event.action == AndroidKeyEvent.ACTION_UP) {
+                            pressedSeekKeys.remove(event.keyCode)
+                            schedulePendingSeekCommit(showController = true)
+                        } else if (shouldHandleSeekKey(event)) {
+                            pendingSeekJob?.cancel()
+                            pendingSeekTargetMs = pendingSeekTarget(pendingSeekTargetMs, event.keyCode)
+                            osdState = osdState.copy(pendingTargetMs = pendingSeekTargetMs)
+                        }
+                        true
+                    }
+                    event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_UP -> true
+                    event.keyCode == AndroidKeyEvent.KEYCODE_DPAD_DOWN -> {
+                        if (event.action == AndroidKeyEvent.ACTION_DOWN) runCatching { playButtonFocus.requestFocus() }
+                        true
+                    }
+                    else -> false
+                }
+            },
+            onPlayPause = { if (exoPlayer.isPlaying) exoPlayer.pause() else exoPlayer.play(); osdTouch++ },
+            onBack10 = { seekToLogical(relativeSeekTarget(logicalPositionMs(), forward = false)); osdTouch++ },
+            onForward10 = { seekToLogical(relativeSeekTarget(logicalPositionMs(), forward = true)); osdTouch++ },
+            onSubtitles = { sheet = PlayerSheetPage.Subtitles },
+            onAudio = { sheet = PlayerSheetPage.Audio },
+            onQuality = { sheet = PlayerSheetPage.Quality },
+            onSettings = { sheet = PlayerSheetPage.Settings },
+            onNext = { playNextEpisode() },
+        )
+        sheet?.let { page ->
+            fun ms(value: Int) = if (value == 0) "0 ms" else "%+d ms".format(value)
+            val rows: List<SheetRow> = when (page) {
+                PlayerSheetPage.Audio -> audioTracks.map { track ->
+                    SheetRow(track.primaryLabel(), track.detailLabel(), track.index == selectedAudioIndex) {
+                        switchAudio(track.index)
+                        sheet = null
+                    }
+                }
+                PlayerSheetPage.Subtitles -> listOf(SheetRow("Off", selected = selectedSubtitleIndex == null) {
+                    switchSubtitle(null)
+                    sheet = null
+                }) + subtitleTracks.map { track ->
+                    SheetRow(track.primaryLabel(), track.detailLabel(), track.index == selectedSubtitleIndex) {
+                        switchSubtitle(track.index)
+                        sheet = null
+                    }
+                }
+                PlayerSheetPage.Quality -> BandwidthOptions.map { option ->
+                    SheetRow(option.label, if (option.kbps == null) "Original file, no transcode" else "Transcoded for a slow connection", option.kbps == selectedBandwidth) {
+                        switchBandwidth(option.kbps)
+                        sheet = null
+                    }
+                }
+                PlayerSheetPage.Settings -> {
+                    val engine = mpvPlayer
+                    if (engine == null) {
+                        emptyList()
+                    } else {
+                        listOf(
+                            SheetRow("Audio delay", "${ms(engine.audioDelayMs)} \u00b7 remembered") { sheet = PlayerSheetPage.AudioDelay },
+                            SheetRow("Subtitle delay", "${ms(engine.subtitleDelayMs)} \u00b7 this video") { sheet = PlayerSheetPage.SubtitleDelay },
+                            SheetRow("Subtitle size", "${engine.subtitleScalePercent}%") { sheet = PlayerSheetPage.SubtitleSize },
+                            SheetRow("Playback info", "Codecs, decoder, dropped frames") { sheet = PlayerSheetPage.Info },
+                        )
+                    }
+                }
+                PlayerSheetPage.AudioDelay -> (-500..500 step 25).map { value ->
+                    SheetRow(ms(value), selected = value == mpvPlayer?.audioDelayMs) {
+                        mpvPlayer?.audioDelayMs = value
+                        PlaybackPrefs.setAudioDelay(context, value)
+                        sheet = PlayerSheetPage.Settings
+                    }
+                }
+                PlayerSheetPage.SubtitleDelay -> (-5000..5000 step 250).map { value ->
+                    SheetRow(ms(value), selected = value == mpvPlayer?.subtitleDelayMs) {
+                        mpvPlayer?.subtitleDelayMs = value
+                        sheet = PlayerSheetPage.Settings
+                    }
+                }
+                PlayerSheetPage.SubtitleSize -> listOf(60, 75, 90, 100, 115, 130, 150, 175).map { value ->
+                    SheetRow("$value%", selected = value == mpvPlayer?.subtitleScalePercent) {
+                        mpvPlayer?.subtitleScalePercent = value
+                        PlaybackPrefs.setSubtitleScale(context, value)
+                        sheet = PlayerSheetPage.Settings
+                    }
+                }
+                PlayerSheetPage.Info -> (mpvPlayer?.playbackInfo().orEmpty()).map { (key, value) ->
+                    SheetRow(key, value) { sheet = PlayerSheetPage.Settings }
+                }.ifEmpty { listOf(SheetRow("Nothing playing yet") { sheet = PlayerSheetPage.Settings }) }
+            }
+            PlayerSheet(title = page.title, rows = rows, onDismiss = { sheet = page.parent })
+        }
         if (!mediaStarted && playbackError == null) {
             // No media is set until the plan round trip returns, so PlayerView
             // shows no buffering spinner of its own yet.
@@ -1505,7 +1325,7 @@ fun PlayerScreen(
                 onBack = { exitPlayer() },
             )
         }
-        pendingSeekTargetMs?.let { target ->
+        pendingSeekTargetMs?.takeIf { !osdVisible }?.let { target ->
             val offset = target - logicalPositionMs()
             val sign = if (offset >= 0) "+" else "\u2212"
             Text(
@@ -1562,6 +1382,20 @@ private fun PlaybackErrorCard(
             }
         }
     }
+}
+
+// Pages of the player's side sheet; Back goes to parent (null closes).
+enum class PlayerSheetPage(val title: String, val parentPage: String?) {
+    Audio("Audio", null),
+    Subtitles("Subtitles", null),
+    Quality("Quality", null),
+    Settings("Playback settings", null),
+    AudioDelay("Audio delay", "Settings"),
+    SubtitleDelay("Subtitle delay", "Settings"),
+    SubtitleSize("Subtitle size", "Settings"),
+    Info("Playback info", "Settings");
+
+    val parent: PlayerSheetPage? get() = parentPage?.let { valueOf(it) }
 }
 
 // Window before the end of an episode during which the Up Next card appears.

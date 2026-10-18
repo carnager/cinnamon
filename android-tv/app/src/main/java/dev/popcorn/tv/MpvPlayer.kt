@@ -372,6 +372,13 @@ class MpvPlayer(
         ).filter { it.second.isNotBlank() }
     }
 
+    // Chapter start times, for marks on the progress bar.
+    fun chapterTimesMs(): List<Long> {
+        if (released || !fileLoaded) return emptyList()
+        val count = mpv.getPropertyInt("chapter-list/count") ?: return emptyList()
+        return (0 until count).mapNotNull { i -> mpv.getPropertyDouble("chapter-list/$i/time")?.let { (it * 1000).toLong() } }
+    }
+
     // Start of the end credits, from the file's chapter titles (anime and
     // most Blu-ray rips mark them), or null.
     fun creditsStartMs(): Long? {

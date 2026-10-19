@@ -147,6 +147,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -782,6 +784,12 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     delay(900)
                 }
                 api.sendCommand(device.id, "playItem", payload)
+                // The idle poll is slow; fetch the new state once playback had
+                // a moment to start, so the mini player turns up promptly.
+                scope.launch {
+                    delay(1500)
+                    runCatching { state = api.deviceState(device.id) }
+                }
                 if (bandwidth != null) {
                     delay(900)
                     val bandwidthPayload = JSONObject().put("bandwidthKbps", bandwidth)
@@ -1045,18 +1053,28 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     }
                 }
             }
+            // The page and its filter lists are independent requests; they
+            // go out together instead of the page waiting behind all three.
             val result = runCatching {
-                if (!incremental) {
-                    val genres = api.genres(lib.id)
-                    val decades = api.decades(lib.id, "movie")
-                    val alphabet = if (filters.sort.isBlank() && filters.seenStatus.isBlank() && filters.minRating <= 0) api.alphabet(lib.id, "movie", filters) else emptyList()
-                    if (generation == movieLoadGeneration) {
-                        movieGenres = genres
-                        movieDecades = decades
-                        movieAlphabet = alphabet
+                coroutineScope {
+                    val pageRequest = async { api.itemsPage(lib.id, requestLimit, offset, filters) }
+                    if (!incremental) {
+                        val genres = async { api.genres(lib.id) }
+                        val decades = async { api.decades(lib.id, "movie") }
+                        val alphabet = async {
+                            if (filters.sort.isBlank() && filters.seenStatus.isBlank() && filters.minRating <= 0) api.alphabet(lib.id, "movie", filters) else emptyList()
+                        }
+                        val loadedGenres = genres.await()
+                        val loadedDecades = decades.await()
+                        val loadedAlphabet = alphabet.await()
+                        if (generation == movieLoadGeneration) {
+                            movieGenres = loadedGenres
+                            movieDecades = loadedDecades
+                            movieAlphabet = loadedAlphabet
+                        }
                     }
+                    pageRequest.await()
                 }
-                api.itemsPage(lib.id, requestLimit, offset, filters)
             }
             if (generation != movieLoadGeneration) return@launch
             result
@@ -1139,18 +1157,28 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     }
                 }
             }
+            // The page and its filter lists are independent requests; they
+            // go out together instead of the page waiting behind all three.
             val result = runCatching {
-                if (!incremental) {
-                    val genres = api.genres(lib.id)
-                    val decades = api.decades(lib.id, "tv")
-                    val alphabet = if (filters.sort.isBlank() && filters.seenStatus.isBlank() && filters.minRating <= 0) api.alphabet(lib.id, "tv", filters) else emptyList()
-                    if (generation == showLoadGeneration) {
-                        showGenres = genres
-                        showDecades = decades
-                        showAlphabet = alphabet
+                coroutineScope {
+                    val pageRequest = async { api.showsPage(lib.id, requestLimit, offset, filters) }
+                    if (!incremental) {
+                        val genres = async { api.genres(lib.id) }
+                        val decades = async { api.decades(lib.id, "tv") }
+                        val alphabet = async {
+                            if (filters.sort.isBlank() && filters.seenStatus.isBlank() && filters.minRating <= 0) api.alphabet(lib.id, "tv", filters) else emptyList()
+                        }
+                        val loadedGenres = genres.await()
+                        val loadedDecades = decades.await()
+                        val loadedAlphabet = alphabet.await()
+                        if (generation == showLoadGeneration) {
+                            showGenres = loadedGenres
+                            showDecades = loadedDecades
+                            showAlphabet = loadedAlphabet
+                        }
                     }
+                    pageRequest.await()
                 }
-                api.showsPage(lib.id, requestLimit, offset, filters)
             }
             if (generation != showLoadGeneration) return@launch
             result
@@ -1345,7 +1373,16 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                 runCatching { state = api.deviceState(id) }
                     .onFailure { Log.w("PopcornCompanion", "deviceState poll failed: ${it.message}") }
             }
-            delay(if (connected) 1000 else 3000)
+            // Every second only while it shows: the TV playing, or its remote
+            // open. Otherwise this ran all session long for a TV nobody used.
+            val watching = playbackTarget == PlaybackTarget.Shield && (state.isActivePlayback() || page is Page.Remote)
+            delay(
+                when {
+                    !connected -> 3000
+                    watching -> 1000
+                    else -> 5000
+                },
+            )
         }
     }
 
@@ -1365,7 +1402,9 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     if (error.isNotBlank()) onError("")
                     loadContent(initial = false)
                 }
-                delay(5000)
+                // Losing the network is reported by OnNetworkAvailable straight
+                // away, so the heartbeat itself can be slow.
+                delay(15_000)
             } else {
                 failures++
                 connected = false

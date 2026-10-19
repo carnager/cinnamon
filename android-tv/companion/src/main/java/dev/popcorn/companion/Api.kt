@@ -7,11 +7,16 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
+import okhttp3.ConnectionPool
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 
 object CompanionCache {
     fun readLibraries(context: Context, session: Session): List<Library> {
@@ -90,6 +95,26 @@ object CompanionCache {
         return File(dir, "${key.replace(Regex("[^A-Za-z0-9_.-]"), "_")}.json")
     }
 }
+
+// One client for every API call, so requests reuse connections instead of
+// opening a fresh one (and a TLS handshake) each time. A pooled socket that
+// went stale across a server restart or network change is retried on a new
+// connection by OkHttp; idle sockets are dropped after 30s, and the pool is
+// flushed whenever the network comes back (see OnNetworkAvailable).
+object Http {
+    val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(8, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .connectionPool(ConnectionPool(5, 30, TimeUnit.SECONDS))
+        .retryOnConnectionFailure(true)
+        .build()
+
+    fun resetConnections() {
+        client.connectionPool.evictAll()
+    }
+}
+
+private val JsonMediaType = "application/json".toMediaType()
 
 fun JSONObject.optIntOrNull(name: String): Int? {
     return if (has(name) && !isNull(name)) optInt(name) else null
@@ -628,30 +653,20 @@ class Api(private val session: Session) {
     }
 
     private fun requestText(path: String, method: String, body: String?): String {
-        val conn = URL(session.server + path).openConnection() as HttpURLConnection
-        try {
-            conn.requestMethod = method
-            conn.connectTimeout = 8000
-            conn.readTimeout = 20000
-            // Use a fresh connection per request instead of a pooled keep-alive
-            // socket. After the server restarts or the network blips, a stale
-            // pooled socket hangs or errors and HttpURLConnection's pool stays
-            // poisoned until the app process restarts — which is why the app
-            // previously "lost its connection" until a manual restart.
-            conn.setRequestProperty("Connection", "close")
-            if (session.token.isNotBlank()) conn.setRequestProperty("Authorization", "Bearer ${session.token}")
-            if (body != null) {
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.doOutput = true
-                OutputStreamWriter(conn.outputStream).use { it.write(body) }
-            }
-            val code = conn.responseCode
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val text = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-            if (code !in 200..299) error(text.ifBlank { "HTTP $code" })
+        val requestBody = when {
+            body != null -> body.toRequestBody(JsonMediaType)
+            method == "POST" || method == "PUT" -> ByteArray(0).toRequestBody(null)
+            else -> null
+        }
+        val request = Request.Builder()
+            .url(session.server + path)
+            .method(method, requestBody)
+            .apply { if (session.token.isNotBlank()) header("Authorization", "Bearer ${session.token}") }
+            .build()
+        Http.client.newCall(request).execute().use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) error(text.ifBlank { "HTTP ${response.code}" })
             return text
-        } finally {
-            conn.disconnect()
         }
     }
 

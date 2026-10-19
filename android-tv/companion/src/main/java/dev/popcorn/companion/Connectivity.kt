@@ -46,6 +46,8 @@ fun OnNetworkAvailable(onAvailable: () -> Unit) {
         // touching Compose state.
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
+                // A new default network: sockets pooled on the old one are dead.
+                Http.resetConnections()
                 main.post { current.value() }
             }
 

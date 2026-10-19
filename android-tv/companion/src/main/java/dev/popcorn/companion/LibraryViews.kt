@@ -782,7 +782,7 @@ fun SeasonList(
 // has scrolled away, or the text below runs under the clock.
 @Composable
 fun BoxScope.StatusBarScrim(listState: LazyListState) {
-    val threshold = with(LocalDensity.current) { 160.dp.toPx() }
+    val threshold = with(LocalDensity.current) { 220.dp.toPx() }
     val scrolled by remember(listState) {
         derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > threshold }
     }
@@ -908,44 +908,25 @@ fun SeenToggle(watched: Boolean, onToggle: () -> Unit, modifier: Modifier = Modi
 fun ShowHero(session: Session, show: ShowSummary, onBack: () -> Unit) {
     val backdropUrl = if (show.backdropItemId > 0) imageUrl(session, show.backdropItemId, show.backdropMtimeUnix, "backdrop", ArtworkFull) else ""
     val genres = show.genres.split(Regex("[,;/]")).map { it.trim() }.filter { it.isNotBlank() }.take(3)
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-        Box(Modifier.fillMaxWidth().height(300.dp + statusTop)) {
-            if (backdropUrl.isNotBlank()) {
-                AuthAsyncImage(session, backdropUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            } else {
-                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Surface2, Bg))))
-            }
-            Box(
-                Modifier.fillMaxSize().background(
-                    Brush.verticalGradient(0f to Color.Black.copy(alpha = .05f), 0.42f to Bg.copy(alpha = .28f), .78f to Bg.copy(alpha = .86f), 1f to Bg),
-                ),
-            )
-            Box(Modifier.fillMaxWidth().height(statusTop + 64.dp).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = .55f), Color.Transparent))))
-            HeroIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", Modifier.align(Alignment.TopStart).statusBarsPadding().padding(12.dp), onClick = onBack)
-            LocalPlaybackTarget.current?.let { target ->
-                PlaybackTargetSwitcher(target, compact = true, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(12.dp))
-            }
-            Row(
-                Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalAlignment = Alignment.Bottom,
-            ) {
-                PosterImage(session, imageUrl(session, show.posterItemId, show.posterMtimeUnix, width = ArtworkCard), Modifier.width(104.dp), rating = show.rating)
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(show.title, color = TextColor, fontSize = 25.sp, lineHeight = 29.sp, fontWeight = FontWeight.Black, letterSpacing = (-.35).sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                    val meta = listOfNotNull(
-                        show.yearsLabel().takeIf { it.isNotBlank() },
-                        seasonsLabel(show.seasonCount),
-                        if (show.episodeCount == 1) "1 episode" else "${show.episodeCount} episodes",
-                    ).joinToString(" · ")
-                    Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                }
-            }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        MediaHero(
+            session = session,
+            backdropUrl = backdropUrl,
+            posterUrl = imageUrl(session, show.posterItemId, show.posterMtimeUnix, width = ArtworkCard),
+            title = show.title,
+            onBack = onBack,
+            posterRating = show.rating,
+        ) {
+            val meta = listOfNotNull(
+                show.yearsLabel().takeIf { it.isNotBlank() },
+                seasonsLabel(show.seasonCount),
+                if (show.episodeCount == 1) "1 episode" else "${show.episodeCount} episodes",
+            ).joinToString(" · ")
+            Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         // A line of text, as on the detail page.
         if (genres.isNotEmpty()) {
-            Text(genres.joinToString(" · "), color = Teal.copy(alpha = .9f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 14.dp))
+            Text(genres.joinToString(" · "), color = Teal.copy(alpha = .9f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 16.dp))
         }
     }
 }

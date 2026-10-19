@@ -362,60 +362,79 @@ private fun DetailAction(
     }
 }
 
+// The top of a show or a film, one layout for both: the backdrop clear to
+// the top of the screen, fading out only at its foot; the cover straddling
+// that edge, half on the art and half off; the title and its facts beside the
+// cover. The backdrop used to be dimmed from the left to almost black, with
+// the cover floating under the back button and the title cut off from both.
+@Composable
+fun MediaHero(
+    session: Session,
+    backdropUrl: String,
+    posterUrl: String,
+    title: String,
+    onBack: () -> Unit,
+    subtitle: String = "",
+    posterProgress: Float = 0f,
+    posterRating: Double = 0.0,
+    facts: @Composable () -> Unit = {},
+) {
+    val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val backdropHeight = (LocalConfiguration.current.screenWidthDp * 9f / 16f).dp + statusTop
+    val overhang = 76.dp
+    Box(Modifier.fillMaxWidth().height(backdropHeight + overhang)) {
+        Box(Modifier.fillMaxWidth().height(backdropHeight)) {
+            if (backdropUrl.isNotBlank()) {
+                AuthAsyncImage(session, backdropUrl, null, Modifier.fillMaxSize(), ContentScale.Crop)
+            } else {
+                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Surface3, Bg))))
+            }
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(.45f to Color.Transparent, .8f to Bg.copy(alpha = .7f), 1f to Bg)))
+            // Keeps the clock and the two buttons readable on bright art.
+            Box(Modifier.fillMaxWidth().height(statusTop + 72.dp).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = .5f), Color.Transparent))))
+        }
+        Row(
+            Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            PosterImage(session, posterUrl, Modifier.width(112.dp), progress = posterProgress, rating = posterRating)
+            Column(Modifier.weight(1f).padding(bottom = 2.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, color = TextColor, fontSize = 24.sp, lineHeight = 28.sp, fontWeight = FontWeight.Black, letterSpacing = (-.3).sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                if (subtitle.isNotBlank()) {
+                    Text(subtitle, color = Muted, fontSize = 13.sp, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                facts()
+            }
+        }
+        HeroIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", Modifier.align(Alignment.TopStart).statusBarsPadding().padding(12.dp), onClick = onBack)
+        LocalPlaybackTarget.current?.let { target ->
+            PlaybackTargetSwitcher(target, compact = true, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(12.dp))
+        }
+    }
+}
+
 @Composable
 fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, streams: List<StreamInfo>, resumeProgress: Float, onBack: () -> Unit) {
     val backdropUrl = if (item.backdropMtimeUnix > 0) imageUrl(session, item.id, item.backdropMtimeUnix, "backdrop", ArtworkFull) else ""
     val genres = item.genres.split(Regex("[,;/]")).map { it.trim() }.filter { it.isNotBlank() }.take(3)
-    Column {
-        // The backdrop keeps its native 16:9 rather than being cropped to a
-        // fixed height, and the cover overlays it at the bottom left. Keeping
-        // the poster inside the hero costs no extra height and leaves the title
-        // below it the full width.
-        // Drawn up under the status bar, which a scrim keeps readable: the
-        // page has no top bar, only back and the playback device over the art.
-        val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-        val heroHeight = (LocalConfiguration.current.screenWidthDp * 9f / 16f).dp + statusTop
-        Box(Modifier.fillMaxWidth().height(heroHeight)) {
-            if (backdropUrl.isNotBlank()) {
-                AuthAsyncImage(session, backdropUrl, null, Modifier.fillMaxSize(), ContentScale.Crop)
-            } else {
-                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Surface2, Bg))))
-            }
-            // The image fades in from the left, so the cover sits on settled
-            // background rather than on competing artwork and the backdrop
-            // reads from the right where nothing overlaps it.
-            Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Bg, .30f to Bg.copy(alpha = .82f), .62f to Bg.copy(alpha = .34f), .88f to Color.Transparent)))
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Black.copy(alpha = .06f), .5f to Bg.copy(alpha = .38f), .82f to Bg.copy(alpha = .9f), 1f to Bg)))
-            Box(Modifier.fillMaxWidth().height(statusTop + 64.dp).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = .55f), Color.Transparent))))
-            // The hero is 9/16 of the screen width and a 2:3 cover is 1.5x its
-            // own width tall, so the cover's height eats the hero fast: past
-            // ~110dp on a 400dp-wide phone its top reaches the back button.
-            PosterImage(
-                session,
-                imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard),
-                Modifier.align(Alignment.BottomStart).padding(start = 16.dp, bottom = 6.dp).width(110.dp),
-                progress = resumeProgress,
-            )
-            // Smaller and tighter into the corner to buy the cover room, and
-            // drawn last so it stays on top and tappable if a narrow screen
-            // still brings the two together.
-            HeroIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", Modifier.align(Alignment.TopStart).statusBarsPadding().padding(10.dp), onClick = onBack)
-            LocalPlaybackTarget.current?.let { target ->
-                PlaybackTargetSwitcher(target, compact = true, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(10.dp))
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        MediaHero(
+            session = session,
+            backdropUrl = backdropUrl,
+            posterUrl = imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard),
+            title = displayTitle(item),
+            onBack = onBack,
+            subtitle = item.originalTitle.takeIf { it.isNotBlank() && it != displayTitle(item) }.orEmpty(),
+            posterProgress = resumeProgress,
+        ) {
+            val meta = detailMetadata(item)
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                if (item.officialRating.isNotBlank()) ContentRatingChip(item.officialRating)
             }
         }
-        Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-            Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(displayTitle(item), color = TextColor, fontSize = 29.sp, lineHeight = 33.sp, fontWeight = FontWeight.Black, letterSpacing = (-.4).sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                if (item.originalTitle.isNotBlank() && item.originalTitle != displayTitle(item)) {
-                    Text(item.originalTitle, color = Muted, fontSize = 13.sp, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                val meta = detailMetadata(item)
-                Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    if (item.officialRating.isNotBlank()) ContentRatingChip(item.officialRating)
-                }
-            }
+        Column {
             // Genres, then ratings with the file's format, as two lines of
             // text. Two rows of boxed chips outweighed the title and pushed
             // Play below the fold.

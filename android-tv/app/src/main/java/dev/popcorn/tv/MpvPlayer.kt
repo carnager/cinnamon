@@ -32,7 +32,7 @@ private val creditsChapter = Regex("""^\s*(end\s*credits|credits|ending|ed|outro
 @OptIn(UnstableApi::class)
 class MpvPlayer(
     context: Context,
-    authToken: String,
+    private val authToken: String,
 ) : SimpleBasePlayer(Looper.getMainLooper()), SurfaceHolder.Callback, MPVLib.EventObserver, MPVLib.LogObserver {
     private val main = Handler(Looper.getMainLooper())
 
@@ -41,6 +41,22 @@ class MpvPlayer(
     private val mpv: MPVLib = requireNotNull(MPVLib.create(context.applicationContext)) { "libmpv could not be created" }
 
     private var mediaItem: MediaItem? = null
+    // mpv fetches through a loopback relay on Android's network stack (see
+    // MpvRelay); one per server origin, closed on release.
+    private var relay: MpvRelay? = null
+
+    private fun relayed(url: String): String {
+        val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return url
+        if (uri.scheme != "http" && uri.scheme != "https") return url
+        val origin = "${uri.scheme}://${uri.rawAuthority}"
+        val current = relay?.takeIf { it.rewrite(url) != url }
+            ?: runCatching { MpvRelay(origin, authToken) }.getOrNull()?.also { created ->
+                relay?.close()
+                relay = created
+            }
+            ?: return url
+        return current.rewrite(url)
+    }
     private var prepared = false
     private var loadIssued = false
     // END_FILE of a file we stopped can arrive after the next load was issued;
@@ -244,7 +260,12 @@ class MpvPlayer(
         detachSurface()
         runCatching { mpv.removeObserver(this) }
         runCatching { mpv.removeLogObserver(this) }
-        Thread({ runCatching { mpv.destroy() } }, "mpv-destroy").start()
+        val closingRelay = relay
+        relay = null
+        Thread({
+            runCatching { mpv.destroy() }
+            closingRelay?.close()
+        }, "mpv-destroy").start()
         return Futures.immediateVoidFuture()
     }
 
@@ -336,7 +357,7 @@ class MpvPlayer(
         if (!externalAdded.add(wanted)) return
         val config = mediaItem?.localConfiguration?.subtitleConfigurations?.firstOrNull { it.id == wanted } ?: return
         Thread({
-            if (!released) runCatching { mpv.command(arrayOf("sub-add", config.uri.toString(), "select", wanted, config.language.orEmpty())) }
+            if (!released) runCatching { mpv.command(arrayOf("sub-add", relayed(config.uri.toString()), "select", wanted, config.language.orEmpty())) }
         }, "mpv-sub-add").start()
     }
 
@@ -444,7 +465,7 @@ class MpvPlayer(
         positionMs = startMs
         mpv.setPropertyString("start", if (startMs > 0) seconds(startMs) else "none")
         mpv.setPropertyBoolean("pause", !playWhenReady)
-        mpv.command(arrayOf("loadfile", url, "replace"))
+        mpv.command(arrayOf("loadfile", relayed(url), "replace"))
         invalidateState()
     }
 

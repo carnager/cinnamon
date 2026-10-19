@@ -8,6 +8,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -165,7 +167,14 @@ fun PlayerOsd(
                 Spacer(Modifier.height(10.dp))
                 OsdProgressBar(state, barFocus, onBarKey)
                 Spacer(Modifier.height(20.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                // Scrolls if the values make it wider than the screen, so the
+                // last button (Next episode) moves into view when focused
+                // instead of being cut off at the edge.
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     OsdButton(icon = if (state.playing) Icons.Filled.Pause else Icons.Filled.PlayArrow, label = null, onUp = { requestFocus(barFocus) }, onClick = onPlayPause, modifier = Modifier.focusRequester(playFocus))
                     OsdButton(icon = Icons.Filled.Replay10, label = null, onUp = { requestFocus(barFocus) }, onClick = onBack10)
                     OsdButton(icon = Icons.Filled.Forward10, label = null, onUp = { requestFocus(barFocus) }, onClick = onForward10)
@@ -315,7 +324,9 @@ fun OsdButton(icon: ImageVector, label: String?, onUp: () -> Boolean, onClick: (
     Row(
         modifier
             .height(48.dp)
-            .then(if (label == null) Modifier.width(56.dp) else Modifier.widthIn(max = 300.dp))
+            // Labelled buttons are capped so long track names ("Deutsch ·
+            // Dolby Digital 5.1") ellipsize instead of widening the row.
+            .then(if (label == null) Modifier.width(56.dp) else Modifier.widthIn(max = 240.dp))
             .clip(RoundedCornerShape(24.dp))
             .background(if (focused) Color.White else Color.White.copy(alpha = .12f))
             .onFocusChanged { focused = it.isFocused }

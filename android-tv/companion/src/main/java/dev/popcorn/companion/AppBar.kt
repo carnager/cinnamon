@@ -41,6 +41,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.TopAppBarScrollBehavior
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,16 +57,78 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+// Where playback goes, and the means to change it: read by the top bar and,
+// on pages that draw their artwork under the status bar instead of a bar, by
+// the hero's own round button.
+class PlaybackTargetControl(
+    val playbackTarget: PlaybackTarget,
+    val devices: List<Device>,
+    val selectedDevice: Device?,
+    val deviceStatus: String,
+    val onSelectPhone: () -> Unit,
+    val onSelectDevice: (Device) -> Unit,
+    val onRefreshDevices: () -> Unit,
+)
+
+val LocalPlaybackTarget = compositionLocalOf<PlaybackTargetControl?> { null }
+
+@Composable
+fun PlaybackTargetSwitcher(control: PlaybackTargetControl, compact: Boolean, modifier: Modifier = Modifier) {
+    var sheetOpen by remember { mutableStateOf(false) }
+    val onPhone = control.playbackTarget == PlaybackTarget.Phone
+    val icon = if (onPhone) Icons.Default.PhoneAndroid else Icons.Default.Cast
+    val open = {
+        control.onRefreshDevices()
+        sheetOpen = true
+    }
+    if (compact) {
+        HeroIconButton(icon, if (onPhone) "Playing on this phone. Choose playback device" else "Playing on the TV. Choose playback device", modifier, tint = Accent, onClick = open)
+    } else {
+        PlaybackTargetButton(
+            label = if (onPhone) "This phone" else control.selectedDevice?.displayName() ?: "Choose TV",
+            icon = icon,
+            modifier = modifier,
+            onClick = open,
+        )
+    }
+    if (sheetOpen) {
+        PlaybackTargetSheet(
+            devices = control.devices,
+            selectedDevice = control.selectedDevice,
+            playbackTarget = control.playbackTarget,
+            phoneStatus = "Play on this device",
+            deviceStatus = control.deviceStatus,
+            onDismiss = { sheetOpen = false },
+            onSelectPhone = { sheetOpen = false; control.onSelectPhone() },
+            onSelectDevice = { sheetOpen = false; control.onSelectDevice(it) },
+        )
+    }
+}
+
+// The round, scrimmed button that sits on artwork: back, and the playback
+// device on hero pages.
+@Composable
+fun HeroIconButton(icon: ImageVector, description: String, modifier: Modifier = Modifier, tint: Color = Color.White, onClick: () -> Unit) {
+    Box(
+        modifier.size(40.dp).clip(CircleShape).background(Color.Black.copy(alpha = .58f))
+            .border(1.dp, Color.White.copy(alpha = .13f), CircleShape).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = description, tint = tint, modifier = Modifier.size(20.dp))
+    }
+}
+
+// The bar is the mark, search, the playback device and the user: the
+// "Cinnamon" wordmark cost the device name its room, and search had to float
+// over the posters for want of a place here. It slides away while scrolling
+// down and comes back on the way up.
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CompanionTopAppBar(
     session: Session,
-    playbackTarget: PlaybackTarget,
-    devices: List<Device>,
-    selectedDevice: Device?,
-    deviceStatus: String,
-    onSelectPhone: () -> Unit,
-    onSelectDevice: (Device) -> Unit,
+    target: PlaybackTargetControl,
+    scrollBehavior: TopAppBarScrollBehavior,
+    onSearch: () -> Unit,
     onHistory: () -> Unit,
     onWatchlist: () -> Unit,
     onNotInterested: () -> Unit,
@@ -70,55 +136,30 @@ fun CompanionTopAppBar(
     showUpdate: Boolean,
     onUpdate: () -> Unit,
     onLogout: () -> Unit,
-    onRefreshDevices: () -> Unit,
 ) {
     var userMenuOpen by remember { mutableStateOf(false) }
     var userMenuPage by remember { mutableStateOf(UserMenuPage.Root) }
-    var targetSheetOpen by remember { mutableStateOf(false) }
 
-    Column {
-        TopAppBar(
-            title = { CinnamonBrand(markSize = 28, fontSize = 18) },
-            actions = {
-                // The playback destination is a global setting, so it lives here
-                // rather than only inside Now Playing — which is unreachable when
-                // nothing is playing.
-                PlaybackTargetButton(
-                    label = if (playbackTarget == PlaybackTarget.Phone) "This phone" else selectedDevice?.displayName() ?: "Choose TV",
-                    icon = if (playbackTarget == PlaybackTarget.Phone) Icons.Default.PhoneAndroid else Icons.Default.Cast,
-                    modifier = Modifier.padding(end = 8.dp).widthIn(max = 150.dp),
-                    onClick = {
-                        onRefreshDevices()
-                        targetSheetOpen = true
-                    },
-                )
-                UserAvatar(
-                    session = session,
-                    size = 38,
-                    showUpdate = showUpdate,
-                    modifier = Modifier.padding(end = 9.dp).clickable {
-                        userMenuPage = UserMenuPage.Root
-                        userMenuOpen = true
-                    },
-                )
-            },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = Bg, titleContentColor = TextColor, actionIconContentColor = Muted),
-        )
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Line.copy(alpha = .45f)))
-    }
-
-    if (targetSheetOpen) {
-        PlaybackTargetSheet(
-            devices = devices,
-            selectedDevice = selectedDevice,
-            playbackTarget = playbackTarget,
-            phoneStatus = "Play on this device",
-            deviceStatus = deviceStatus,
-            onDismiss = { targetSheetOpen = false },
-            onSelectPhone = { targetSheetOpen = false; onSelectPhone() },
-            onSelectDevice = { targetSheetOpen = false; onSelectDevice(it) },
-        )
-    }
+    TopAppBar(
+        title = { CinnamonBrand(showName = false, markSize = 28) },
+        actions = {
+            IconButton(onClick = onSearch) {
+                Icon(Icons.Default.Search, contentDescription = "Search", tint = TextColor)
+            }
+            PlaybackTargetSwitcher(target, compact = false, modifier = Modifier.padding(start = 2.dp, end = 10.dp).widthIn(max = 200.dp))
+            UserAvatar(
+                session = session,
+                size = 34,
+                showUpdate = showUpdate,
+                modifier = Modifier.padding(end = 10.dp).clickable {
+                    userMenuPage = UserMenuPage.Root
+                    userMenuOpen = true
+                },
+            )
+        },
+        scrollBehavior = scrollBehavior,
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = Bg, scrolledContainerColor = Surface1, titleContentColor = TextColor, actionIconContentColor = Muted),
+    )
 
     if (userMenuOpen) {
         UserMenuSheet(
@@ -131,7 +172,7 @@ fun CompanionTopAppBar(
             onWatchlist = { userMenuOpen = false; userMenuPage = UserMenuPage.Root; onWatchlist() },
             onNotInterested = { userMenuOpen = false; userMenuPage = UserMenuPage.Root; onNotInterested() },
             onScan = { userMenuOpen = false; onScan() },
-            onRefreshDevices = { userMenuOpen = false; onRefreshDevices() },
+            onRefreshDevices = { userMenuOpen = false; target.onRefreshDevices() },
             onUpdate = { userMenuOpen = false; onUpdate() },
             onLogout = { userMenuOpen = false; onLogout() },
         )

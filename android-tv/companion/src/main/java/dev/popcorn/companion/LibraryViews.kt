@@ -78,6 +78,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -807,7 +812,8 @@ fun ShowHero(session: Session, show: ShowSummary, onBack: () -> Unit) {
     val backdropUrl = if (show.backdropItemId > 0) imageUrl(session, show.backdropItemId, show.backdropMtimeUnix, "backdrop", ArtworkFull) else ""
     val genres = show.genres.split(Regex("[,;/]")).map { it.trim() }.filter { it.isNotBlank() }.take(3)
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Box(Modifier.fillMaxWidth().height(322.dp)) {
+        val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+        Box(Modifier.fillMaxWidth().height(300.dp + statusTop)) {
             if (backdropUrl.isNotBlank()) {
                 AuthAsyncImage(session, backdropUrl, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             } else {
@@ -818,18 +824,10 @@ fun ShowHero(session: Session, show: ShowSummary, onBack: () -> Unit) {
                     Brush.verticalGradient(0f to Color.Black.copy(alpha = .05f), 0.42f to Bg.copy(alpha = .28f), .78f to Bg.copy(alpha = .86f), 1f to Bg),
                 ),
             )
-            Box(
-                Modifier
-                    .align(Alignment.TopStart)
-                    .padding(14.dp)
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(Color.Black.copy(alpha = .58f))
-                    .border(1.dp, Color.White.copy(alpha = .13f), CircleShape)
-                    .clickable(onClick = onBack),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White, modifier = Modifier.size(21.dp))
+            Box(Modifier.fillMaxWidth().height(statusTop + 64.dp).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = .55f), Color.Transparent))))
+            HeroIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", Modifier.align(Alignment.TopStart).statusBarsPadding().padding(12.dp), onClick = onBack)
+            LocalPlaybackTarget.current?.let { target ->
+                PlaybackTargetSwitcher(target, compact = true, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(12.dp))
             }
             Row(
                 Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(16.dp),

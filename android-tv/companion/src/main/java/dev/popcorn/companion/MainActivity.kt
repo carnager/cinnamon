@@ -111,6 +111,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -365,6 +370,7 @@ fun CompanionApp() {
 }
 
 @androidx.annotation.OptIn(UnstableApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLogout: () -> Unit, onScan: () -> Unit) {
     val context = LocalContext.current
@@ -1559,6 +1565,24 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         }
     }
 
+    val targetControl = PlaybackTargetControl(
+        playbackTarget = playbackTarget,
+        devices = devices,
+        selectedDevice = selectedDevice,
+        deviceStatus = state.state.ifBlank { "idle" },
+        onSelectPhone = ::selectPhoneTarget,
+        onSelectDevice = ::selectTvTarget,
+        onRefreshDevices = {
+            scope.launch {
+                runCatching { refreshDevices() }.onFailure { reportError(it, "Device refresh failed") }
+            }
+        },
+    )
+    val heroPage = page is Page.Show || page is Page.Detail
+    val topBarScroll = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    // A page starts with the bar showing, whatever the last one scrolled to.
+    LaunchedEffect(page) { topBarScroll.state.heightOffset = 0f }
+
     BackHandler(enabled = page !is Page.Home || backStack.isNotEmpty()) {
         if (page is Page.Remote) {
             page = Page.Home
@@ -1570,16 +1594,17 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
 
     Box(Modifier.fillMaxSize()) {
         if (page !is Page.Remote && page !is Page.LocalPlayer) {
+            CompositionLocalProvider(LocalPlaybackTarget provides targetControl) {
             Scaffold(
+            modifier = Modifier.nestedScroll(topBarScroll.nestedScrollConnection),
             topBar = {
-                CompanionTopAppBar(
+                // Show and detail pages draw their artwork under the status
+                // bar instead, with back and the playback device over it.
+                if (!heroPage) CompanionTopAppBar(
                     session = session,
-                    playbackTarget = playbackTarget,
-                    devices = devices,
-                    selectedDevice = selectedDevice,
-                    deviceStatus = state.state.ifBlank { "idle" },
-                    onSelectPhone = ::selectPhoneTarget,
-                    onSelectDevice = ::selectTvTarget,
+                    target = targetControl,
+                    scrollBehavior = topBarScroll,
+                    onSearch = { switchTab(Page.Search) },
                     onHistory = { navigate(Page.History) },
                     onWatchlist = { navigate(Page.Watchlist) },
                     onNotInterested = ::openNotInterested,
@@ -1587,11 +1612,6 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     showUpdate = companionUpdate?.available == true,
                     onUpdate = { showUpdateDialog = true },
                     onLogout = onLogout,
-                    onRefreshDevices = {
-                        scope.launch {
-                            runCatching { refreshDevices() }.onFailure { reportError(it, "Device refresh failed") }
-                        }
-                    },
                 )
             },
             bottomBar = {
@@ -1658,24 +1678,18 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     )
                 }
             },
-            // Search is an action, so it floats over the library rather than
-            // holding one of four navigation slots. It stays out of the way on
-            // the pages where searching makes no sense.
-            floatingActionButton = {
-                if (page is Page.Home || page is Page.Movies || page is Page.Shows || page is Page.Discover) {
-                    FloatingActionButton(
-                        onClick = { switchTab(Page.Search) },
-                        containerColor = Accent,
-                        contentColor = Color.Black,
-                    ) {
-                        Icon(Icons.Default.Search, contentDescription = "Search")
-                    }
-                }
-            },
             snackbarHost = snackbarHost,
             containerColor = MaterialTheme.colorScheme.background,
         ) { padding ->
-            Column(Modifier.fillMaxSize().padding(padding)) {
+            val layoutDirection = LocalLayoutDirection.current
+            Column(
+                Modifier.fillMaxSize().padding(
+                    start = padding.calculateStartPadding(layoutDirection),
+                    top = if (heroPage) 0.dp else padding.calculateTopPadding(),
+                    end = padding.calculateEndPadding(layoutDirection),
+                    bottom = padding.calculateBottomPadding(),
+                ),
+            ) {
                 if (!connected) {
                     OfflineBanner(
                         onRetry = ::reconnect,
@@ -1873,6 +1887,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     }
                     }
                 }
+            }
             }
             }
         }

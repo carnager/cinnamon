@@ -51,6 +51,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -358,7 +363,11 @@ fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, strea
         // fixed height, and the cover overlays it at the bottom left. Keeping
         // the poster inside the hero costs no extra height and leaves the title
         // below it the full width.
-        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f)) {
+        // Drawn up under the status bar, which a scrim keeps readable: the
+        // page has no top bar, only back and the playback device over the art.
+        val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+        val heroHeight = (LocalConfiguration.current.screenWidthDp * 9f / 16f).dp + statusTop
+        Box(Modifier.fillMaxWidth().height(heroHeight)) {
             if (backdropUrl.isNotBlank()) {
                 AuthAsyncImage(session, backdropUrl, null, Modifier.fillMaxSize(), ContentScale.Crop)
             } else {
@@ -369,6 +378,7 @@ fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, strea
             // reads from the right where nothing overlaps it.
             Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(0f to Bg, .30f to Bg.copy(alpha = .82f), .62f to Bg.copy(alpha = .34f), .88f to Color.Transparent)))
             Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to Color.Black.copy(alpha = .06f), .5f to Bg.copy(alpha = .38f), .82f to Bg.copy(alpha = .9f), 1f to Bg)))
+            Box(Modifier.fillMaxWidth().height(statusTop + 64.dp).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = .55f), Color.Transparent))))
             // The hero is 9/16 of the screen width and a 2:3 cover is 1.5x its
             // own width tall, so the cover's height eats the hero fast: past
             // ~110dp on a 400dp-wide phone its top reaches the back button.
@@ -381,12 +391,9 @@ fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, strea
             // Smaller and tighter into the corner to buy the cover room, and
             // drawn last so it stays on top and tappable if a narrow screen
             // still brings the two together.
-            Box(
-                Modifier.align(Alignment.TopStart).padding(10.dp).size(38.dp).clip(CircleShape).background(Color.Black.copy(alpha = .58f))
-                    .border(1.dp, Color.White.copy(alpha = .13f), CircleShape).clickable(onClick = onBack),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White, modifier = Modifier.size(20.dp))
+            HeroIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", Modifier.align(Alignment.TopStart).statusBarsPadding().padding(10.dp), onClick = onBack)
+            LocalPlaybackTarget.current?.let { target ->
+                PlaybackTargetSwitcher(target, compact = true, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(10.dp))
             }
         }
         Column(Modifier.padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {

@@ -347,7 +347,6 @@ sealed interface Page {
     data object NotInterested : Page
     data class Person(val actor: Actor) : Page
     data class Show(val show: ShowSummary) : Page
-    data class Season(val show: ShowSummary, val season: SeasonSummary) : Page
     data class Detail(val item: PopItem, val from: Page) : Page
     data class LocalPlayer(val item: PopItem, val audioIndex: Int?, val subtitleIndex: Int?, val from: Page) : Page
 }
@@ -366,7 +365,6 @@ fun Page.stateKey(): String = when (this) {
     Page.NotInterested -> "not-interested"
     is Page.Person -> "person:${actor.name}"
     is Page.Show -> "show:${show.libraryId}\n${show.title}"
-    is Page.Season -> "season:${show.libraryId}\n${show.title}\n${season.seasonNumber}"
     is Page.Detail -> "detail:${item.id}"
     is Page.LocalPlayer -> "player"
 }

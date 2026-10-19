@@ -83,6 +83,9 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.platform.LocalConfiguration
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -145,7 +148,7 @@ fun BottomNavigation(page: Page, onHome: () -> Unit, onMovies: () -> Unit, onSho
             colors = colors,
         )
         NavigationBarItem(
-            selected = page is Page.Shows || page is Page.Show || page is Page.Season || page is Page.Detail && page.from !is Page.Movies,
+            selected = page is Page.Shows || page is Page.Show || page is Page.Detail && page.from !is Page.Movies,
             onClick = onShows,
             icon = { Icon(Icons.Default.LiveTv, contentDescription = null) },
             label = { Text("TV") },
@@ -609,27 +612,39 @@ fun SeasonList(
     show: ShowSummary,
     seasons: List<SeasonSummary>,
     completedItems: Set<Long>,
+    watchlistItems: Set<Long>,
     resumeProgress: Map<Long, Float>,
     showWatched: Boolean,
     recommendationExcluded: Boolean,
     onBack: () -> Unit,
-    onSeason: (SeasonSummary) -> Unit,
     onPlayEpisode: (PopItem) -> Unit,
+    onOpenEpisode: (PopItem) -> Unit,
+    onSetEpisodeWatched: (PopItem, Boolean) -> Unit,
     onSetPreference: (MediaPreference) -> Unit,
     onSetSeasonWatched: (SeasonSummary, Boolean) -> Unit,
     onActor: (Actor) -> Unit,
 ) {
+    val context = LocalContext.current
     var actors by remember(show.libraryId, show.title) { mutableStateOf<List<Actor>>(emptyList()) }
     var allEpisodes by remember(show.libraryId, show.title) { mutableStateOf<List<PopItem>>(emptyList()) }
     var preferenceOpen by remember(show.libraryId, show.title) { mutableStateOf(false) }
+    var overviewExpanded by rememberSaveable(show.libraryId, show.title) { mutableStateOf(false) }
+    var chosenSeason by rememberSaveable(show.libraryId, show.title) { mutableStateOf<Int?>(null) }
     LaunchedEffect(show.libraryId, show.title) {
-        actors = runCatching { Api(session).showActors(show.libraryId, show.title) }.getOrDefault(emptyList())
-        allEpisodes = runCatching { Api(session).episodes(show.libraryId, show.title, -1) }.getOrDefault(emptyList())
+        launch { actors = runCatching { Api(session).showActors(show.libraryId, show.title) }.getOrDefault(emptyList()) }
+        // Every episode at once, from the cache first: the season chips switch
+        // between them without a request each.
+        val cacheKey = "episodes_all_${show.libraryId}_${show.title}"
+        val cached = withContext(Dispatchers.IO) { CompanionCache.readItems(context, session, cacheKey) }
+        if (cached.isNotEmpty() && allEpisodes.isEmpty()) allEpisodes = cached
+        runCatching { Api(session).episodes(show.libraryId, show.title, -1) }.onSuccess { loaded ->
+            allEpisodes = loaded
+            withContext(Dispatchers.IO) { CompanionCache.writeItems(context, session, cacheKey, loaded) }
+        }
     }
-    val watchedSeasons = remember(allEpisodes, completedItems) {
-        allEpisodes.groupBy { it.seasonNumber }
-            .filterValues { eps -> eps.all { completedItems.contains(it.id) } }
-            .keys
+    val episodesBySeason = remember(allEpisodes) { allEpisodes.groupBy { it.seasonNumber } }
+    val watchedSeasons = remember(episodesBySeason, completedItems) {
+        episodesBySeason.filterValues { eps -> eps.all { completedItems.contains(it.id) } }.keys
     }
     // The episode to carry on with: the first unwatched one in airing order,
     // specials last; with everything seen, the first.
@@ -637,13 +652,22 @@ fun SeasonList(
         val ordered = allEpisodes.sortedWith(compareBy({ if (it.seasonNumber == 0) Int.MAX_VALUE else it.seasonNumber }, { it.episodeNumber }))
         ordered.firstOrNull { it.id !in completedItems } ?: ordered.firstOrNull()
     }
+    // Specials go after the numbered seasons, as they do everywhere else.
+    val seasonTabs = remember(seasons, episodesBySeason) {
+        val numbers = (seasons.map { it.seasonNumber } + episodesBySeason.keys).distinct()
+        numbers.sortedBy { if (it == 0) Int.MAX_VALUE else it }
+    }
+    // Opens on the season you are in, until you pick one.
+    val selectedSeason = chosenSeason ?: nextEpisode?.seasonNumber ?: seasonTabs.firstOrNull()
+    val seasonEpisodes = episodesBySeason[selectedSeason].orEmpty().sortedBy { it.episodeNumber }
+    val selectedSummary = seasons.firstOrNull { it.seasonNumber == selectedSeason }
     val preference = when {
         recommendationExcluded -> MediaPreference.NotInterested
         showWatched -> MediaPreference.Seen
         else -> MediaPreference.Unwatched
     }
     LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item { ShowHero(session, show, onBack) }
+        item(key = "hero") { ShowHero(session, show, onBack) }
         if (nextEpisode != null) {
             item(key = "continue") {
                 ContinueEpisodeButton(
@@ -654,49 +678,81 @@ fun SeasonList(
                 )
             }
         }
+        // Three lines and the rest on a tap: in full it pushed the episodes
+        // a screen down.
         if (show.overview.isNotBlank()) {
-            item {
-                Column(
-                    Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Surface1).padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Text("Overview", color = TextColor, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    Text(show.overview, color = TextColor, fontSize = 14.sp, lineHeight = 20.sp)
+            item(key = "overview") {
+                Text(
+                    show.overview,
+                    color = TextColor.copy(alpha = .86f),
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                    maxLines = if (overviewExpanded) Int.MAX_VALUE else 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 14.dp).fillMaxWidth().animateContentSize(tween(180)).clickable { overviewExpanded = !overviewExpanded },
+                )
+            }
+        }
+        item(key = "status") {
+            Row(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterPill(
+                    text = when (preference) {
+                        MediaPreference.Unwatched -> "Unwatched"
+                        MediaPreference.Seen -> "✓ Seen"
+                        MediaPreference.NotInterested -> "Not interested"
+                    },
+                    selected = preference != MediaPreference.Unwatched,
+                    onClick = { preferenceOpen = true },
+                )
+            }
+        }
+        if (seasonTabs.isNotEmpty()) {
+            item(key = "seasons") {
+                LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(seasonTabs, key = { it }) { number ->
+                        SeasonChip(
+                            label = if (number == 0) "Specials" else "Season $number",
+                            selected = number == selectedSeason,
+                            watched = watchedSeasons.contains(number),
+                            onClick = { chosenSeason = number },
+                        )
+                    }
+                }
+            }
+        }
+        if (selectedSeason != null) {
+            item(key = "season-header") {
+                Row(Modifier.padding(horizontal = 14.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(selectedSummary?.title?.ifBlank { null } ?: if (selectedSeason == 0) "Specials" else "Season $selectedSeason", color = TextColor, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                        val count = seasonEpisodes.size.takeIf { it > 0 } ?: selectedSummary?.episodeCount ?: 0
+                        if (count > 0) Text(if (count == 1) "1 episode" else "$count episodes", color = Muted, fontSize = 12.sp)
+                    }
+                    if (selectedSummary != null) {
+                        val seasonWatched = watchedSeasons.contains(selectedSeason)
+                        SeenToggle(seasonWatched, onToggle = { onSetSeasonWatched(selectedSummary, !seasonWatched) })
+                    }
+                }
+            }
+            if (seasonEpisodes.isEmpty()) {
+                item(key = "episodes-loading") { LoadingMoreRow() }
+            }
+            items(seasonEpisodes, key = { "episode:${it.id}" }) { episode ->
+                val watched = completedItems.contains(episode.id)
+                Box(Modifier.padding(horizontal = 12.dp)) {
+                    EpisodeCard(
+                        session,
+                        episode,
+                        watched = watched,
+                        watchlisted = watchlistItems.contains(episode.id),
+                        onOpen = { onOpenEpisode(episode) },
+                        onToggleWatched = { onSetEpisodeWatched(episode, !watched) },
+                    )
                 }
             }
         }
         if (actors.isNotEmpty()) {
-            item { CastStrip(session, actors, onActor) }
-        }
-        item {
-            OutlinedButton(
-                onClick = { preferenceOpen = true },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-                shape = RoundedCornerShape(14.dp),
-            ) {
-                Text(
-                    when (preference) {
-                        MediaPreference.Unwatched -> "Watch status · Unwatched"
-                        MediaPreference.Seen -> "✓  Watch status · Seen"
-                        MediaPreference.NotInterested -> "Watch status · Not interested"
-                    },
-                    color = if (preference == MediaPreference.NotInterested) ErrorRed else if (preference == MediaPreference.Seen) Accent else TextColor,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-        }
-        item { Text("Seasons", color = TextColor, fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 12.dp)) }
-        items(seasons, key = { it.seasonNumber }) { season ->
-            val seasonWatched = watchedSeasons.contains(season.seasonNumber)
-            Row(Modifier.padding(horizontal = 12.dp).fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Surface1).clickable { onSeason(season) }.padding(10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                PosterImage(session, imageUrl(session, season.posterItemId, season.posterMtimeUnix, width = ArtworkCard), Modifier.width(72.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(season.title.ifBlank { "Season ${season.seasonNumber}" }, color = TextColor, fontWeight = FontWeight.Bold)
-                    Text("${season.episodeCount} episodes", color = Muted, fontSize = 12.sp)
-                    if (season.overview.isNotBlank()) Text(season.overview, color = Muted, fontSize = 12.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                }
-                SeenToggle(seasonWatched, onToggle = { onSetSeasonWatched(season, !seasonWatched) })
-            }
+            item(key = "cast") { CastStrip(session, actors, onActor) }
         }
     }
     if (preferenceOpen) {
@@ -709,6 +765,22 @@ fun SeasonList(
                 onSetPreference(it)
             },
         )
+    }
+}
+
+@Composable
+private fun SeasonChip(label: String, selected: Boolean, watched: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.clip(RoundedCornerShape(99.dp))
+            .background(if (selected) Accent else Surface2)
+            .border(1.dp, if (selected) Accent else Line, RoundedCornerShape(99.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        if (watched) Text("✓", color = if (selected) Color.White else Accent, fontSize = 12.sp, fontWeight = FontWeight.Black)
+        Text(label, color = if (selected) Color.White else TextColor, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
 
@@ -853,17 +925,6 @@ fun ShowHero(session: Session, show: ShowSummary, onBack: () -> Unit) {
             ) {
                 genres.forEach { DetailChip(it.uppercase(), Surface2, Muted) }
             }
-        }
-    }
-}
-
-@Composable
-fun EpisodeList(session: Session, show: ShowSummary, season: SeasonSummary, episodes: List<PopItem>, completedItems: Set<Long>, watchlistItems: Set<Long>, onBack: () -> Unit, onOpen: (PopItem) -> Unit, onSetWatched: (PopItem, Boolean) -> Unit) {
-    LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item { HeaderBack("${show.title} \u00b7 ${season.title.ifBlank { "Season ${season.seasonNumber}" }}", onBack) }
-        items(episodes, key = { it.id }) { episode ->
-            val watched = completedItems.contains(episode.id)
-            EpisodeCard(session, episode, watched = watched, watchlisted = watchlistItems.contains(episode.id), onOpen = { onOpen(episode) }, onToggleWatched = { onSetWatched(episode, !watched) })
         }
     }
 }

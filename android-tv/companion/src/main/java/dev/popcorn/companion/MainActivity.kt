@@ -20,7 +20,9 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
@@ -87,6 +89,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -1321,11 +1327,8 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     LaunchedEffect(selectedDevice?.id, resumeTick) {
         while (true) {
             val id = selectedDevice?.id
-            // A successful poll means the server is reachable again, so clear any
-            // stale connection-error banner instead of leaving it up until restart.
             if (id != null) {
                 runCatching { state = api.deviceState(id) }
-                    .onSuccess { if (error.isNotBlank()) onError("") }
                     .onFailure { Log.w("PopcornCompanion", "deviceState poll failed: ${it.message}") }
             }
             delay(if (connected) 1000 else 3000)
@@ -1416,6 +1419,27 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         searchLoading = false
     }
 
+    // Messages are shown for a while and then cleared. They used to sit in a
+    // banner that the once-a-second device poll wiped, so an error was gone
+    // before it could be read — or, with no TV to poll, stayed up for good.
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(error) {
+        if (error.isBlank()) return@LaunchedEffect
+        snackbarHostState.showSnackbar(error, withDismissAction = true, duration = SnackbarDuration.Long)
+        onError("")
+    }
+    val snackbarHost: @Composable () -> Unit = {
+        SnackbarHost(snackbarHostState) { data ->
+            Snackbar(
+                snackbarData = data,
+                containerColor = Surface3,
+                contentColor = if (data.visuals.message.contains("approved", true)) Teal else TextColor,
+                dismissActionContentColor = Muted,
+                shape = RoundedCornerShape(12.dp),
+            )
+        }
+    }
+
     BackHandler(enabled = page !is Page.Home || backStack.isNotEmpty()) {
         if (page is Page.Remote) {
             page = Page.Home
@@ -1464,30 +1488,39 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     } else {
                         state
                     }
-                    MiniPlayer(
-                        session = session,
-                        state = miniState,
-                        targetLabel = if (playbackTarget == PlaybackTarget.Phone) "This phone" else selectedDevice?.displayName() ?: "TV",
-                        onPlayPause = {
-                            if (playbackTarget == PlaybackTarget.Phone && phoneState.item != null) {
-                                localPlayer.playWhenReady = !localPlayer.isPlaying
-                            } else {
-                                if (state.state == "playing") send("pause") else send("resume")
-                            }
-                        },
-                        onSeek = { delta -> seekTo(miniState.positionMs + delta) },
-                        // Always lands somewhere: the local player when the phone
-                        // has something loaded, otherwise the remote — which
-                        // stays reachable even when nothing is playing.
-                        onClick = {
-                            val local = phoneState.item
-                            if (playbackTarget == PlaybackTarget.Phone && local != null) {
-                                navigate(Page.LocalPlayer(local, phoneAudioIndex, phoneSubtitleIndex, page), stack = false)
-                            } else {
-                                navigate(Page.Remote, stack = false)
-                            }
-                        },
-                    )
+                    // Only while something is loaded: idle, it was a 70dp card
+                    // saying "ready" on every page. The playback target stays
+                    // reachable from the top bar. Not the title alone: the TV
+                    // keeps reporting it after a stop.
+                    AnimatedVisibility(
+                        visible = miniState.isActivePlayback(),
+                        enter = expandVertically(tween(200)) + fadeIn(tween(200)),
+                        exit = shrinkVertically(tween(200)) + fadeOut(tween(160)),
+                    ) {
+                        MiniPlayer(
+                            session = session,
+                            state = miniState,
+                            targetLabel = if (playbackTarget == PlaybackTarget.Phone) "This phone" else selectedDevice?.displayName() ?: "TV",
+                            onPlayPause = {
+                                if (playbackTarget == PlaybackTarget.Phone && phoneState.item != null) {
+                                    localPlayer.playWhenReady = !localPlayer.isPlaying
+                                } else {
+                                    if (state.state == "playing") send("pause") else send("resume")
+                                }
+                            },
+                            onSeek = { delta -> seekTo(miniState.positionMs + delta) },
+                            // The local player when the phone has something loaded,
+                            // otherwise the remote for the TV.
+                            onClick = {
+                                val local = phoneState.item
+                                if (playbackTarget == PlaybackTarget.Phone && local != null) {
+                                    navigate(Page.LocalPlayer(local, phoneAudioIndex, phoneSubtitleIndex, page), stack = false)
+                                } else {
+                                    navigate(Page.Remote, stack = false)
+                                }
+                            },
+                        )
+                    }
                     BottomNavigation(
                         page = page,
                         onHome = { page = Page.Home; backStack = emptyList() },
@@ -1519,6 +1552,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     }
                 }
             },
+            snackbarHost = snackbarHost,
             containerColor = MaterialTheme.colorScheme.background,
         ) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
@@ -1528,11 +1562,6 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                     )
                 }
-                StatusMessage(
-                    message = error,
-                    success = error.contains("approved", true),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-                )
                 if (loading) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
                 }
@@ -1793,6 +1822,11 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     onError = onError,
                 )
             }
+        }
+        // The full-screen pages sit outside the Scaffold, so they carry the
+        // host themselves: a playback error is shown where playback failed.
+        if (page is Page.Remote || page is Page.LocalPlayer) {
+            Box(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(12.dp)) { snackbarHost() }
         }
     }
 

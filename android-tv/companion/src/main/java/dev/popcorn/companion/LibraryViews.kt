@@ -86,6 +86,12 @@ import androidx.compose.ui.platform.LocalConfiguration
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.windowInsetsTopHeight
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -666,7 +672,9 @@ fun SeasonList(
         showWatched -> MediaPreference.Seen
         else -> MediaPreference.Unwatched
     }
-    LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    val listState = rememberLazyListState()
+    Box(Modifier.fillMaxSize()) {
+    LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item(key = "hero") { ShowHero(session, show, onBack) }
         if (nextEpisode != null) {
             item(key = "continue") {
@@ -755,6 +763,8 @@ fun SeasonList(
             item(key = "cast") { CastStrip(session, actors, onActor) }
         }
     }
+    StatusBarScrim(listState)
+    }
     if (preferenceOpen) {
         MediaPreferenceSheet(
             selected = preference,
@@ -766,6 +776,18 @@ fun SeasonList(
             },
         )
     }
+}
+
+// Pages that draw their hero under the status bar need it back once the hero
+// has scrolled away, or the text below runs under the clock.
+@Composable
+fun BoxScope.StatusBarScrim(listState: LazyListState) {
+    val threshold = with(LocalDensity.current) { 160.dp.toPx() }
+    val scrolled by remember(listState) {
+        derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > threshold }
+    }
+    val alpha by animateFloatAsState(if (scrolled) 1f else 0f, tween(180), label = "statusScrim")
+    Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().windowInsetsTopHeight(WindowInsets.statusBars).graphicsLayer { this.alpha = alpha }.background(Bg))
 }
 
 @Composable
@@ -863,17 +885,20 @@ private fun exclusionSizeLabel(bytes: Long): String {
 }
 
 // Small round check button used to mark seasons/episodes seen without opening them.
+// Seen is a tinted check, not a filled disc: down a season of watched
+// episodes a column of solid orange outshouted everything else on the page.
 @Composable
 fun SeenToggle(watched: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
     Box(
         modifier
             .size(34.dp)
             .clip(CircleShape)
-            .background(if (watched) Accent else Surface2)
+            .background(if (watched) Accent.copy(alpha = .16f) else Surface2)
+            .border(1.dp, if (watched) Accent.copy(alpha = .55f) else Line, CircleShape)
             .clickable(onClick = onToggle),
         contentAlignment = Alignment.Center,
     ) {
-        Text("✓", color = if (watched) Color.Black else Muted, fontWeight = FontWeight.Black, fontSize = 15.sp)
+        Text("✓", color = if (watched) Accent else Muted, fontWeight = FontWeight.Black, fontSize = 15.sp)
     }
 }
 
@@ -937,7 +962,8 @@ fun EpisodeCard(session: Session, episode: PopItem, watched: Boolean, watchliste
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        EpisodeThumb(session, episode, watched, watchlisted)
+        // With a seen toggle beside it, the thumbnail does not mark it too.
+        EpisodeThumb(session, episode, watched && onToggleWatched == null, watchlisted)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(
                 episode.episodeTitle.ifBlank { episode.title },

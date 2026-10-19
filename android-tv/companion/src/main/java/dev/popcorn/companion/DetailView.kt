@@ -56,6 +56,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -151,7 +152,9 @@ fun DetailPage(
         }
     }
 
-    LazyColumn(contentPadding = PaddingValues(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
+    val listState = rememberLazyListState()
+    Box(Modifier.fillMaxSize()) {
+    LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
         item { DetailHero(session, detailItem, ratings, streams, resumeFraction(resumeMs, progress?.durationMs ?: 0), onBack) }
         if (error.isNotBlank()) item { Text(error, color = ErrorRed, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
         item {
@@ -251,6 +254,8 @@ fun DetailPage(
         if (detailItem.overview.isNotBlank() || detailFacts(detailItem).isNotEmpty()) item { DetailOverview(detailItem) }
         if (detailItem.actors.isNotEmpty()) item { CastStrip(session, detailItem.actors, onActor) }
         if (similar.isNotEmpty()) item { SimilarRow(session, similar, onOpenSimilar) }
+    }
+    StatusBarScrim(listState)
     }
     if (audioOpen) {
         TrackDialog("Audio", audioTracks, selectedAudio, "Default", { audioOpen = false }) {

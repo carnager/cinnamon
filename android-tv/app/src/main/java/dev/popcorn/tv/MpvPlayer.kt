@@ -41,6 +41,11 @@ class MpvPlayer(
     private val mpv: MPVLib = requireNotNull(MPVLib.create(context.applicationContext)) { "libmpv could not be created" }
 
     private var mediaItem: MediaItem? = null
+    // Declared before init: mpv starts logging from its own thread while the
+    // constructor is still running, and logMessage locks on this buffer (a
+    // later declaration was still null then — a native abort on open).
+    private val startupTrace = ArrayDeque<String>()
+    private var traceSent = false
     // mpv fetches through a loopback relay on Android's network stack (see
     // MpvRelay); one per server origin, closed on release.
     private var relay: MpvRelay? = null
@@ -175,7 +180,9 @@ class MpvPlayer(
             .setPlayWhenReady(playWhenReady, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
             .setPlaybackState(playbackState)
             .setPlayerError(if (playbackState == Player.STATE_IDLE) error else null)
-            .setIsLoading(prepared && !fileLoaded)
+            // media3 only allows isLoading while buffering or ready; a failed
+            // load is IDLE with an error and must not claim to be loading.
+            .setIsLoading(playbackState == Player.STATE_BUFFERING && !fileLoaded)
             .setContentPositionMs { currentPositionEstimate() }
             .setContentBufferedPositionMs { maxOf(cacheEndMs, currentPositionEstimate()) }
             .setNewlyRenderedFirstFrame(firstFrame)
@@ -426,8 +433,6 @@ class MpvPlayer(
     // the last mpv log lines, sent to the server's client log when a file
     // has not loaded after a few seconds or the load is abandoned. A Shield
     // that never got past "buffering" left no trace at all before.
-    private val startupTrace = ArrayDeque<String>()
-    private var traceSent = false
     private val slowStartCheck = Runnable {
         if (!released && loadIssued && !fileLoaded) {
             onDiagnostic("mpv-slow-start", "no FILE_LOADED after 6s (start event ${if (startSeen) "seen" else "not seen"})", null)

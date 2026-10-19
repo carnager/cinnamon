@@ -351,3 +351,26 @@ sealed interface Page {
     data class Detail(val item: PopItem, val from: Page) : Page
     data class LocalPlayer(val item: PopItem, val audioIndex: Int?, val subtitleIndex: Int?, val from: Page) : Page
 }
+
+// Identifies a page's saved state. Pages for the same thing share it: going
+// back to a show restores where you were on it, whichever way you came.
+fun Page.stateKey(): String = when (this) {
+    Page.Home -> "home"
+    Page.Discover -> "discover"
+    Page.Movies -> "movies"
+    Page.Shows -> "shows"
+    Page.Search -> "search"
+    Page.Remote -> "remote"
+    Page.History -> "history"
+    Page.Watchlist -> "watchlist"
+    Page.NotInterested -> "not-interested"
+    is Page.Person -> "person:${actor.name}"
+    is Page.Show -> "show:${show.libraryId}\n${show.title}"
+    is Page.Season -> "season:${show.libraryId}\n${show.title}\n${season.seasonNumber}"
+    is Page.Detail -> "detail:${item.id}"
+    is Page.LocalPlayer -> "player"
+}
+
+// The bottom-navigation destinations (and search), whose state lasts the
+// session rather than until the page is left.
+fun Page.isTabRoot(): Boolean = this == Page.Home || this == Page.Movies || this == Page.Shows || this == Page.Discover || this == Page.Search

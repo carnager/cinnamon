@@ -74,6 +74,8 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -229,7 +231,7 @@ private fun MobileHomeHero(
     onShow: (ShowSummary) -> Unit,
     onEpisode: (PopItem) -> Unit,
 ) {
-    var selectedKey by remember { mutableStateOf<String?>(null) }
+    var selectedKey by rememberSaveable { mutableStateOf<String?>(null) }
     var transitionDirection by remember { mutableStateOf(1) }
     val index = picks.indexOfFirst { it.key == selectedKey }.coerceAtLeast(0)
     val pick = picks[index]
@@ -343,7 +345,15 @@ fun MediaGrid(
     }
     LaunchedEffect(loadMore) { if (loadMore) onLoadMore() }
     LaunchedEffect(loadPrevious) { if (loadPrevious) onLoadPrevious() }
-    LaunchedEffect(scrollToken) { if (items.isNotEmpty()) gridState.scrollToItem(scrollIndex.coerceIn(0, items.lastIndex)) }
+    // Saved with the page: coming back to the grid must not re-apply the last
+    // jump over the restored scroll position. Only a new load moves it.
+    var appliedScrollToken by rememberSaveable { mutableIntStateOf(-1) }
+    LaunchedEffect(scrollToken) {
+        if (scrollToken != appliedScrollToken && items.isNotEmpty()) {
+            gridState.scrollToItem(scrollIndex.coerceIn(0, items.lastIndex))
+            appliedScrollToken = scrollToken
+        }
+    }
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
         LibraryTitle(title)
         LibraryFilterBar(genres, decades, filters, onFilters)
@@ -411,7 +421,15 @@ fun ShowGrid(
     }
     LaunchedEffect(loadMore) { if (loadMore) onLoadMore() }
     LaunchedEffect(loadPrevious) { if (loadPrevious) onLoadPrevious() }
-    LaunchedEffect(scrollToken) { if (shows.isNotEmpty()) gridState.scrollToItem(scrollIndex.coerceIn(0, shows.lastIndex)) }
+    // Saved with the page: coming back to the grid must not re-apply the last
+    // jump over the restored scroll position. Only a new load moves it.
+    var appliedScrollToken by rememberSaveable { mutableIntStateOf(-1) }
+    LaunchedEffect(scrollToken) {
+        if (scrollToken != appliedScrollToken && shows.isNotEmpty()) {
+            gridState.scrollToItem(scrollIndex.coerceIn(0, shows.lastIndex))
+            appliedScrollToken = scrollToken
+        }
+    }
     Column(Modifier.fillMaxSize().padding(horizontal = 12.dp)) {
         LibraryTitle(title)
         LibraryFilterBar(genres, decades, filters, onFilters)

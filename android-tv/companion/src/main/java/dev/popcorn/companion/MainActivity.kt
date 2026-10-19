@@ -107,6 +107,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -373,8 +374,10 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     var recommendationExclusions by remember { mutableStateOf<List<RecommendationExclusion>>(emptyList()) }
     var exclusionsLoading by remember { mutableStateOf(false) }
     var resumeProgress by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
-    var seasons by remember { mutableStateOf<List<SeasonSummary>>(emptyList()) }
-    var episodes by remember { mutableStateOf<List<PopItem>>(emptyList()) }
+    // Per show and per season rather than one current list: a page further
+    // back in the stack keeps its own seasons when another show is opened.
+    var seasonsByShow by remember { mutableStateOf<Map<String, List<SeasonSummary>>>(emptyMap()) }
+    var episodesBySeason by remember { mutableStateOf<Map<String, List<PopItem>>>(emptyMap()) }
     var completedItems by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var completedShows by remember { mutableStateOf<Set<String>>(emptySet()) }
     var watchlistItems by remember { mutableStateOf<Set<Long>>(emptySet()) }
@@ -452,6 +455,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     val tvLib = libraries.firstOrNull { it.type == "tv" }
     fun showKey(libraryId: String, title: String): String = "${libraryId}\n${title.lowercase()}"
     fun showKey(show: ShowSummary): String = showKey(show.libraryId, show.title)
+    fun seasonKey(show: ShowSummary, season: SeasonSummary): String = "${showKey(show)}\n${season.seasonNumber}"
     fun reportError(error: Throwable, fallback: String) {
         if (error is CancellationException) return
         onError(error.message ?: fallback)
@@ -711,12 +715,22 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         }
     }
 
+    // Each page keeps its saved state (scroll positions, mostly) while it is
+    // on the way back: the tab roots for the session, a stacked page until it
+    // is popped.
+    val pageStates = rememberSaveableStateHolder()
+
+    fun forgetPageState(left: Page) {
+        if (!left.isTabRoot()) pageStates.removeState(left.stateKey())
+    }
+
     fun navigate(next: Page, stack: Boolean = true) {
-        if (stack) backStack = backStack + page
+        if (stack) backStack = backStack + page else forgetPageState(page)
         page = next
     }
 
     fun goBack() {
+        forgetPageState(page)
         val previous = backStack.lastOrNull()
         if (previous != null) {
             backStack = backStack.dropLast(1)
@@ -724,6 +738,12 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         } else {
             page = Page.Home
         }
+    }
+
+    fun switchTab(next: Page) {
+        (backStack + page).forEach(::forgetPageState)
+        backStack = emptyList()
+        page = next
     }
 
     fun send(type: String, payload: JSONObject = JSONObject()) {
@@ -1024,8 +1044,6 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                         positionedFromCache = true
                     }
                 }
-                page = Page.Movies
-                backStack = emptyList()
             }
             val result = runCatching {
                 if (!incremental) {
@@ -1063,8 +1081,6 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                             }
                         }
                     }
-                    page = Page.Movies
-                    backStack = emptyList()
                     CompanionCache.writeItems(context, session, cacheKey, it)
                 }
                 .onFailure { reportError(it, "Movies failed") }
@@ -1122,8 +1138,6 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                         positionedFromCache = true
                     }
                 }
-                page = Page.Shows
-                backStack = emptyList()
             }
             val result = runCatching {
                 if (!incremental) {
@@ -1161,8 +1175,6 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                             }
                         }
                     }
-                    page = Page.Shows
-                    backStack = emptyList()
                     CompanionCache.writeShows(context, session, cacheKey, it)
                 }
                 .onFailure { reportError(it, "Shows failed") }
@@ -1174,20 +1186,22 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         }
     }
 
+    // Both open straight away and fill in: the cached list if there is one,
+    // then the server's. Waiting for the network first made a tap look ignored.
     fun openShow(show: ShowSummary) {
+        val showKey = showKey(show)
+        navigate(Page.Show(show))
         scope.launch {
             loading = true
             val key = "seasons_${show.libraryId}_${show.title}"
             val cached = CompanionCache.readSeasons(context, session, key)
-            if (cached.isNotEmpty()) {
-                seasons = cached
-                navigate(Page.Show(show))
+            if (cached.isNotEmpty() && seasonsByShow[showKey].isNullOrEmpty()) {
+                seasonsByShow = seasonsByShow + (showKey to cached)
             }
             runCatching { api.seasons(show.libraryId, show.title) }
                 .onSuccess {
-                    seasons = it
+                    seasonsByShow = seasonsByShow + (showKey to it)
                     CompanionCache.writeSeasons(context, session, key, it)
-                    if (page !is Page.Show) navigate(Page.Show(show))
                 }
                 .onFailure { reportError(it, "Seasons failed") }
             loading = false
@@ -1195,19 +1209,19 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     }
 
     fun openSeason(show: ShowSummary, season: SeasonSummary) {
+        val seasonKey = seasonKey(show, season)
+        navigate(Page.Season(show, season))
         scope.launch {
             loading = true
             val key = "episodes_${show.libraryId}_${show.title}_${season.seasonNumber}"
             val cached = CompanionCache.readItems(context, session, key)
-            if (cached.isNotEmpty()) {
-                episodes = cached
-                navigate(Page.Season(show, season))
+            if (cached.isNotEmpty() && episodesBySeason[seasonKey].isNullOrEmpty()) {
+                episodesBySeason = episodesBySeason + (seasonKey to cached)
             }
             runCatching { api.episodes(show.libraryId, show.title, season.seasonNumber) }
                 .onSuccess {
-                    episodes = it
+                    episodesBySeason = episodesBySeason + (seasonKey to it)
                     CompanionCache.writeItems(context, session, key, it)
-                    if (page !is Page.Season) navigate(Page.Season(show, season))
                     refreshMarkers()
                 }
                 .onFailure { reportError(it, "Episodes failed") }
@@ -1523,16 +1537,17 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     }
                     BottomNavigation(
                         page = page,
-                        onHome = { page = Page.Home; backStack = emptyList() },
+                        onHome = { switchTab(Page.Home) },
                         onMovies = {
-                            if (movies.isEmpty()) loadMovies() else { page = Page.Movies; backStack = emptyList() }
+                            switchTab(Page.Movies)
+                            if (movies.isEmpty()) loadMovies()
                         },
                         onShows = {
-                            if (shows.isEmpty()) loadShows() else { page = Page.Shows; backStack = emptyList() }
+                            switchTab(Page.Shows)
+                            if (shows.isEmpty()) loadShows()
                         },
                         onDiscover = {
-                            page = Page.Discover
-                            backStack = emptyList()
+                            switchTab(Page.Discover)
                             loadDiscover(discoverChip, discoverKind)
                         },
                     )
@@ -1544,7 +1559,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
             floatingActionButton = {
                 if (page is Page.Home || page is Page.Movies || page is Page.Shows || page is Page.Discover) {
                     FloatingActionButton(
-                        onClick = { page = Page.Search; backStack = emptyList() },
+                        onClick = { switchTab(Page.Search) },
                         containerColor = Accent,
                         contentColor = Color.Black,
                     ) {
@@ -1566,6 +1581,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
                 }
                 Crossfade(targetState = page, animationSpec = tween(220), label = "page") { current ->
+                    pageStates.SaveableStateProvider(current.stateKey()) {
                     Box(Modifier.fillMaxSize()) {
                         when (current) {
                             Page.Home -> HomePage(
@@ -1639,7 +1655,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                             is Page.Show -> SeasonList(
                                 session,
                                 current.show,
-                                seasons,
+                                seasonsByShow[showKey(current.show)].orEmpty(),
                                 completedItems,
                                 showWatched = completedShows.contains(showKey(current.show)),
                                 recommendationExcluded = recommendationExclusionKeys.contains("show:${current.show.libraryId.trim().lowercase()}:${current.show.title.trim().lowercase()}"),
@@ -1649,7 +1665,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 onSetSeasonWatched = { season, watched -> setSeasonWatched(current.show, season.seasonNumber, watched) },
                                 onActor = ::openActor,
                             )
-                            is Page.Season -> EpisodeList(session, current.show, current.season, episodes, completedItems, watchlistItems, onBack = ::goBack, onOpen = ::openDetail, onSetWatched = ::setItemWatched)
+                            is Page.Season -> EpisodeList(session, current.show, current.season, episodesBySeason[seasonKey(current.show, current.season)].orEmpty(), completedItems, watchlistItems, onBack = ::goBack, onOpen = ::openDetail, onSetWatched = ::setItemWatched)
                             is Page.Detail -> DetailPage(
                                 session,
                                 api,
@@ -1748,6 +1764,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                             Page.Remote -> Unit
                             is Page.LocalPlayer -> Unit
                         }
+                    }
                     }
                 }
             }

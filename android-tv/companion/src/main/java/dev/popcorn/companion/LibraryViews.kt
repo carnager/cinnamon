@@ -918,13 +918,9 @@ fun ShowHero(session: Session, show: ShowSummary, onBack: () -> Unit) {
                 }
             }
         }
+        // A line of text, as on the detail page.
         if (genres.isNotEmpty()) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
-                modifier = Modifier.padding(horizontal = 12.dp).fillMaxWidth().horizontalScroll(rememberScrollState()),
-            ) {
-                genres.forEach { DetailChip(it.uppercase(), Surface2, Muted) }
-            }
+            Text(genres.joinToString(" · "), color = Teal.copy(alpha = .9f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 14.dp))
         }
     }
 }

@@ -64,6 +64,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -408,26 +411,32 @@ fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, strea
                     if (item.officialRating.isNotBlank()) ContentRatingChip(item.officialRating)
                 }
             }
-            Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+            // Genres, then ratings with the file's format, as two lines of
+            // text. Two rows of boxed chips outweighed the title and pushed
+            // Play below the fold.
+            Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 if (genres.isNotEmpty()) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        genres.forEach { DetailChip(it.uppercase(Locale.US), Color.Transparent, Teal.copy(alpha = .86f)) }
-                    }
+                    Text(genres.joinToString(" · "), color = Teal.copy(alpha = .9f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                // Ratings and technical details share one scrolling row: three
-                // stacked scrollers read as clutter and it was easy to miss
-                // that any of them scrolled at all.
                 val badges = ratingBadges(item, ratings)
                 val tech = techChips(item, streams)
                 if (badges.isNotEmpty() || tech.isNotEmpty()) {
-                    Row(
-                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(7.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        badges.forEach { (label, value) -> SourceRatingBadge(label, value) }
-                        tech.forEach { DetailChip(it, Color.Transparent, TextColor.copy(alpha = .85f)) }
-                    }
+                    Text(
+                        buildAnnotatedString {
+                            badges.forEachIndexed { index, (label, value) ->
+                                if (index > 0) append("   ")
+                                withStyle(SpanStyle(color = Teal.copy(alpha = .9f), fontWeight = FontWeight.Black)) { append(label) }
+                                append(" ")
+                                withStyle(SpanStyle(color = TextColor, fontWeight = FontWeight.Bold)) { append(value) }
+                            }
+                            if (tech.isNotEmpty()) {
+                                if (badges.isNotEmpty()) append("   ")
+                                withStyle(SpanStyle(color = Muted, fontWeight = FontWeight.SemiBold)) { append(tech.joinToString(" · ")) }
+                            }
+                        },
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                    )
                 }
             }
         }
@@ -603,18 +612,6 @@ private fun ratingBadges(item: PopItem, ratings: ExternalRatings?): List<Pair<St
     ratings?.metacriticRating?.takeIf { it > 0 }?.let { add("MC" to it.toString()) }
     if (isEmpty() && item.rating > 0) add("NFO" to "%.1f".format(Locale.US, item.rating))
 }.take(4)
-
-@Composable
-private fun SourceRatingBadge(label: String, value: String) {
-    Row(
-        Modifier.background(Surface2, RoundedCornerShape(4.dp)).border(1.dp, Line, RoundedCornerShape(4.dp)).padding(horizontal = 8.dp, vertical = 3.dp),
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, color = Teal, fontWeight = FontWeight.Black, fontSize = 11.sp)
-        Text(value, color = TextColor, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-    }
-}
 
 @Composable
 fun TrackChoice(label: String, selected: Boolean, onClick: () -> Unit) {

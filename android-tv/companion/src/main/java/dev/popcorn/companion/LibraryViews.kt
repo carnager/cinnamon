@@ -782,7 +782,7 @@ fun SeasonList(
 // has scrolled away, or the text below runs under the clock.
 @Composable
 fun BoxScope.StatusBarScrim(listState: LazyListState) {
-    val threshold = with(LocalDensity.current) { 220.dp.toPx() }
+    val threshold = with(LocalDensity.current) { 150.dp.toPx() }
     val scrolled by remember(listState) {
         derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > threshold }
     }
@@ -908,25 +908,21 @@ fun SeenToggle(watched: Boolean, onToggle: () -> Unit, modifier: Modifier = Modi
 fun ShowHero(session: Session, show: ShowSummary, onBack: () -> Unit) {
     val backdropUrl = if (show.backdropItemId > 0) imageUrl(session, show.backdropItemId, show.backdropMtimeUnix, "backdrop", ArtworkFull) else ""
     val genres = show.genres.split(Regex("[,;/]")).map { it.trim() }.filter { it.isNotBlank() }.take(3)
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        MediaHero(
-            session = session,
-            backdropUrl = backdropUrl,
-            posterUrl = imageUrl(session, show.posterItemId, show.posterMtimeUnix, width = ArtworkCard),
-            title = show.title,
-            onBack = onBack,
-            posterRating = show.rating,
-        ) {
-            val meta = listOfNotNull(
-                show.yearsLabel().takeIf { it.isNotBlank() },
-                seasonsLabel(show.seasonCount),
-                if (show.episodeCount == 1) "1 episode" else "${show.episodeCount} episodes",
-            ).joinToString(" · ")
-            Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
-        // A line of text, as on the detail page.
+    MediaHero(
+        session = session,
+        backdropUrl = backdropUrl,
+        posterUrl = imageUrl(session, show.posterItemId, show.posterMtimeUnix, width = ArtworkCard),
+        title = show.title,
+        onBack = onBack,
+        posterRating = show.rating,
+    ) {
+        Text(
+            listOfNotNull(show.yearsLabel().takeIf { it.isNotBlank() }, seasonsLabel(show.seasonCount)).joinToString(" · "),
+            color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+        )
+        Text(if (show.episodeCount == 1) "1 episode" else "${show.episodeCount} episodes", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
         if (genres.isNotEmpty()) {
-            Text(genres.joinToString(" · "), color = Teal.copy(alpha = .9f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 16.dp))
+            Text(genres.joinToString(" · "), color = Teal.copy(alpha = .9f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
 }

@@ -79,7 +79,6 @@ fun DetailPage(
     recommendationExcluded: Boolean,
     onSetWatchlisted: (Boolean) -> Unit,
     onSetPreference: (MediaPreference) -> Unit,
-    onResetProgress: () -> Unit,
     onBack: () -> Unit,
     onPlay: (PopItem, Int?, Int?, Long) -> Unit,
     onPlayLocal: (PopItem, Int?, Int?, Long) -> Unit,
@@ -102,7 +101,6 @@ fun DetailPage(
     var ratingOpen by remember(item.id) { mutableStateOf(false) }
     var audioOpen by remember(item.id) { mutableStateOf(false) }
     var subtitleOpen by remember(item.id) { mutableStateOf(false) }
-    var playOptionsOpen by remember(item.id) { mutableStateOf(false) }
     var preferenceOpen by remember(item.id) { mutableStateOf(false) }
     val ratingScope = rememberCoroutineScope()
     val audioTracks = streams.filter { it.type == "audio" }
@@ -151,11 +149,11 @@ fun DetailPage(
         item {
             Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // With a saved position the main button resumes and
+                    // starting over sits beside it: two direct buttons instead
+                    // of a sheet asking which one on every press.
                     Button(
-                        onClick = {
-                            val hasSavedProgress = progress?.let { it.positionMs > 0 || it.completed } == true
-                            if (hasSavedProgress) playOptionsOpen = true else start(0)
-                        },
+                        onClick = { start(resumeMs) },
                         enabled = progressLoaded,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Accent,
@@ -171,7 +169,23 @@ fun DetailPage(
                         } else {
                             CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
                         }
-                        Text("  Play", fontWeight = FontWeight.Black, fontSize = 16.sp)
+                        Text(
+                            if (resumeMs > 0) "  Resume ${formatTime(resumeMs)}" else "  Play",
+                            fontWeight = FontWeight.Black,
+                            fontSize = 16.sp,
+                            maxLines = 1,
+                        )
+                    }
+                    if (resumeMs > 0) {
+                        OutlinedButton(
+                            onClick = { start(0) },
+                            modifier = Modifier.height(52.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp),
+                        ) {
+                            Icon(Icons.Default.Replay, contentDescription = null, tint = TextColor, modifier = Modifier.size(20.dp))
+                            Text(" Start over", color = TextColor, fontWeight = FontWeight.Bold, fontSize = 14.sp, maxLines = 1)
+                        }
                     }
                 }
                 // Timing only. Where playback lands, and changing it, is the
@@ -179,14 +193,8 @@ fun DetailPage(
                 // so repeating it under the button was just clutter.
                 val remainingMs = (detailItem.durationMs - resumeMs).coerceAtLeast(0)
                 val endsAround = fmtEndsAround(remainingMs)
-                val timing = buildString {
-                    if (resumeMs > 0) append("Resumes at ${formatTime(resumeMs)}")
-                    if (endsAround.isNotBlank()) {
-                        if (isEmpty()) append(endsAround) else append(" · ${endsAround.replaceFirstChar { it.lowercase() }}")
-                    }
-                }
-                if (timing.isNotBlank()) {
-                    Text(timing, color = Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (endsAround.isNotBlank()) {
+                    Text(endsAround, color = Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 // Track choices belong with Play, not below the overview: they
                 // are decisions made in the same breath as starting playback.
@@ -248,19 +256,6 @@ fun DetailPage(
             subtitleOpen = false
         }
     }
-    if (playOptionsOpen) {
-        PlaybackChoiceSheet(
-            canResume = resumeMs > 0,
-            onDismiss = { playOptionsOpen = false },
-            onResume = { playOptionsOpen = false; start(resumeMs) },
-            onFromBeginning = { playOptionsOpen = false; start(0) },
-            onReset = {
-                playOptionsOpen = false
-                progress = null
-                onResetProgress()
-            },
-        )
-    }
     if (preferenceOpen) {
         MediaPreferenceSheet(
             selected = preference,
@@ -287,25 +282,6 @@ fun DetailPage(
                 }
             },
         )
-    }
-}
-
-@Composable
-private fun PlaybackChoiceSheet(
-    canResume: Boolean,
-    onDismiss: () -> Unit,
-    onResume: () -> Unit,
-    onFromBeginning: () -> Unit,
-    onReset: () -> Unit,
-) {
-    PopcornBottomSheet(onDismiss) {
-        Column(Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("PLAYBACK", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.3.sp)
-            Spacer(Modifier.height(8.dp))
-            if (canResume) TrackChoice("Resume", false, onResume)
-            TrackChoice("Play from beginning", false, onFromBeginning)
-            TrackChoice("Reset progress", false, onReset)
-        }
     }
 }
 

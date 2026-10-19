@@ -94,6 +94,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
 import kotlinx.coroutines.delay
@@ -337,6 +339,9 @@ fun LocalPlayerPage(
     // Double-taps add up and seek once they stop: a seek on a transcoded
     // stream restarts it, so five taps should not mean five restarts.
     var pendingSeekMs by remember(item.id) { mutableStateOf(0L) }
+    // In the PiP window only the video shows.
+    val inPip = PipState.inPip
+    var videoAspect by remember { mutableStateOf(player.videoSize.let { pipAspect(it.width, it.height, it.pixelWidthHeightRatio) }) }
     var controlsVisible by remember { mutableStateOf(true) }
     var showTargetDialog by remember { mutableStateOf(false) }
     val audioTracks = streams.filter { it.type == "audio" }
@@ -354,6 +359,30 @@ fun LocalPlayerPage(
     DisposableEffect(fullscreen, lockLandscape) {
         setImmersive(context, fullscreen, lockLandscape)
         onDispose { setImmersive(context, false, false) }
+    }
+
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                videoAspect = pipAspect(videoSize.width, videoSize.height, videoSize.pixelWidthHeightRatio)
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+
+    // Leaving the app shrinks the video into a window while it plays here;
+    // paused, or off this page, leaving is just leaving.
+    val pipWanted = state.state == "playing" || state.state == "buffering"
+    DisposableEffect(pipWanted, videoAspect) {
+        val activity = context as? ComponentActivity
+        PipState.allowed = pipWanted
+        PipState.aspect = videoAspect
+        activity?.updatePipParams()
+        onDispose {
+            PipState.allowed = false
+            activity?.updatePipParams()
+        }
     }
 
     LaunchedEffect(orientation) {
@@ -399,7 +428,7 @@ fun LocalPlayerPage(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .then(if (fullscreen) Modifier else Modifier.statusBarsPadding().navigationBarsPadding())
+            .then(if (fullscreen || inPip) Modifier else Modifier.statusBarsPadding().navigationBarsPadding())
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { controlsVisible = !controlsVisible },
@@ -411,7 +440,7 @@ fun LocalPlayerPage(
     ) {
         Column(Modifier.fillMaxSize()) {
             AnimatedVisibility(
-                visible = controlsVisible && !fullscreen,
+                visible = controlsVisible && !fullscreen && !inPip,
                 enter = fadeIn(animationSpec = tween(140)),
                 exit = fadeOut(animationSpec = tween(180)),
             ) {
@@ -445,7 +474,7 @@ fun LocalPlayerPage(
         }
 
         AnimatedVisibility(
-            visible = controlsVisible || !player.isPlaying || dragging || menuOpen,
+            visible = (controlsVisible || !player.isPlaying || dragging || menuOpen) && !inPip,
             enter = fadeIn(animationSpec = tween(140)),
             exit = fadeOut(animationSpec = tween(180)),
             modifier = Modifier.align(Alignment.BottomCenter),
@@ -523,7 +552,7 @@ fun LocalPlayerPage(
             }
         }
 
-        if (pendingSeekMs != 0L) {
+        if (pendingSeekMs != 0L && !inPip) {
             Text(
                 "${if (pendingSeekMs > 0) "+" else "−"}${kotlin.math.abs(pendingSeekMs) / 1000}s",
                 color = Color.White,
@@ -543,7 +572,7 @@ fun LocalPlayerPage(
         val remainingMs = duration - position
         val upNext = nextEpisode?.takeIf { !upNextDismissed && duration > 0 && remainingMs in 1..UpNextLeadMs }
         AnimatedVisibility(
-            visible = upNext != null && !menuOpen,
+            visible = upNext != null && !menuOpen && !inPip,
             enter = fadeIn(animationSpec = tween(180)),
             exit = fadeOut(animationSpec = tween(160)),
             modifier = Modifier.align(Alignment.TopEnd).padding(top = if (fullscreen) 16.dp else 64.dp, end = 16.dp),

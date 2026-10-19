@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.util.Log
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.View
@@ -155,9 +156,25 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        // Before Android 12 there is no auto-enter; this is the moment.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S && PipState.allowed) {
+            runCatching { enterPictureInPictureMode(pipParams()) }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         PlaybackPrefs.load(this)
+        addOnPictureInPictureModeChangedListener { info ->
+            PipState.inPip = info.isInPictureInPictureMode
+            // Leaving PiP while stopped means the window was closed rather
+            // than expanded: stop the video playing on unseen.
+            if (!info.isInPictureInPictureMode && lifecycle.currentState == Lifecycle.State.CREATED) {
+                PlaybackHolder.session?.player?.pause()
+            }
+        }
         setContent {
             MaterialTheme(colorScheme = PopcornColorScheme, typography = PopcornTypography, shapes = PopcornShapes) {
                 Surface(color = MaterialTheme.colorScheme.background) {

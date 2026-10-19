@@ -1,6 +1,9 @@
 package dev.popcorn.companion
 
 import android.content.Context
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.platform.LocalConfiguration
+import android.content.res.Configuration
 import android.content.pm.ActivityInfo
 import android.os.Build
 import android.view.View
@@ -326,6 +329,14 @@ fun LocalPlayerPage(
     var showAudio by remember { mutableStateOf(false) }
     var showSubtitles by remember { mutableStateOf(false) }
     var fullscreen by remember { mutableStateOf(false) }
+    // Fullscreen from the button holds landscape; from turning the phone it
+    // follows the phone, so turning it back upright leaves fullscreen again.
+    var lockLandscape by remember { mutableStateOf(false) }
+    var rotatedIntoFullscreen by remember { mutableStateOf(false) }
+    val orientation = LocalConfiguration.current.orientation
+    // Double-taps add up and seek once they stop: a seek on a transcoded
+    // stream restarts it, so five taps should not mean five restarts.
+    var pendingSeekMs by remember(item.id) { mutableStateOf(0L) }
     var controlsVisible by remember { mutableStateOf(true) }
     var showTargetDialog by remember { mutableStateOf(false) }
     val audioTracks = streams.filter { it.type == "audio" }
@@ -340,9 +351,31 @@ fun LocalPlayerPage(
 
     BackHandler(onBack = onBack)
 
-    DisposableEffect(fullscreen) {
-        setImmersive(context, fullscreen)
-        onDispose { setImmersive(context, false) }
+    DisposableEffect(fullscreen, lockLandscape) {
+        setImmersive(context, fullscreen, lockLandscape)
+        onDispose { setImmersive(context, false, false) }
+    }
+
+    LaunchedEffect(orientation) {
+        if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
+            if (!fullscreen) {
+                fullscreen = true
+                rotatedIntoFullscreen = true
+            }
+        } else if (rotatedIntoFullscreen) {
+            fullscreen = false
+            rotatedIntoFullscreen = false
+        }
+    }
+
+    val currentPosition by rememberUpdatedState(position)
+    val currentDuration by rememberUpdatedState(duration)
+    LaunchedEffect(pendingSeekMs) {
+        if (pendingSeekMs == 0L) return@LaunchedEffect
+        delay(650)
+        val upper = if (currentDuration > 0) currentDuration else Long.MAX_VALUE
+        onSeekTo((currentPosition + pendingSeekMs).coerceIn(0, upper))
+        pendingSeekMs = 0L
     }
 
     LaunchedEffect(item.id) {
@@ -368,9 +401,12 @@ fun LocalPlayerPage(
             .background(Color.Black)
             .then(if (fullscreen) Modifier else Modifier.statusBarsPadding().navigationBarsPadding())
             .pointerInput(Unit) {
-                detectTapGestures(onTap = {
-                    controlsVisible = !controlsVisible
-                })
+                detectTapGestures(
+                    onTap = { controlsVisible = !controlsVisible },
+                    onDoubleTap = { offset ->
+                        pendingSeekMs += if (offset.x < size.width / 2f) -DoubleTapSeekMs else DoubleTapSeekMs
+                    },
+                )
             },
     ) {
         Column(Modifier.fillMaxSize()) {
@@ -473,13 +509,33 @@ fun LocalPlayerPage(
                     PlayerMaterialIconButton(BandwidthOptions.firstOrNull { it.kbps == selectedBandwidth }?.label ?: "Direct", Icons.Default.Speed, { revealControls(); showQuality = true })
                     PlayerMaterialIconButton(shortTrackLabel(audioTracks.firstOrNull { it.index == selectedAudio }, "Audio"), Icons.Default.MusicNote, { revealControls(); showAudio = true })
                     PlayerMaterialIconButton(shortTrackLabel(subtitleTracks.firstOrNull { it.index == selectedSubtitle }, "Subs"), Icons.Default.SubdirectoryArrowRight, { revealControls(); showSubtitles = true })
-                    PlayerMaterialIconButton(if (fullscreen) "Window" else "Full", Icons.Default.LiveTv, { revealControls(); fullscreen = !fullscreen })
+                    PlayerMaterialIconButton(if (fullscreen) "Window" else "Full", Icons.Default.LiveTv, {
+                        revealControls()
+                        fullscreen = !fullscreen
+                        lockLandscape = fullscreen && orientation != Configuration.ORIENTATION_LANDSCAPE
+                        rotatedIntoFullscreen = false
+                    })
                     if (nextEpisode != null) PlayerMaterialIconButton("Next", Icons.Default.SkipNext, { revealControls(); onPlayNext() })
                 }
                 OutlinedButton(onClick = { revealControls(); onStop() }, modifier = Modifier.fillMaxWidth()) {
                     Text("Stop phone playback")
                 }
             }
+        }
+
+        if (pendingSeekMs != 0L) {
+            Text(
+                "${if (pendingSeekMs > 0) "+" else "−"}${kotlin.math.abs(pendingSeekMs) / 1000}s",
+                color = Color.White,
+                fontWeight = FontWeight.Black,
+                fontSize = 20.sp,
+                modifier = Modifier
+                    .align(if (pendingSeekMs > 0) Alignment.CenterEnd else Alignment.CenterStart)
+                    .padding(horizontal = 36.dp)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(Color.Black.copy(alpha = .55f))
+                    .padding(horizontal = 18.dp, vertical = 10.dp),
+            )
         }
 
         // The last 25 seconds of an episode: what comes next, with the choice
@@ -722,11 +778,13 @@ fun JumpDialog(durationMs: Long, onDismiss: () -> Unit, onJump: (Long) -> Unit) 
     )
 }
 
-private fun setImmersive(context: Context, enabled: Boolean) {
+private const val DoubleTapSeekMs = 10_000L
+
+private fun setImmersive(context: Context, enabled: Boolean, lockLandscape: Boolean) {
     val activity = context as? ComponentActivity ?: return
     val window = activity.window
     if (enabled) {
-        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        activity.requestedOrientation = if (lockLandscape) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility = (
             View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY

@@ -57,6 +57,13 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.ColumnScope
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -64,7 +71,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
@@ -156,7 +162,7 @@ fun DetailPage(
     val listState = rememberLazyListState()
     Box(Modifier.fillMaxSize()) {
     LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-        item { DetailHero(session, detailItem, ratings, streams, resumeFraction(resumeMs, progress?.durationMs ?: 0), onBack) }
+        item { DetailHero(session, detailItem, ratings, streams, onBack) }
         if (error.isNotBlank()) item { Text(error, color = ErrorRed, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp)) }
         item {
             Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -363,105 +369,122 @@ private fun DetailAction(
     }
 }
 
-// The top of a show or a film, one layout for both: a short backdrop band,
-// the cover on the left reaching up into it, and everything about the title
-// to the cover's right — title, facts, genres, ratings. A tall backdrop with
-// only the title beside the cover and the rest underneath spent a screen on
-// what fits in half of one.
+// The top of a show or a film, as streaming apps lay it out on a phone: the
+// wide artwork edge to edge, the title's logo (or the title) at its foot, and
+// one compact block of facts under it. No cover: on a narrow screen it was a
+// second picture of the same thing, and it pushed the facts into a column
+// beside it or below it.
 @Composable
 fun MediaHero(
     session: Session,
     backdropUrl: String,
-    posterUrl: String,
+    logoUrl: String,
     title: String,
     onBack: () -> Unit,
     subtitle: String = "",
-    posterProgress: Float = 0f,
-    posterRating: Double = 0.0,
-    facts: @Composable () -> Unit = {},
+    facts: @Composable ColumnScope.() -> Unit = {},
 ) {
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    val overlap = 76.dp
-    Column {
-        Box(Modifier.fillMaxWidth().height(statusTop + 168.dp)) {
+    val backdropHeight = (LocalConfiguration.current.screenWidthDp * 9f / 16f).dp + statusTop
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(Modifier.fillMaxWidth().height(backdropHeight + 24.dp)) {
             if (backdropUrl.isNotBlank()) {
-                AuthAsyncImage(session, backdropUrl, null, Modifier.fillMaxSize(), ContentScale.Crop)
+                AuthAsyncImage(session, backdropUrl, null, Modifier.fillMaxWidth().height(backdropHeight + 24.dp), ContentScale.Crop)
             } else {
                 Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Surface3, Bg))))
             }
-            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(.35f to Color.Transparent, .78f to Bg.copy(alpha = .62f), 1f to Bg)))
+            // Clear art above, settling into the page where the title sits.
+            Box(Modifier.fillMaxSize().background(Brush.verticalGradient(.4f to Color.Transparent, .78f to Bg.copy(alpha = .72f), 1f to Bg)))
             // Keeps the clock and the two buttons readable on bright art.
             Box(Modifier.fillMaxWidth().height(statusTop + 64.dp).background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = .5f), Color.Transparent))))
             HeroIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back", Modifier.align(Alignment.TopStart).statusBarsPadding().padding(12.dp), onClick = onBack)
             LocalPlaybackTarget.current?.let { target ->
                 PlaybackTargetSwitcher(target, compact = true, modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(12.dp))
             }
+            TitleLogo(session, logoUrl, title, Modifier.align(Alignment.BottomStart).padding(horizontal = 16.dp).fillMaxWidth(.78f))
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            // Drawn up over the band's lower edge; laid out as if it began at
-            // that edge, so nothing below leaves room for the part on the art.
-            PosterImage(
-                session,
-                posterUrl,
-                Modifier.width(116.dp).layout { measurable, constraints ->
-                    val placeable = measurable.measure(constraints)
-                    val shift = overlap.roundToPx()
-                    layout(placeable.width, (placeable.height - shift).coerceAtLeast(0)) { placeable.place(0, -shift) }
-                },
-                progress = posterProgress,
-                rating = posterRating,
-            )
-            Column(Modifier.weight(1f).padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(title, color = TextColor, fontSize = 22.sp, lineHeight = 26.sp, fontWeight = FontWeight.Black, letterSpacing = (-.3).sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                if (subtitle.isNotBlank()) {
-                    Text(subtitle, color = Muted, fontSize = 13.sp, fontStyle = FontStyle.Italic, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                facts()
+        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (subtitle.isNotBlank()) {
+                Text(subtitle, color = TextColor, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
+            facts()
+        }
+    }
+}
+
+// The title's logo artwork where there is one, the title in type where there
+// is not. The space is the same either way, so nothing shifts when the logo
+// arrives or turns out to be missing.
+@Composable
+private fun TitleLogo(session: Session, logoUrl: String, title: String, modifier: Modifier = Modifier) {
+    var loaded by remember(logoUrl) { mutableStateOf(false) }
+    val context = LocalContext.current
+    Box(modifier.height(76.dp), contentAlignment = Alignment.BottomStart) {
+        if (!loaded) {
+            Text(title, color = TextColor, fontSize = 28.sp, lineHeight = 32.sp, fontWeight = FontWeight.Black, letterSpacing = (-.4).sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        if (logoUrl.isNotBlank()) {
+            val request = remember(logoUrl, session.token) {
+                ImageRequest.Builder(context).data(logoUrl).apply {
+                    if (session.token.isNotBlank() && logoUrl.startsWith(session.server)) addHeader("Authorization", "Bearer ${session.token}")
+                }.build()
+            }
+            AsyncImage(
+                model = request,
+                contentDescription = title,
+                contentScale = ContentScale.Fit,
+                alignment = Alignment.BottomStart,
+                onSuccess = { loaded = true },
+                onError = { loaded = false },
+                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (loaded) 1f else 0f },
+            )
         }
     }
 }
 
 @Composable
-fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, streams: List<StreamInfo>, resumeProgress: Float, onBack: () -> Unit) {
+fun DetailHero(session: Session, item: PopItem, ratings: ExternalRatings?, streams: List<StreamInfo>, onBack: () -> Unit) {
     val backdropUrl = if (item.backdropMtimeUnix > 0) imageUrl(session, item.id, item.backdropMtimeUnix, "backdrop", ArtworkFull) else ""
     val genres = item.genres.split(Regex("[,;/]")).map { it.trim() }.filter { it.isNotBlank() }.take(3)
+    val episode = item.kind == "episode"
     MediaHero(
         session = session,
         backdropUrl = backdropUrl,
-        posterUrl = imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard),
-        title = displayTitle(item),
+        // An episode wears its show's logo, with its own title under it.
+        logoUrl = imageUrl(session, item.id, item.posterMtimeUnix.coerceAtLeast(item.backdropMtimeUnix), "clearlogo"),
+        title = if (episode) item.showTitle.ifBlank { displayTitle(item) } else displayTitle(item),
         onBack = onBack,
-        subtitle = item.originalTitle.takeIf { it.isNotBlank() && it != displayTitle(item) }.orEmpty(),
-        posterProgress = resumeProgress,
+        subtitle = if (episode) displayTitle(item) else "",
     ) {
+        // Year, runtime and age rating; then the ratings with the file's
+        // format; then the genres.
         val meta = detailMetadata(item)
-        Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (meta.isNotBlank()) Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             if (item.officialRating.isNotBlank()) ContentRatingChip(item.officialRating)
         }
-        if (genres.isNotEmpty()) {
-            Text(genres.joinToString(" · "), color = Teal.copy(alpha = .9f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
-        // Ratings, then the file's format on a line of its own.
         val badges = ratingBadges(item, ratings)
-        if (badges.isNotEmpty()) {
+        val tech = techChips(item, streams)
+        if (badges.isNotEmpty() || tech.isNotEmpty()) {
             Text(
                 buildAnnotatedString {
                     badges.forEachIndexed { index, (label, value) ->
-                        if (index > 0) append("  ")
+                        if (index > 0) append("   ")
                         withStyle(SpanStyle(color = Teal.copy(alpha = .9f), fontWeight = FontWeight.Black)) { append(label) }
                         append(" ")
                         withStyle(SpanStyle(color = TextColor, fontWeight = FontWeight.Bold)) { append(value) }
                     }
+                    if (tech.isNotEmpty()) {
+                        if (badges.isNotEmpty()) append("   ")
+                        withStyle(SpanStyle(color = Muted, fontWeight = FontWeight.SemiBold)) { append(tech.joinToString(" · ")) }
+                    }
                 },
                 fontSize = 13.sp,
-                lineHeight = 18.sp,
+                lineHeight = 19.sp,
             )
         }
-        val tech = techChips(item, streams)
-        if (tech.isNotEmpty()) {
-            Text(tech.joinToString(" · "), color = Muted, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (genres.isNotEmpty()) {
+            Text(genres.joinToString(" · "), color = Teal.copy(alpha = .9f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -474,7 +497,7 @@ private fun ContentRatingChip(text: String) {
 private fun detailMetadata(item: PopItem): String {
     val parts = mutableListOf<String>()
     if (item.kind == "episode") {
-        if (item.showTitle.isNotBlank()) parts.add(item.showTitle)
+        // The show is the logo above; the episode's place in it is the fact.
         if (item.seasonNumber > 0 || item.episodeNumber > 0) parts.add("S%02dE%02d".format(item.seasonNumber, item.episodeNumber))
     } else if (item.year > 0) parts.add(item.year.toString())
     // Runtime only. "Ends around …" belongs next to Play, where it can account
@@ -504,15 +527,35 @@ private fun techChips(item: PopItem, streams: List<StreamInfo>): List<String> = 
 
 @Composable
 private fun DetailOverview(item: PopItem) {
-    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Overview", color = TextColor, fontWeight = FontWeight.Bold, fontSize = 19.sp)
+    // Three lines, then everything (with director and writers) on a tap, as
+    // streaming apps do: in full it pushed the cast and similar titles a
+    // screen down for something most visits only glance at.
+    var expanded by rememberSaveable(item.id) { mutableStateOf(false) }
+    val facts = detailFacts(item)
+    Column(
+        Modifier.padding(horizontal = 16.dp).fillMaxWidth().animateContentSize(tween(180)).clickable { expanded = !expanded },
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         if (item.tagline.isNotBlank()) Text(item.tagline, color = Accent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-        if (item.overview.isNotBlank()) Text(item.overview, color = TextColor.copy(alpha = .84f), fontSize = 15.sp, lineHeight = 22.sp)
-        detailFacts(item).forEach { (label, value) ->
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
-                Text(label, color = Accent.copy(alpha = .86f), fontSize = 12.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(66.dp))
-                Text(value, color = TextColor.copy(alpha = .72f), fontSize = 13.sp, lineHeight = 17.sp, modifier = Modifier.weight(1f))
+        if (item.overview.isNotBlank()) {
+            Text(
+                item.overview,
+                color = TextColor.copy(alpha = .84f),
+                fontSize = 15.sp,
+                lineHeight = 22.sp,
+                maxLines = if (expanded) Int.MAX_VALUE else 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (expanded) {
+            facts.forEach { (label, value) ->
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Top) {
+                    Text(label, color = Accent.copy(alpha = .86f), fontSize = 12.sp, fontWeight = FontWeight.Black, modifier = Modifier.width(66.dp))
+                    Text(value, color = TextColor.copy(alpha = .72f), fontSize = 13.sp, lineHeight = 17.sp, modifier = Modifier.weight(1f))
+                }
             }
+        } else if (facts.isNotEmpty() || item.overview.length > 160) {
+            Text("More", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         }
     }
 }

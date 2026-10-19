@@ -92,6 +92,9 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -908,21 +911,33 @@ fun SeenToggle(watched: Boolean, onToggle: () -> Unit, modifier: Modifier = Modi
 fun ShowHero(session: Session, show: ShowSummary, onBack: () -> Unit) {
     val backdropUrl = if (show.backdropItemId > 0) imageUrl(session, show.backdropItemId, show.backdropMtimeUnix, "backdrop", ArtworkFull) else ""
     val genres = show.genres.split(Regex("[,;/]")).map { it.trim() }.filter { it.isNotBlank() }.take(3)
+    // Any episode finds the show's logo; the poster's item is one.
+    val logoItem = show.posterItemId.takeIf { it > 0 } ?: show.backdropItemId
     MediaHero(
         session = session,
         backdropUrl = backdropUrl,
-        posterUrl = imageUrl(session, show.posterItemId, show.posterMtimeUnix, width = ArtworkCard),
+        logoUrl = imageUrl(session, logoItem, show.posterMtimeUnix.coerceAtLeast(show.backdropMtimeUnix), "clearlogo"),
         title = show.title,
         onBack = onBack,
-        posterRating = show.rating,
     ) {
         Text(
-            listOfNotNull(show.yearsLabel().takeIf { it.isNotBlank() }, seasonsLabel(show.seasonCount)).joinToString(" · "),
+            buildAnnotatedString {
+                if (show.rating > 0) {
+                    withStyle(SpanStyle(color = Gold, fontWeight = FontWeight.Bold)) { append("★ %.1f".format(show.rating)) }
+                    append("   ")
+                }
+                append(
+                    listOfNotNull(
+                        show.yearsLabel().takeIf { it.isNotBlank() },
+                        seasonsLabel(show.seasonCount),
+                        if (show.episodeCount == 1) "1 episode" else "${show.episodeCount} episodes",
+                    ).joinToString(" · "),
+                )
+            },
             color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis,
         )
-        Text(if (show.episodeCount == 1) "1 episode" else "${show.episodeCount} episodes", color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
         if (genres.isNotEmpty()) {
-            Text(genres.joinToString(" · "), color = Teal.copy(alpha = .9f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(genres.joinToString(" · "), color = Teal.copy(alpha = .9f), fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

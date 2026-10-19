@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Replay30
+import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material3.AlertDialog
@@ -312,6 +313,10 @@ fun LocalPlayerPage(
     onStop: () -> Unit,
     onSeekTo: (Long) -> Unit,
     onError: (String) -> Unit,
+    nextEpisode: PopItem? = null,
+    upNextDismissed: Boolean = false,
+    onDismissUpNext: () -> Unit = {},
+    onPlayNext: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var streams by remember(item.id) { mutableStateOf<List<StreamInfo>>(emptyList()) }
@@ -469,10 +474,27 @@ fun LocalPlayerPage(
                     PlayerMaterialIconButton(shortTrackLabel(audioTracks.firstOrNull { it.index == selectedAudio }, "Audio"), Icons.Default.MusicNote, { revealControls(); showAudio = true })
                     PlayerMaterialIconButton(shortTrackLabel(subtitleTracks.firstOrNull { it.index == selectedSubtitle }, "Subs"), Icons.Default.SubdirectoryArrowRight, { revealControls(); showSubtitles = true })
                     PlayerMaterialIconButton(if (fullscreen) "Window" else "Full", Icons.Default.LiveTv, { revealControls(); fullscreen = !fullscreen })
+                    if (nextEpisode != null) PlayerMaterialIconButton("Next", Icons.Default.SkipNext, { revealControls(); onPlayNext() })
                 }
                 OutlinedButton(onClick = { revealControls(); onStop() }, modifier = Modifier.fillMaxWidth()) {
                     Text("Stop phone playback")
                 }
+            }
+        }
+
+        // The last 25 seconds of an episode: what comes next, with the choice
+        // to start it now or stay. Left alone, the episode's end starts it.
+        val remainingMs = duration - position
+        val upNext = nextEpisode?.takeIf { !upNextDismissed && duration > 0 && remainingMs in 1..UpNextLeadMs }
+        AnimatedVisibility(
+            visible = upNext != null && !menuOpen,
+            enter = fadeIn(animationSpec = tween(180)),
+            exit = fadeOut(animationSpec = tween(160)),
+            modifier = Modifier.align(Alignment.TopEnd).padding(top = if (fullscreen) 16.dp else 64.dp, end = 16.dp),
+        ) {
+            val next = upNext ?: nextEpisode
+            if (next != null) {
+                UpNextCard(next, secondsLeft = ((remainingMs + 999) / 1000).toInt().coerceAtLeast(0), onPlay = onPlayNext, onDismiss = onDismissUpNext)
             }
         }
     }
@@ -509,6 +531,36 @@ fun LocalPlayerPage(
             onSelectPhone = { showTargetDialog = false },
             onSelectDevice = { showTargetDialog = false; onSelectDevice(it) },
         )
+    }
+}
+
+private const val UpNextLeadMs = 25_000L
+
+@Composable
+private fun UpNextCard(episode: PopItem, secondsLeft: Int, onPlay: () -> Unit, onDismiss: () -> Unit) {
+    Column(
+        Modifier.widthIn(max = 280.dp).clip(RoundedCornerShape(12.dp)).background(Surface1.copy(alpha = .94f))
+            .border(1.dp, Line, RoundedCornerShape(12.dp)).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("UP NEXT · ${secondsLeft}s", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Black, letterSpacing = 1.2.sp)
+        Text(
+            listOf("S%02dE%02d".format(episode.seasonNumber, episode.episodeNumber), episode.episodeTitle).filter { it.isNotBlank() }.joinToString(" · "),
+            color = TextColor,
+            fontWeight = FontWeight.Bold,
+            fontSize = 14.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = onPlay,
+                colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                shape = RoundedCornerShape(8.dp),
+            ) { Text("Play now", fontWeight = FontWeight.Bold, fontSize = 13.sp) }
+            TextButton(onClick = onDismiss) { Text("Cancel", color = Muted, fontSize = 13.sp) }
+        }
     }
 }
 

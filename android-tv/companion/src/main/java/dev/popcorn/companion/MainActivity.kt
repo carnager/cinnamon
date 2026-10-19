@@ -989,12 +989,45 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                 playbackTarget != PlaybackTarget.Phone -> play(episode.id, audio, subtitle, start)
                 replacePlayer -> {
                     loadPhonePlayback(episode, audio, subtitle, phoneState.bandwidthKbps, start)
-                    val from = (page as? Page.LocalPlayer)?.from ?: Page.Home
-                    page = Page.LocalPlayer(episode, audio, subtitle, from)
+                    // Playing on with the player in the background (audio
+                    // only, or browsing) must not pull the player up.
+                    val current = page
+                    if (current is Page.LocalPlayer) page = Page.LocalPlayer(episode, audio, subtitle, current.from)
                 }
                 else -> playLocally(episode, audio, subtitle, start)
             }
         }
+    }
+
+    // The episode after the one playing on the phone, for the Up Next card and
+    // for carrying on when it ends. Dismissing the card stops the carry-on.
+    var phoneNextEpisode by remember { mutableStateOf<PopItem?>(null) }
+    var phoneUpNextDismissed by remember { mutableStateOf(false) }
+    LaunchedEffect(phoneState.item?.id) {
+        phoneNextEpisode = null
+        phoneUpNextDismissed = false
+        val item = phoneState.item ?: return@LaunchedEffect
+        if (item.kind != "episode") return@LaunchedEffect
+        val episodes = runCatching { api.episodes(item.libraryId, item.showTitle, -1) }.getOrNull() ?: return@LaunchedEffect
+        phoneNextEpisode = episodeAfter(episodes, item)
+    }
+
+    fun playPhoneNextEpisode() {
+        val next = phoneNextEpisode ?: return
+        savePhoneProgress(final = true)
+        startEpisode(next, replacePlayer = true)
+    }
+
+    DisposableEffect(localPlayer) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_ENDED && phoneNextEpisode != null && !phoneUpNextDismissed) {
+                    playPhoneNextEpisode()
+                }
+            }
+        }
+        localPlayer.addListener(listener)
+        onDispose { localPlayer.removeListener(listener) }
     }
 
     fun seekTo(positionMs: Long) {
@@ -1893,6 +1926,10 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                     },
                     onSeekTo = ::seekTo,
                     onError = onError,
+                    nextEpisode = phoneNextEpisode,
+                    upNextDismissed = phoneUpNextDismissed,
+                    onDismissUpNext = { phoneUpNextDismissed = true },
+                    onPlayNext = ::playPhoneNextEpisode,
                 )
             }
         }
@@ -1956,4 +1993,14 @@ private fun uniquePlaybackDevices(devices: List<Device>): List<Device> {
         ).joinToString("\u0000")
         seen.add(key)
     }
+}
+
+// The episode that follows [current] in the show: by position in the list the
+// server gave, or failing that the next by season and episode number.
+fun episodeAfter(episodes: List<PopItem>, current: PopItem): PopItem? {
+    val index = episodes.indexOfFirst { it.id == current.id }
+    if (index >= 0) return episodes.getOrNull(index + 1)
+    return episodes
+        .sortedWith(compareBy({ it.seasonNumber }, { it.episodeNumber }))
+        .firstOrNull { it.seasonNumber > current.seasonNumber || (it.seasonNumber == current.seasonNumber && it.episodeNumber > current.episodeNumber) }
 }

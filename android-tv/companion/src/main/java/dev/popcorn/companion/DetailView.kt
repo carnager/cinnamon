@@ -89,6 +89,9 @@ fun DetailPage(
     val context = LocalContext.current
     var detailItem by remember(item.id) { mutableStateOf(item) }
     var progress by remember(item.id) { mutableStateOf<PlaybackProgress?>(null) }
+    // Play waits for this: started before the saved position arrives, it would
+    // begin from zero and tell the TV to do the same.
+    var progressLoaded by remember(item.id) { mutableStateOf(false) }
     var streams by remember(item.id) { mutableStateOf<List<StreamInfo>>(emptyList()) }
     var ratings by remember(item.id) { mutableStateOf<ExternalRatings?>(null) }
     var similar by remember(item.id) { mutableStateOf<List<PopItem>>(emptyList()) }
@@ -105,19 +108,26 @@ fun DetailPage(
     val audioTracks = streams.filter { it.type == "audio" }
     val subtitleTracks = streams.filter { it.type == "subtitle" }
 
+    // The requests are independent, so they go out together: the page is
+    // ready when the slowest one answers rather than after all of them in turn.
     LaunchedEffect(item.id, PlaybackPrefs.audioLang, PlaybackPrefs.subtitleLang) {
-        runCatching { api.item(item.id) }.onSuccess { detailItem = it }
-        runCatching { api.streams(item.id) }
-            .onSuccess { loaded ->
-                streams = loaded
-                selectedAudio = preferredAudioIndex(loaded.filter { it.type == "audio" })
-                selectedSubtitle = preferredSubtitleIndex(loaded.filter { it.type == "subtitle" })
-            }
-            .onFailure { error = it.message ?: "Could not load streams" }
-        runCatching { api.ratings(item.id) }.onSuccess { ratings = it }
-        runCatching { api.itemRating(item.id) }.onSuccess { userRating = it }
-        runCatching { api.progress(item.id) }.onSuccess { progress = it }
-        if (item.kind == "movie") similar = runCatching { api.similar(item.id) }.getOrDefault(emptyList())
+        launch {
+            runCatching { api.progress(item.id) }.onSuccess { progress = it }
+            progressLoaded = true
+        }
+        launch { runCatching { api.item(item.id) }.onSuccess { detailItem = it } }
+        launch {
+            runCatching { api.streams(item.id) }
+                .onSuccess { loaded ->
+                    streams = loaded
+                    selectedAudio = preferredAudioIndex(loaded.filter { it.type == "audio" })
+                    selectedSubtitle = preferredSubtitleIndex(loaded.filter { it.type == "subtitle" })
+                }
+                .onFailure { error = it.message ?: "Could not load streams" }
+        }
+        launch { runCatching { api.ratings(item.id) }.onSuccess { ratings = it } }
+        launch { runCatching { api.itemRating(item.id) }.onSuccess { userRating = it } }
+        if (item.kind == "movie") launch { similar = runCatching { api.similar(item.id) }.getOrDefault(emptyList()) }
     }
 
     val resumeMs = progress?.takeIf { progressResumable(it.positionMs, it.durationMs) }?.positionMs ?: 0L
@@ -146,11 +156,21 @@ fun DetailPage(
                             val hasSavedProgress = progress?.let { it.positionMs > 0 || it.completed } == true
                             if (hasSavedProgress) playOptionsOpen = true else start(0)
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.White),
+                        enabled = progressLoaded,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Accent,
+                            contentColor = Color.White,
+                            disabledContainerColor = Accent.copy(alpha = .45f),
+                            disabledContentColor = Color.White.copy(alpha = .8f),
+                        ),
                         modifier = Modifier.weight(1f).height(52.dp),
                         shape = RoundedCornerShape(8.dp),
                     ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(22.dp))
+                        if (progressLoaded) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(22.dp))
+                        } else {
+                            CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                        }
                         Text("  Play", fontWeight = FontWeight.Black, fontSize = 16.sp)
                     }
                 }

@@ -49,8 +49,6 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Replay30
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material3.AlertDialog
@@ -139,13 +137,13 @@ fun MiniPlayer(session: Session, state: PlayerState, targetLabel: String, onPlay
                 Text("$targetLabel  •  ${state.state.ifBlank { "idle" }}  •  ${formatTime(state.positionMs)} / ${formatTime(state.durationMs)}", color = Muted, fontSize = 11.sp, maxLines = 1)
             }
             IconButton(onClick = { onSeek(boundarySeekDelta(state.positionMs, forward = false)) }) {
-                Icon(Icons.Default.SkipPrevious, contentDescription = "Back", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(Icons.Default.Replay30, contentDescription = "Back 30 seconds", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = onPlayPause) {
                 Icon(if (state.state == "playing") Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play or pause", tint = Accent)
             }
             IconButton(onClick = { onSeek(boundarySeekDelta(state.positionMs, forward = true)) }) {
-                Icon(Icons.Default.SkipNext, contentDescription = "Forward", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(Icons.Default.Forward30, contentDescription = "Forward 30 seconds", tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -235,7 +233,7 @@ fun RemotePage(
         item {
             Row(horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 IconButton(onClick = { onSeek(boundarySeekDelta(position, forward = false)) }, modifier = Modifier.size(64.dp)) {
-                    Icon(Icons.Default.SkipPrevious, contentDescription = "Back 30 seconds", tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(38.dp))
+                    Icon(Icons.Default.Replay30, contentDescription = "Back 30 seconds", tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(38.dp))
                 }
                 Surface(
                     modifier = Modifier.size(92.dp),
@@ -258,7 +256,7 @@ fun RemotePage(
                     }
                 }
                 IconButton(onClick = { onSeek(boundarySeekDelta(position, forward = true)) }, modifier = Modifier.size(64.dp)) {
-                    Icon(Icons.Default.SkipNext, contentDescription = "Forward 30 seconds", tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(38.dp))
+                    Icon(Icons.Default.Forward30, contentDescription = "Forward 30 seconds", tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(38.dp))
                 }
             }
         }
@@ -266,8 +264,6 @@ fun RemotePage(
             Row(horizontalArrangement = Arrangement.SpaceEvenly, modifier = Modifier.fillMaxWidth()) {
                 PlayerMaterialIconButton("Jump", Icons.Default.SubdirectoryArrowRight, onJump)
                 PlayerMaterialIconButton(BandwidthOptions.firstOrNull { it.kbps == selectedBandwidth }?.label ?: "Direct", Icons.Default.Speed, { showBandwidthDialog = true })
-                PlayerMaterialIconButton("Back 30", Icons.Default.Replay30, { onSeek(boundarySeekDelta(position, forward = false)) })
-                PlayerMaterialIconButton("Fwd 30", Icons.Default.Forward30, { onSeek(boundarySeekDelta(position, forward = true)) })
             }
         }
     }

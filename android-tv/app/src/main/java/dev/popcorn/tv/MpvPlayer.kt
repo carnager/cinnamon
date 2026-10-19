@@ -74,7 +74,11 @@ class MpvPlayer(
         mpv.addLogObserver(this)
         // Verbose, but only kept in a small ring buffer (see startupTrace);
         // logcat gets info and up.
-        mpv.setOptionString("msg-level", "all=v")
+        mpv.setOptionString("msg-level", "all=v,ffmpeg=debug")
+        // ffmpeg's network I/O has no timeout by default: a connection that
+        // stalls (seen from a remote Shield: "Opening https://…" then
+        // silence) hung forever instead of failing with a reason.
+        mpv.setOptionString("network-timeout", "10")
         mpv.setOptionString("profile", "fast")
         mpv.setOptionString("vo", "null")
         mpv.setOptionString("gpu-context", "android")
@@ -410,10 +414,11 @@ class MpvPlayer(
         }
     }
 
+    // Sends what has been collected and empties the buffer, so a later send
+    // (load failed, abandoned) carries only the lines since.
     private fun sendStartupTrace() {
-        if (traceSent) return
         traceSent = true
-        val lines = synchronized(startupTrace) { startupTrace.toList() }
+        val lines = synchronized(startupTrace) { startupTrace.toList().also { startupTrace.clear() } }
         lines.forEach { onDiagnostic("mpv-trace", it, null) }
     }
 
@@ -530,6 +535,7 @@ class MpvPlayer(
         // stop() clears loadIssued before mpv reports back, so an END_FILE here
         // is a failure: the open failed, or the stream broke mid-play.
         val wasLoaded = fileLoaded
+        if (!wasLoaded) sendStartupTrace()
         stopFile()
         error = PlaybackException(
             if (wasLoaded) "mpv: playback stopped unexpectedly" else "mpv: could not open the stream",
@@ -603,7 +609,7 @@ class MpvPlayer(
         if (!fileLoaded) {
             synchronized(startupTrace) {
                 startupTrace.addLast(line.take(230))
-                while (startupTrace.size > 60) startupTrace.removeFirst()
+                while (startupTrace.size > 120) startupTrace.removeFirst()
             }
         }
         if (level > MPVLib.MpvLogLevel.MPV_LOG_LEVEL_INFO) return

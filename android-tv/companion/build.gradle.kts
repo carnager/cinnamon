@@ -50,8 +50,12 @@ android {
             // fails loudly rather than shipping an un-updatable APK. Release
             // tasks already hard-fail above when signing is incomplete.
             signingConfig = if (releaseSigningComplete) signingConfigs.getByName("release") else null
-            isMinifyEnabled = false
+            // R8 as on the TV app: Compose without it is noticeably slower to
+            // start and to scroll.
+            isMinifyEnabled = true
+            isShrinkResources = true
             isDebuggable = false
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }
     }
 

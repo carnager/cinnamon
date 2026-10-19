@@ -25,7 +25,9 @@ import java.util.concurrent.Executors
 // here as well.
 class MpvRelay(origin: String, private val authToken: String) {
     private val origin = origin.trimEnd('/')
-    private val server = ServerSocket(0, 16, InetAddress.getLoopbackAddress())
+    // Explicitly IPv4: on Android getLoopbackAddress() is ::1, so a relay
+    // bound there refused mpv's connections to 127.0.0.1.
+    private val server = ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"))
     private val pool = Executors.newCachedThreadPool { runnable -> Thread(runnable, "mpv-relay").apply { isDaemon = true } }
     private val open = Collections.synchronizedSet(mutableSetOf<Socket>())
     @Volatile private var closed = false

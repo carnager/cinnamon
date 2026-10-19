@@ -117,6 +117,8 @@ class MpvPlayer(
         mpv.setOptionString("keep-open", "yes")
         mpv.setOptionString("idle", "yes")
         mpv.setOptionString("input-default-bindings", "no")
+        // No youtube-dl hook: it tried to spawn yt-dlp for every file.
+        mpv.setOptionString("ytdl", "no")
         mpv.setOptionString("osd-level", "0")
         // Pointing libass at /system/fonts made it load ~200 font files
         // (CJK included) twice per start — about 4s on the Streamer. One copied

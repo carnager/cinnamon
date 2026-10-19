@@ -218,7 +218,7 @@ private data class HomeHeroPick(
         }
 
         fun fromShow(show: ShowSummary, kick: String): HomeHeroPick {
-            val meta = listOfNotNull(show.yearsLabel(), "${show.seasonCount} ${if (show.seasonCount == 1) "season" else "seasons"}", firstGenre(show.genres)?.lowercase()?.replaceFirstChar { it.uppercase() }).filter { it.isNotBlank() }.joinToString(" · ")
+            val meta = listOfNotNull(show.yearsLabel(), seasonsLabel(show.seasonCount), firstGenre(show.genres)?.lowercase()?.replaceFirstChar { it.uppercase() }).filter { it.isNotBlank() }.joinToString(" · ")
             return HomeHeroPick("show:${show.libraryId}:${show.title}", kick, show.title, meta, show.overview, show.rating, show.backdropItemId, show.backdropMtimeUnix, show = show)
         }
     }
@@ -841,8 +841,8 @@ fun ShowHero(session: Session, show: ShowSummary, onBack: () -> Unit) {
                     Text(show.title, color = TextColor, fontSize = 25.sp, lineHeight = 29.sp, fontWeight = FontWeight.Black, letterSpacing = (-.35).sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
                     val meta = listOfNotNull(
                         show.yearsLabel().takeIf { it.isNotBlank() },
-                        "${show.seasonCount} seasons",
-                        "${show.episodeCount} episodes",
+                        seasonsLabel(show.seasonCount),
+                        if (show.episodeCount == 1) "1 episode" else "${show.episodeCount} episodes",
                     ).joinToString(" · ")
                     Text(meta, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 }
@@ -1390,28 +1390,31 @@ fun ShowShelf(title: String, subtitle: String = "", session: Session, shows: Lis
     }
 }
 
+// Two lines under the poster, always: a title on one line and the year with
+// the length (or seasons). Cards of one height keep the grid's rows even, and
+// the poster carries the rest.
 @Composable
 fun MovieCard(session: Session, item: PopItem, modifier: Modifier = Modifier, watched: Boolean = false, watchlisted: Boolean = false, onClick: () -> Unit) {
     Column(modifier.clickable(onClick = onClick)) {
         PosterImage(session, imageUrl(session, item.id, item.posterMtimeUnix, width = ArtworkCard), Modifier.fillMaxWidth(), watched = watched, watchlisted = watchlisted, rating = item.rating)
-        Spacer(Modifier.height(7.dp))
-        Text(item.title, color = TextColor, fontSize = 15.sp, lineHeight = 19.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(listOf(item.year.takeIf { it > 0 }?.toString(), fmtDuration(item.durationMs)).filterNotNull().joinToString(" \u00b7 "), color = Muted, fontSize = 13.sp, maxLines = 1)
-        firstGenre(item.genres)?.let { Text(it, color = Teal.copy(alpha = .86f), fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        CardCaption(item.title, listOf(item.year.takeIf { it > 0 }?.toString(), fmtDuration(item.durationMs)).filterNotNull().filter { it.isNotBlank() }.joinToString(" · "))
     }
 }
+
+@Composable
+private fun CardCaption(title: String, meta: String) {
+    Spacer(Modifier.height(6.dp))
+    Text(title, color = TextColor, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Text(meta, color = Muted, fontSize = 12.sp, lineHeight = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+}
+
+fun seasonsLabel(count: Int): String = if (count == 1) "1 season" else "$count seasons"
 
 @Composable
 fun ShowCard(session: Session, show: ShowSummary, modifier: Modifier = Modifier, watched: Boolean = false, watchlisted: Boolean = false, onClick: () -> Unit) {
     Column(modifier.clickable(onClick = onClick)) {
         PosterImage(session, imageUrl(session, show.posterItemId, show.posterMtimeUnix, width = ArtworkCard), Modifier.fillMaxWidth(), watched = watched, watchlisted = watchlisted, rating = show.rating)
-        Spacer(Modifier.height(7.dp))
-        Text(show.title, color = TextColor, fontSize = 15.sp, lineHeight = 19.sp, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(
-            listOfNotNull(show.yearsLabel().takeIf { it.isNotBlank() }, "${show.seasonCount} seasons").joinToString(" · "),
-            color = Muted, fontSize = 13.sp, maxLines = 1,
-        )
-        firstGenre(show.genres)?.let { Text(it, color = Teal.copy(alpha = .86f), fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        CardCaption(show.title, listOfNotNull(show.yearsLabel().takeIf { it.isNotBlank() }, seasonsLabel(show.seasonCount)).joinToString(" · "))
     }
 }
 

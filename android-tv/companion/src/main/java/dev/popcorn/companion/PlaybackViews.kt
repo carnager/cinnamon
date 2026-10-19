@@ -43,6 +43,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Forward30
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -112,8 +113,7 @@ private fun boundarySeekTarget(currentMs: Long, forward: Boolean): Long {
 private fun boundarySeekDelta(currentMs: Long, forward: Boolean): Long = boundarySeekTarget(currentMs, forward) - currentMs
 
 @Composable
-fun MiniPlayer(session: Session, state: PlayerState, targetLabel: String, onPlayPause: () -> Unit, onSeek: (Long) -> Unit, onClick: () -> Unit) {
-    val active = state.title.isNotBlank()
+fun MiniPlayer(session: Session, state: PlayerState, onPhone: Boolean, onPlayPause: () -> Unit, onSeek: (Long) -> Unit, onClick: () -> Unit) {
     val targetFraction = if (state.durationMs > 0) (state.positionMs.toFloat() / state.durationMs.toFloat()).coerceIn(0f, 1f) else 0f
     val fraction by animateFloatAsState(targetValue = targetFraction, animationSpec = tween(350), label = "miniProgress")
     ElevatedCard(
@@ -139,8 +139,20 @@ fun MiniPlayer(session: Session, state: PlayerState, targetLabel: String, onPlay
                 }
             }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(if (active) state.title else "$targetLabel is ready", color = if (active) TextColor else Muted, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("$targetLabel  •  ${state.state.ifBlank { "idle" }}  •  ${formatTime(state.positionMs)} / ${formatTime(state.durationMs)}", color = Muted, fontSize = 11.sp, maxLines = 1)
+                Text(state.title, color = TextColor, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                // State and time, which is what this line is for. Where it
+                // plays is the icon; the device name filled the line before
+                // and pushed both off it.
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Icon(if (onPhone) Icons.Default.PhoneAndroid else Icons.Default.Cast, contentDescription = if (onPhone) "On this phone" else "On the TV", tint = Muted, modifier = Modifier.size(13.dp))
+                    Text(
+                        "${state.state.ifBlank { "idle" }.replaceFirstChar { it.uppercase() }} · ${formatTime(state.positionMs)} / ${formatTime(state.durationMs)}",
+                        color = Muted,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
             IconButton(onClick = { onSeek(boundarySeekDelta(state.positionMs, forward = false)) }) {
                 Icon(Icons.Default.Replay30, contentDescription = "Back 30 seconds", tint = MaterialTheme.colorScheme.onSurfaceVariant)

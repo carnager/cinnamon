@@ -1619,7 +1619,7 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                         MiniPlayer(
                             session = session,
                             state = miniState,
-                            targetLabel = if (playbackTarget == PlaybackTarget.Phone) "This phone" else selectedDevice?.displayName() ?: "TV",
+                            onPhone = playbackTarget == PlaybackTarget.Phone,
                             onPlayPause = {
                                 if (playbackTarget == PlaybackTarget.Phone && phoneState.item != null) {
                                     localPlayer.playWhenReady = !localPlayer.isPlaying

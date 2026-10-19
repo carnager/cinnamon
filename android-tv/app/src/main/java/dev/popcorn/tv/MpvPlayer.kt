@@ -72,7 +72,9 @@ class MpvPlayer(
 
     init {
         mpv.addLogObserver(this)
-        mpv.setOptionString("msg-level", "all=info")
+        // Verbose, but only kept in a small ring buffer (see startupTrace);
+        // logcat gets info and up.
+        mpv.setOptionString("msg-level", "all=v")
         mpv.setOptionString("profile", "fast")
         mpv.setOptionString("vo", "null")
         mpv.setOptionString("gpu-context", "android")
@@ -395,10 +397,40 @@ class MpvPlayer(
 
     // ── mpv plumbing ──
 
+    // Remote diagnosis for devices without adb (a Shield in another house):
+    // the last mpv log lines, sent to the server's client log when a file
+    // has not loaded after a few seconds or the load is abandoned. A Shield
+    // that never got past "buffering" left no trace at all before.
+    private val startupTrace = ArrayDeque<String>()
+    private var traceSent = false
+    private val slowStartCheck = Runnable {
+        if (!released && loadIssued && !fileLoaded) {
+            onDiagnostic("mpv-slow-start", "no FILE_LOADED after 6s (start event ${if (startSeen) "seen" else "not seen"})", null)
+            sendStartupTrace()
+        }
+    }
+
+    private fun sendStartupTrace() {
+        if (traceSent) return
+        traceSent = true
+        val lines = synchronized(startupTrace) { startupTrace.toList() }
+        lines.forEach { onDiagnostic("mpv-trace", it, null) }
+    }
+
+    // Seconds since the current load was issued, for the stuck-load fallback.
+    var loadingSinceMs: Long = 0L
+        private set
+    val isWaitingForFile: Boolean get() = loadIssued && !fileLoaded && !released
+
     private fun loadNow() {
         val item = mediaItem ?: return
         if (released || !prepared || loadIssued) return
         val url = item.localConfiguration?.uri?.toString() ?: return
+        synchronized(startupTrace) { startupTrace.clear() }
+        traceSent = false
+        loadingSinceMs = android.os.SystemClock.elapsedRealtime()
+        main.removeCallbacks(slowStartCheck)
+        main.postDelayed(slowStartCheck, 6_000)
         loadIssued = true
         startSeen = false
         fileLoaded = false
@@ -412,6 +444,11 @@ class MpvPlayer(
     }
 
     private fun stopFile() {
+        main.removeCallbacks(slowStartCheck)
+        if (loadIssued && !fileLoaded && !released) {
+            onDiagnostic("mpv-start-abandoned", "stopped before FILE_LOADED", null)
+            sendStartupTrace()
+        }
         // Keep reporting the last position after a stop, as ExoPlayer does:
         // PlayerScreen saves progress once more after stopping, and falling
         // back to the load's start would rewind the saved resume point.
@@ -466,6 +503,7 @@ class MpvPlayer(
 
     private fun onFileLoaded() {
         if (released || !loadIssued) return
+        main.removeCallbacks(slowStartCheck)
         fileLoaded = true
         pendingSeekMs?.let { target ->
             pendingSeekMs = null
@@ -541,7 +579,12 @@ class MpvPlayer(
 
     override fun event(eventId: Int) {
         when (eventId) {
-            MPVLib.MpvEvent.MPV_EVENT_START_FILE -> onMain { if (loadIssued) startSeen = true }
+            MPVLib.MpvEvent.MPV_EVENT_START_FILE -> onMain {
+                if (loadIssued) {
+                    startSeen = true
+                    onDiagnostic("mpv-start-file", "", null)
+                }
+            }
             MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> onMain { if (startSeen) onFileLoaded() }
             MPVLib.MpvEvent.MPV_EVENT_END_FILE -> onMain { onEndFile() }
             MPVLib.MpvEvent.MPV_EVENT_PLAYBACK_RESTART -> onMain {
@@ -557,6 +600,13 @@ class MpvPlayer(
 
     override fun logMessage(prefix: String, level: Int, text: String) {
         val line = "[$prefix] ${text.trimEnd()}"
+        if (!fileLoaded) {
+            synchronized(startupTrace) {
+                startupTrace.addLast(line.take(230))
+                while (startupTrace.size > 60) startupTrace.removeFirst()
+            }
+        }
+        if (level > MPVLib.MpvLogLevel.MPV_LOG_LEVEL_INFO) return
         when {
             level <= MPVLib.MpvLogLevel.MPV_LOG_LEVEL_ERROR -> {
                 Log.e("mpv", line)

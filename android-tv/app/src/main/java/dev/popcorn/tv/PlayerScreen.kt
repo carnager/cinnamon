@@ -100,6 +100,8 @@ fun PlayerScreen(
     onRemoteStop: () -> Unit,
     onRemoteCommandConsumed: (Long) -> Unit,
     onPlayNext: (PopItem) -> Unit,
+    // Restart this title at a position (used after switching engines).
+    onRestart: (Long) -> Unit = {},
 ) {
     val context = LocalContext.current
     val lifecycle = (context as? ComponentActivity)?.lifecycle
@@ -1096,6 +1098,21 @@ fun PlayerScreen(
         }
     }
 
+    // mpv that never opens the file (seen on a remote Shield) used to sit on
+    // "buffering" forever. After 15s show the error card, which offers to
+    // retry, transcode, or switch this device to ExoPlayer.
+    LaunchedEffect(mpvPlayer) {
+        val engine = mpvPlayer ?: return@LaunchedEffect
+        while (true) {
+            delay(1_000)
+            val waited = SystemClock.elapsedRealtime() - engine.loadingSinceMs
+            if (engine.isWaitingForFile && waited > 15_000 && playbackError == null) {
+                logClient("mpv-load-timeout", message = "no FILE_LOADED after ${waited / 1000}s")
+                playbackError = "mpv couldn't open the video (no data after 15 seconds)."
+            }
+        }
+    }
+
     // Hide after 4.5s without input, only while playing and with no sheet.
     LaunchedEffect(osdVisible, osdTouch, sheet) {
         if (!osdVisible || sheet != null) return@LaunchedEffect
@@ -1331,6 +1348,18 @@ fun PlayerScreen(
                     fallbackRetried = false
                     requestPlaybackPlan(selectedBandwidth, logicalPositionMs(), "transcode", wasPlaying = true)
                 },
+                onUseExoPlayer = if (useMpv) {
+                    {
+                        logClient("switch-engine-exo")
+                        PlaybackPrefs.setEngine(context, PlaybackPrefs.ENGINE_EXO)
+                        val position = logicalPositionMs()
+                        exitingPlayer = true
+                        runCatching { exoPlayer.stop() }
+                        onRestart(position)
+                    }
+                } else {
+                    null
+                },
                 onBack = { exitPlayer() },
             )
         }
@@ -1371,6 +1400,7 @@ private fun PlaybackErrorCard(
     focusRequester: FocusRequester,
     onRetry: () -> Unit,
     onTranscode: () -> Unit,
+    onUseExoPlayer: (() -> Unit)? = null,
     onBack: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize().background(Color(0xB0000000)), contentAlignment = Alignment.Center) {
@@ -1388,6 +1418,7 @@ private fun PlaybackErrorCard(
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 FocusButton(label = "Retry", primary = true, modifier = Modifier.focusRequester(focusRequester), onClick = onRetry)
                 FocusButton(label = "Try transcoding", primary = false, onClick = onTranscode)
+                if (onUseExoPlayer != null) FocusButton(label = "Use ExoPlayer", primary = false, onClick = onUseExoPlayer)
                 FocusButton(label = "Back", primary = false, onClick = onBack)
             }
         }

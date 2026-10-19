@@ -1487,6 +1487,9 @@ fun PopcornApp() {
                 onRemoteCommandConsumed = { id ->
                     if (pendingPlayerCommand?.id == id) pendingPlayerCommand = null
                 },
+                onRestart = { position ->
+                    screen = current.copy(startPositionMs = position, token = System.currentTimeMillis(), tracksChosen = true)
+                },
                 onPlayNext = { next ->
                     pendingPlayerCommand = null
                     if (next.kind == "episode") seasonFocusEpisode = next.id

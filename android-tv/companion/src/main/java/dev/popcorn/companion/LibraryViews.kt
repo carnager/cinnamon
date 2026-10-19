@@ -47,6 +47,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Block
@@ -603,10 +604,12 @@ fun SeasonList(
     show: ShowSummary,
     seasons: List<SeasonSummary>,
     completedItems: Set<Long>,
+    resumeProgress: Map<Long, Float>,
     showWatched: Boolean,
     recommendationExcluded: Boolean,
     onBack: () -> Unit,
     onSeason: (SeasonSummary) -> Unit,
+    onPlayEpisode: (PopItem) -> Unit,
     onSetPreference: (MediaPreference) -> Unit,
     onSetSeasonWatched: (SeasonSummary, Boolean) -> Unit,
     onActor: (Actor) -> Unit,
@@ -623,6 +626,12 @@ fun SeasonList(
             .filterValues { eps -> eps.all { completedItems.contains(it.id) } }
             .keys
     }
+    // The episode to carry on with: the first unwatched one in airing order,
+    // specials last; with everything seen, the first.
+    val nextEpisode = remember(allEpisodes, completedItems) {
+        val ordered = allEpisodes.sortedWith(compareBy({ if (it.seasonNumber == 0) Int.MAX_VALUE else it.seasonNumber }, { it.episodeNumber }))
+        ordered.firstOrNull { it.id !in completedItems } ?: ordered.firstOrNull()
+    }
     val preference = when {
         recommendationExcluded -> MediaPreference.NotInterested
         showWatched -> MediaPreference.Seen
@@ -630,6 +639,16 @@ fun SeasonList(
     }
     LazyColumn(contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { ShowHero(session, show, onBack) }
+        if (nextEpisode != null) {
+            item(key = "continue") {
+                ContinueEpisodeButton(
+                    episode = nextEpisode,
+                    started = (resumeProgress[nextEpisode.id] ?: 0f) > 0f,
+                    modifier = Modifier.padding(horizontal = 12.dp),
+                    onClick = { onPlayEpisode(nextEpisode) },
+                )
+            }
+        }
         if (show.overview.isNotBlank()) {
             item {
                 Column(
@@ -685,6 +704,31 @@ fun SeasonList(
                 onSetPreference(it)
             },
         )
+    }
+}
+
+// A show's primary action, as on the TV: play the episode you are on, straight
+// from the show page, instead of going season → episode → Play.
+@Composable
+private fun ContinueEpisodeButton(episode: PopItem, started: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Row(
+        modifier.fillMaxWidth().height(60.dp).clip(RoundedCornerShape(8.dp)).background(Accent).clickable(onClick = onClick).padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(26.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "${if (started) "Continue" else "Play"} S%02dE%02d".format(episode.seasonNumber, episode.episodeNumber),
+                color = Color.White,
+                fontWeight = FontWeight.Black,
+                fontSize = 16.sp,
+                maxLines = 1,
+            )
+            if (episode.episodeTitle.isNotBlank()) {
+                Text(episode.episodeTitle, color = Color.White.copy(alpha = .82f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
     }
 }
 

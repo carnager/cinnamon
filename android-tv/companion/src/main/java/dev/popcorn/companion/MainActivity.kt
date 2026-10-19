@@ -633,17 +633,6 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
         }
     }
 
-    fun resetItemProgress(item: PopItem) {
-        scope.launch {
-            runCatching { api.unmarkItemWatched(item.id) }
-                .onSuccess {
-                    completedItems = completedItems - item.id
-                    resumeProgress = resumeProgress - item.id
-                }
-                .onFailure { reportError(it, "Could not reset playback progress") }
-        }
-    }
-
     fun setShowPreference(show: ShowSummary, preference: MediaPreference) {
         scope.launch {
             val marker = showKey(show)
@@ -979,6 +968,33 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
     fun playLocally(item: PopItem, audioIndex: Int?, subtitleIndex: Int?, positionMs: Long = 0) {
         loadPhonePlayback(item, audioIndex, subtitleIndex, null, positionMs.coerceAtLeast(0), "auto")
         navigate(Page.LocalPlayer(item, audioIndex, subtitleIndex, page))
+    }
+
+    // Starts an episode without going through its detail page: the show's
+    // Continue button and the phone player's next episode. Tracks follow the
+    // language preferences and the start the saved progress, as Play on the
+    // detail page would. In the phone player the new episode replaces the
+    // current one instead of stacking another player page.
+    fun startEpisode(episode: PopItem, replacePlayer: Boolean = false) {
+        scope.launch {
+            val (streams, progress) = coroutineScope {
+                val streams = async { runCatching { api.streams(episode.id) }.getOrDefault(emptyList()) }
+                val progress = async { runCatching { api.progress(episode.id) }.getOrNull() }
+                streams.await() to progress.await()
+            }
+            val audio = preferredAudioIndex(streams.filter { it.type == "audio" })
+            val subtitle = preferredSubtitleIndex(streams.filter { it.type == "subtitle" })
+            val start = progress?.takeIf { progressResumable(it.positionMs, it.durationMs) }?.positionMs ?: 0L
+            when {
+                playbackTarget != PlaybackTarget.Phone -> play(episode.id, audio, subtitle, start)
+                replacePlayer -> {
+                    loadPhonePlayback(episode, audio, subtitle, phoneState.bandwidthKbps, start)
+                    val from = (page as? Page.LocalPlayer)?.from ?: Page.Home
+                    page = Page.LocalPlayer(episode, audio, subtitle, from)
+                }
+                else -> playLocally(episode, audio, subtitle, start)
+            }
+        }
     }
 
     fun seekTo(positionMs: Long) {
@@ -1696,10 +1712,12 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 current.show,
                                 seasonsByShow[showKey(current.show)].orEmpty(),
                                 completedItems,
+                                resumeProgress,
                                 showWatched = completedShows.contains(showKey(current.show)),
                                 recommendationExcluded = recommendationExclusionKeys.contains("show:${current.show.libraryId.trim().lowercase()}:${current.show.title.trim().lowercase()}"),
                                 onBack = ::goBack,
                                 onSeason = { openSeason(current.show, it) },
+                                onPlayEpisode = { startEpisode(it) },
                                 onSetPreference = { setShowPreference(current.show, it) },
                                 onSetSeasonWatched = { season, watched -> setSeasonWatched(current.show, season.seasonNumber, watched) },
                                 onActor = ::openActor,
@@ -1715,7 +1733,6 @@ fun BrowserView(session: Session, error: String, onError: (String) -> Unit, onLo
                                 recommendationExcluded = current.item.kind == "movie" && recommendationExclusionKeys.contains("item:${current.item.id}"),
                                 onSetWatchlisted = { setItemWatchlisted(current.item, it) },
                                 onSetPreference = { setItemPreference(current.item, it) },
-                                onResetProgress = { resetItemProgress(current.item) },
                                 onBack = ::goBack,
                                 onPlay = { target, audio, subtitle, position -> play(target.id, audio, subtitle, position) },
                                 onPlayLocal = { target, audio, subtitle, position -> playLocally(target, audio, subtitle, position) },

@@ -420,12 +420,13 @@ function attachPlan(plan, startSec) {
   // snapped the start earlier than asked. Seek off the difference locally —
   // those seconds are in the first segment either way.
   const trimSec = Math.max(0, startSec - (pb.startOffsetSec || 0));
-  if (trimSec > 0.5) {
-    player.addEventListener("loadedmetadata", () => { try { player.currentTime = trimSec; } catch (_) {} }, { once: true });
-  }
+  const localStart = trimSec > 0.5 ? trimSec : 0;
   if (window.Hls && Hls.isSupported()) {
     setPlayerStatus(`${pb.item.title} · preparing stream…`);
-    hls = new Hls({ lowLatencyMode: false, enableWorker: true });
+    // The playlist has no end marker while ffmpeg is still writing it, so
+    // hls.js takes it for a live stream and would start near the newest
+    // segment: far into the film on a fast remux. Always say where to start.
+    hls = new Hls({ lowLatencyMode: false, enableWorker: true, startPosition: localStart });
     hls.on(Hls.Events.ERROR, (_, data) => {
       if (data && data.fatal) handleHlsError(data);
     });
@@ -437,6 +438,7 @@ function attachPlan(plan, startSec) {
     hls.attachMedia(player);
     applyTextSubtitle();
   } else if (player.canPlayType("application/vnd.apple.mpegurl")) {
+    if (localStart > 0) player.addEventListener("loadedmetadata", () => { try { player.currentTime = localStart; } catch (_) {} }, { once: true });
     player.src = plan.url;
     applyTextSubtitle();
     player.play().catch(() => setPlayerStatus(`${pb.item.title} · press play to start`));

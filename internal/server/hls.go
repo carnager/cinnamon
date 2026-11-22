@@ -930,6 +930,11 @@ func waitForFileOrDone(ctx context.Context, path string, timeout time.Duration, 
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-done:
+			// A fast remux can write the file and exit between the check above
+			// and this select; only a file that is still missing is a failure.
+			if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+				return nil
+			}
 			return fmt.Errorf("transcoder exited before %s was written", filepath.Base(path))
 		case <-ticker.C:
 		}

@@ -119,6 +119,57 @@ type traktShowSource struct {
 	HistoryDebug     traktPageDebug
 }
 
+// traktShowsFromHistory groups episode history entries into watched shows,
+// one episode per season/number however often it was played.
+func traktShowsFromHistory(history []traktHistoryItem) []traktWatchedShow {
+	var shows []traktWatchedShow
+	byShow := map[string]int{}
+	seen := map[string]struct{}{}
+	for _, entry := range history {
+		if entry.Type != "episode" && entry.Type != "" {
+			continue
+		}
+		if entry.Episode.Number <= 0 {
+			continue
+		}
+		var show traktWatchedShow
+		show.Show.Title = entry.Show.Title
+		show.Show.Year = entry.Show.Year
+		show.Show.IDs = entry.Show.IDs
+		key := traktShowKey(show)
+		if key == "" {
+			continue
+		}
+		episodeKey := fmt.Sprintf("%s|%d|%d", key, entry.Episode.Season, entry.Episode.Number)
+		if _, dup := seen[episodeKey]; dup {
+			continue
+		}
+		seen[episodeKey] = struct{}{}
+		idx, ok := byShow[key]
+		if !ok {
+			idx = len(shows)
+			byShow[key] = idx
+			shows = append(shows, show)
+		}
+		target := &shows[idx]
+		target.Plays++
+		seasonIdx := -1
+		for i := range target.Seasons {
+			if target.Seasons[i].Number == entry.Episode.Season {
+				seasonIdx = i
+				break
+			}
+		}
+		if seasonIdx < 0 {
+			target.Seasons = append(target.Seasons, traktWatchedSeason{Number: entry.Episode.Season})
+			seasonIdx = len(target.Seasons) - 1
+		}
+		season := &target.Seasons[seasonIdx]
+		season.Episodes = append(season.Episodes, traktWatchedEpisode{Number: entry.Episode.Number, Plays: 1, IDs: entry.Episode.IDs})
+	}
+	return shows
+}
+
 // attachTraktEpisodeIDs copies episode IDs from history entries onto the
 // matching watched-show episodes, keyed by the show's Trakt ID.
 func attachTraktEpisodeIDs(shows []traktWatchedShow, history []traktHistoryItem) {
@@ -205,7 +256,10 @@ func (a *App) traktWatchedShows(ctx context.Context, bearer string) (traktShowSo
 	if err != nil {
 		return traktShowSource{}, err
 	}
-	items := mergeTraktShows(syncWatched, userWatched)
+	// Trakt stopped sending "seasons" in /sync/watched/shows (it now returns
+	// show-level counts only), so the history is the only source that still
+	// lists which episodes were watched.
+	items := mergeTraktShows(syncWatched, userWatched, traktShowsFromHistory(history))
 	attachTraktEpisodeIDs(items, history)
 	return traktShowSource{
 		Items:            items,
@@ -393,21 +447,35 @@ func traktShowKey(show traktWatchedShow) string {
 }
 
 func mergeTraktShow(a, b traktWatchedShow) traktWatchedShow {
-	episodes := map[string]struct{}{}
-	for _, season := range a.Seasons {
-		for _, episode := range season.Episodes {
-			episodes[fmt.Sprintf("%d:%d", season.Number, episode.Number)] = struct{}{}
-		}
+	seasons := map[int]int{}
+	for i, season := range a.Seasons {
+		seasons[season.Number] = i
 	}
 	for _, season := range b.Seasons {
+		idx, ok := seasons[season.Number]
+		if !ok {
+			a.Seasons = append(a.Seasons, traktWatchedSeason{Number: season.Number})
+			idx = len(a.Seasons) - 1
+			seasons[season.Number] = idx
+		}
+		target := &a.Seasons[idx]
+		have := map[int]int{}
+		for i, episode := range target.Episodes {
+			have[episode.Number] = i
+		}
 		for _, episode := range season.Episodes {
-			key := fmt.Sprintf("%d:%d", season.Number, episode.Number)
-			if _, ok := episodes[key]; ok {
+			if i, ok := have[episode.Number]; ok {
+				if target.Episodes[i].IDs == (traktIDsPayload{}) {
+					target.Episodes[i].IDs = episode.IDs
+				}
 				continue
 			}
-			a.Seasons = append(a.Seasons, season)
-			episodes[key] = struct{}{}
+			target.Episodes = append(target.Episodes, episode)
+			have[episode.Number] = len(target.Episodes) - 1
 		}
+	}
+	if a.Show.IDs == (traktIDsPayload{}) {
+		a.Show = b.Show
 	}
 	return a
 }

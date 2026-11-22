@@ -163,3 +163,49 @@ func TestWatchedShowEpisodesMatchByHistoryIDsDespiteTranslatedTitle(t *testing.T
 		t.Fatalf("expected local episode 7 via history IDs, got %+v (%s)", item, method)
 	}
 }
+
+// Trakt's /sync/watched/shows now returns show-level counts with no
+// "seasons", so the watched episodes must come from history. Rewatches and
+// the merge with the (empty) watched-shows entry must not duplicate them.
+func TestWatchedShowsBuiltFromHistoryWhenSeasonsMissing(t *testing.T) {
+	var watched []traktWatchedShow
+	if err := json.Unmarshal([]byte(`[{"plays": 3, "show": {"title": "FROM", "year": 2022, "ids": {"trakt": 179735}}, "aired_episodes": 40}]`), &watched); err != nil {
+		t.Fatal(err)
+	}
+	var history []traktHistoryItem
+	if err := json.Unmarshal([]byte(`[
+		{"type": "episode", "show": {"title": "FROM", "ids": {"trakt": 179735}}, "episode": {"season": 1, "number": 1, "ids": {"tvdb": 8808273}}},
+		{"type": "episode", "show": {"title": "FROM", "ids": {"trakt": 179735}}, "episode": {"season": 1, "number": 2, "ids": {"tvdb": 8808282}}},
+		{"type": "episode", "show": {"title": "FROM", "ids": {"trakt": 179735}}, "episode": {"season": 1, "number": 1, "ids": {"tvdb": 8808273}}},
+		{"type": "episode", "show": {"title": "FROM", "ids": {"trakt": 179735}}, "episode": {"season": 2, "number": 1, "ids": {"tvdb": 9553512}}}
+	]`), &history); err != nil {
+		t.Fatal(err)
+	}
+	shows := mergeTraktShows(watched, watched, traktShowsFromHistory(history))
+	attachTraktEpisodeIDs(shows, history)
+	if len(shows) != 1 {
+		t.Fatalf("expected one show, got %d", len(shows))
+	}
+	if got := countTraktEpisodes(shows); got != 3 {
+		t.Fatalf("expected 3 distinct episodes, got %d: %+v", got, shows[0].Seasons)
+	}
+	local := []media.Item{
+		{ID: 1, Kind: "episode", ShowTitle: "From (DE)", SeasonNumber: 1, EpisodeNumber: 1, TVDbID: "8808273"},
+		{ID: 2, Kind: "episode", ShowTitle: "From (DE)", SeasonNumber: 1, EpisodeNumber: 2, TVDbID: "8808282"},
+		{ID: 3, Kind: "episode", ShowTitle: "From (DE)", SeasonNumber: 2, EpisodeNumber: 1, TVDbID: "9553512"},
+	}
+	index := newTraktImportIndex(local)
+	matched := map[int64]bool{}
+	for _, show := range shows {
+		for _, season := range show.Seasons {
+			for _, episode := range season.Episodes {
+				if item, _ := index.matchEpisode(show.Show.Title, show.Show.Year, show.Show.IDs, episode.IDs, season.Number, episode.Number); item != nil {
+					matched[item.ID] = true
+				}
+			}
+		}
+	}
+	if len(matched) != 3 {
+		t.Fatalf("expected all 3 local episodes matched, got %v", matched)
+	}
+}

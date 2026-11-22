@@ -105,16 +105,20 @@ type traktWatchedShow struct {
 		Year  int             `json:"year"`
 		IDs   traktIDsPayload `json:"ids"`
 	} `json:"show"`
-	Seasons []struct {
-		Number   int `json:"number"`
-		Episodes []struct {
-			Number int `json:"number"`
-			Plays  int `json:"plays"`
-			// Not sent by /sync/watched/shows; filled in from the episode
-			// history so matching does not depend on the show title.
-			IDs traktIDsPayload `json:"ids"`
-		} `json:"episodes"`
-	} `json:"seasons"`
+	Seasons []traktWatchedSeason `json:"seasons"`
+}
+
+type traktWatchedSeason struct {
+	Number   int                   `json:"number"`
+	Episodes []traktWatchedEpisode `json:"episodes"`
+}
+
+type traktWatchedEpisode struct {
+	Number int `json:"number"`
+	Plays  int `json:"plays"`
+	// Not sent by Trakt's watched endpoints; filled in from the episode
+	// history so matching does not depend on the show title.
+	IDs traktIDsPayload `json:"ids"`
 }
 
 type traktHistoryItem struct {

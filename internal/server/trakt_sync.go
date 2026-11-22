@@ -295,6 +295,13 @@ func (a *App) traktSyncRecommendationExclusions(userID int64, body map[string]an
 func traktScrobbleBody(item media.Item, progress float64) map[string]any {
 	body := map[string]any{"progress": progress}
 	if item.Kind == "episode" {
+		// Episode IDs identify it outright. The title fallback only works when
+		// the local show title matches Trakt's, which a translated title
+		// ("Die Krankenschwester" for "The Nurse") does not.
+		if ids := traktIDs(item); len(ids) > 0 {
+			body["episode"] = map[string]any{"ids": ids}
+			return body
+		}
 		show := map[string]any{"title": firstNonEmpty(item.ShowTitle, item.Title)}
 		if item.Year > 0 {
 			show["year"] = item.Year

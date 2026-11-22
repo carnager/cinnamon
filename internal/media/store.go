@@ -1996,7 +1996,7 @@ LIMIT ? OFFSET ?`, q, q, limit, offset)
 
 func (s *Store) ActorByName(ctx context.Context, name string) (Actor, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT name, role, thumb, sort_order
+SELECT name, COALESCE(role, ''), COALESCE(thumb, ''), sort_order
 FROM media_actors
 WHERE name = ?
 ORDER BY

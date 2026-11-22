@@ -158,7 +158,7 @@ func (a *App) markWatchedFromTrakt(ctx context.Context, userID int64, index trak
 	for _, show := range shows {
 		for _, season := range show.Seasons {
 			for _, episode := range season.Episodes {
-				item, _ := index.matchEpisode(show.Show.Title, show.Show.Year, show.Show.IDs, traktIDsPayload{}, season.Number, episode.Number)
+				item, _ := index.matchEpisode(show.Show.Title, show.Show.Year, show.Show.IDs, episode.IDs, season.Number, episode.Number)
 				if err := mark(item); err != nil {
 					return len(marked), err
 				}

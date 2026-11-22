@@ -110,6 +110,9 @@ type traktWatchedShow struct {
 		Episodes []struct {
 			Number int `json:"number"`
 			Plays  int `json:"plays"`
+			// Not sent by /sync/watched/shows; filled in from the episode
+			// history so matching does not depend on the show title.
+			IDs traktIDsPayload `json:"ids"`
 		} `json:"episodes"`
 	} `json:"seasons"`
 }

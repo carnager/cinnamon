@@ -1,8 +1,11 @@
 package server
 
 import (
+	"encoding/json"
+
 	"os"
 	"path/filepath"
+	"popcorn/internal/media"
 	"testing"
 )
 
@@ -123,5 +126,40 @@ func writeTestFile(t *testing.T, path string, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A local show titled in German ("Haus des Geldes") never matched Trakt's
+// English title ("Money Heist"), so watched shows imported nothing for it.
+// The episode IDs from history must carry the match instead.
+func TestWatchedShowEpisodesMatchByHistoryIDsDespiteTranslatedTitle(t *testing.T) {
+	var shows []traktWatchedShow
+	if err := json.Unmarshal([]byte(`[{
+		"show": {"title": "Money Heist", "year": 2017, "ids": {"trakt": 117105}},
+		"seasons": [{"number": 1, "episodes": [{"number": 2, "plays": 1}]}]
+	}]`), &shows); err != nil {
+		t.Fatal(err)
+	}
+	var history []traktHistoryItem
+	if err := json.Unmarshal([]byte(`[{
+		"type": "episode",
+		"show": {"title": "Money Heist", "ids": {"trakt": 117105}},
+		"episode": {"season": 1, "number": 2, "ids": {"imdb": "tt6798708", "tvdb": 6056378}}
+	}]`), &history); err != nil {
+		t.Fatal(err)
+	}
+	attachTraktEpisodeIDs(shows, history)
+
+	local := media.Item{ID: 7, Kind: "episode", ShowTitle: "Haus des Geldes", SeasonNumber: 1, EpisodeNumber: 2, TVDbID: "6056378"}
+	index := newTraktImportIndex([]media.Item{local})
+	show := shows[0]
+	episode := show.Seasons[0].Episodes[0]
+
+	if item, _ := index.matchEpisode(show.Show.Title, show.Show.Year, show.Show.IDs, traktIDsPayload{}, 1, 2); item != nil {
+		t.Fatalf("title-only match unexpectedly found %d; test no longer exercises the translated-title case", item.ID)
+	}
+	item, method := index.matchEpisode(show.Show.Title, show.Show.Year, show.Show.IDs, episode.IDs, 1, 2)
+	if item == nil || item.ID != 7 {
+		t.Fatalf("expected local episode 7 via history IDs, got %+v (%s)", item, method)
 	}
 }

@@ -116,6 +116,37 @@ type traktShowSource struct {
 	UserWatched      int
 	SyncWatchedDebug traktPageDebug
 	UserWatchedDebug traktPageDebug
+	HistoryDebug     traktPageDebug
+}
+
+// attachTraktEpisodeIDs copies episode IDs from history entries onto the
+// matching watched-show episodes, keyed by the show's Trakt ID.
+func attachTraktEpisodeIDs(shows []traktWatchedShow, history []traktHistoryItem) {
+	type key struct{ show, season, episode int }
+	ids := map[key]traktIDsPayload{}
+	for _, entry := range history {
+		if entry.Type != "episode" && entry.Type != "" {
+			continue
+		}
+		if entry.Show.IDs.Trakt == 0 {
+			continue
+		}
+		ids[key{entry.Show.IDs.Trakt, entry.Episode.Season, entry.Episode.Number}] = entry.Episode.IDs
+	}
+	for i := range shows {
+		show := shows[i].Show.IDs.Trakt
+		if show == 0 {
+			continue
+		}
+		for j := range shows[i].Seasons {
+			season := &shows[i].Seasons[j]
+			for k := range season.Episodes {
+				if found, ok := ids[key{show, season.Number, season.Episodes[k].Number}]; ok {
+					season.Episodes[k].IDs = found
+				}
+			}
+		}
+	}
 }
 
 func (a *App) traktWatchedMovies(ctx context.Context, bearer string) (traktMovieSource, error) {
@@ -165,8 +196,20 @@ func (a *App) traktWatchedShows(ctx context.Context, bearer string) (traktShowSo
 	if err != nil {
 		return traktShowSource{}, err
 	}
+	// Watched shows list episodes by number only, so matching them fell back
+	// to show title + season/episode, which fails whenever the local show
+	// title is a translation ("Haus des Geldes" vs "Money Heist"). The
+	// episode history carries each episode's own IDs.
+	var history []traktHistoryItem
+	historyDebug, err := a.traktPaged(ctx, bearer, "/sync/history/episodes", &history)
+	if err != nil {
+		return traktShowSource{}, err
+	}
+	items := mergeTraktShows(syncWatched, userWatched)
+	attachTraktEpisodeIDs(items, history)
 	return traktShowSource{
-		Items:            mergeTraktShows(syncWatched, userWatched),
+		Items:            items,
+		HistoryDebug:     historyDebug,
 		SyncWatched:      len(syncWatched),
 		UserWatched:      len(userWatched),
 		SyncWatchedDebug: syncDebug,

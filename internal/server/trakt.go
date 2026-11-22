@@ -356,7 +356,7 @@ func (a *App) traktImportWatchedFor(w http.ResponseWriter, r *http.Request, user
 	for _, show := range showSource.Items {
 		for _, season := range show.Seasons {
 			for _, episode := range season.Episodes {
-				item, method := index.matchEpisode(show.Show.Title, show.Show.Year, show.Show.IDs, traktIDsPayload{}, season.Number, episode.Number)
+				item, method := index.matchEpisode(show.Show.Title, show.Show.Year, show.Show.IDs, episode.IDs, season.Number, episode.Number)
 				if item == nil {
 					summary.EpisodesUnmatched++
 					summary.Debug.UnmatchedEpisodes = appendSample(summary.Debug.UnmatchedEpisodes, fmt.Sprintf("%s S%02dE%02d", show.Show.Title, season.Number, episode.Number))

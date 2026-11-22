@@ -25,7 +25,7 @@ export function playTrailer(item) {
   navigate(`/watch/${encodeURIComponent(item.id)}/trailer`);
 }
 
-// A title without a local trailer: search for one, as the classic client did.
+// A title without a local trailer: search for one.
 export function searchTrailer(item) {
   const query = [item.title, item.year, "trailer"].filter(Boolean).join(" ");
   window.open(`https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`, "_blank", "noopener");

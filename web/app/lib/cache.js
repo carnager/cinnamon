@@ -3,7 +3,7 @@
 // was clicked) renders from memory in the same frame, and refreshes in the
 // background when its data is older than maxAge.
 //
-// Unlike the classic client, writes do not clear the whole cache. A mutation
+// Writes do not clear the whole cache. A mutation
 // updates the entries it touched (setData) or marks a family stale
 // (invalidate), so a progress report during playback no longer throws away
 // every page.

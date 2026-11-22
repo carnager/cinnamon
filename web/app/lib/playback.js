@@ -1,5 +1,4 @@
-// PlaybackSession: everything that makes a title play, ported from the
-// classic client's playback.js with its behaviour intact. The UI is separate
+// PlaybackSession: everything that makes a title play. The UI is separate
 // (views/watch.js) and only reads `state` and calls the public methods.
 //
 // Hard-won rules carried over (each was a real bug):
@@ -44,7 +43,7 @@ export function normalizeLanguage(value) {
   return ({ ger: "de", deu: "de", eng: "en", fre: "fr", fra: "fr", spa: "es", ita: "it", jpn: "ja", kor: "ko" })[lang] || lang;
 }
 
-// Shared with the classic client so a preference set in either applies to both.
+// Key names predate this client; keeping them keeps everyone's saved choices.
 export const preferences = {
   audio: () => store.get("cinnamonPreferredAudio", ""),
   subtitle: () => store.get("cinnamonPreferredSubtitle", "off"),

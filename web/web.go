@@ -2,5 +2,7 @@ package web
 
 import "embed"
 
-//go:embed index.html app.js views.js playback.js thumbhash.js styles.css theater.css hls.min.js remote.html remote.js fonts jassub next
+// app is the web client; the rest are files it (or /remote) loads by fixed URL.
+//
+//go:embed app hls.min.js remote.html remote.js fonts jassub
 var Files embed.FS

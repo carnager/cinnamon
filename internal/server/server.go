@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,7 +21,6 @@ import (
 	"popcorn/internal/config"
 	"popcorn/internal/media"
 	"popcorn/internal/version"
-	"popcorn/web"
 )
 
 type Options struct {
@@ -248,13 +246,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/items/{id}/hls/{session}/{segment}", a.hlsSegment)
 	mux.HandleFunc("DELETE /api/hls/{session}", a.hlsStop)
 	mux.HandleFunc("GET /api/items/{id}/image/{kind}", a.image)
-	mux.Handle("GET /next", nextWebFiles())
-	mux.Handle("GET /next/", nextWebFiles())
-	mux.Handle("GET /web", popcornWebFiles("/web"))
-	mux.Handle("GET /web/", popcornWebFiles("/web"))
-	mux.Handle("GET /popcorn", popcornWebFiles("/popcorn"))
-	mux.Handle("GET /popcorn/", popcornWebFiles("/popcorn"))
-	mux.Handle("/", popcornWebFiles(""))
+	mux.Handle("/", webClient())
 	return logging(a.log, a.authGate(mux))
 }
 
@@ -1008,51 +1000,5 @@ func logging(log *slog.Logger, next http.Handler) http.Handler {
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		log.Debug("request", "method", r.Method, "path", r.URL.Path, "elapsed", time.Since(start))
-	})
-}
-
-// htmlAssetRef matches local css/js references in served HTML so they can be
-// stamped with the build version for cache busting.
-var htmlAssetRef = regexp.MustCompile(`(href|src)="(/[^"?]+\.(?:css|js))"`)
-
-func popcornWebFiles(mount string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") {
-			http.NotFound(w, r)
-			return
-		}
-		path := r.URL.Path
-		if mount != "" {
-			path = strings.TrimPrefix(path, mount)
-		}
-		path = strings.TrimPrefix(path, "/")
-		if path == "" {
-			path = "index.html"
-		}
-		if path == "remote" {
-			path = "remote.html"
-		}
-		if f, err := web.Files.Open(path); err == nil {
-			_ = f.Close()
-		} else {
-			path = "index.html"
-		}
-		if strings.HasSuffix(path, ".html") {
-			w.Header().Set("Cache-Control", "no-store")
-			// Stamp asset URLs with the build version AND build time so a new
-			// deploy invalidates the browser cache without renaming files —
-			// version alone stays identical between two builds of the same
-			// dirty tree, which would leave stale css/js cached for a day.
-			if data, err := web.Files.ReadFile(path); err == nil {
-				ver := url.QueryEscape(version.Version + "-" + version.BuildTime)
-				rewritten := htmlAssetRef.ReplaceAll(data, []byte(`${1}="${2}?v=`+ver+`"`))
-				w.Header().Set("Content-Type", "text/html; charset=utf-8")
-				_, _ = w.Write(rewritten)
-				return
-			}
-		} else {
-			w.Header().Set("Cache-Control", "public, max-age=86400")
-		}
-		http.ServeFileFS(w, r, web.Files, path)
 	})
 }

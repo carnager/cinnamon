@@ -1,5 +1,4 @@
-// HTTP access to popcornd. Shares the session with the classic client: the
-// bearer token lives in localStorage under the same key, and the server's
+// HTTP access to popcornd. The bearer token lives in localStorage; the server's
 // HttpOnly cookie authorises <img>/<video> requests that cannot send headers.
 
 const TOKEN_KEY = "popcornToken";

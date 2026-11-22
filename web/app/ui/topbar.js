@@ -77,7 +77,7 @@ function UserMenu({ user }) {
     await api("/api/auth/logout", { method: "POST" }).catch(() => {});
     setToken("");
     clearAll();
-    location.href = "/next/";
+    location.href = "/";
   };
 
   const initial = (user?.displayName || user?.username || "?").slice(0, 1).toUpperCase();

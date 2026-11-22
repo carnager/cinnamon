@@ -1,5 +1,4 @@
-// App paths (relative to /next). Same shapes as the classic client's URLs, so
-// a link copied from one works in the other by adding or removing /next.
+// App paths.
 
 const enc = encodeURIComponent;
 

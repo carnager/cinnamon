@@ -134,7 +134,7 @@ function AccountSection({ user }) {
     await api("/api/auth/logout", { method: "POST" }).catch(() => {});
     setToken("");
     clearAll();
-    location.href = "/next/";
+    location.href = "/";
   };
   return html`
     <${Group}>
@@ -145,9 +145,6 @@ function AccountSection({ user }) {
       </div>
     <//>
     <${Group} title="Other clients">
-      <${Row} title="Classic web client" description="The previous interface, still available while this one settles in.">
-        <a class="btn btn-ghost" href="/">Open</a>
-      <//>
       <${Row} title="Remote control" description="Control a paired TV from this device.">
         <a class="btn btn-ghost" href="/remote">Open</a>
       <//>

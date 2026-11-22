@@ -1,3 +1,5 @@
+// ThumbHash decoder with a small cache.
+
 /* ThumbHash decoding — Evan Wallace's reference implementation
    (https://github.com/evanw/thumbhash, MIT), trimmed to the decode half and
    adapted from an ES module to a plain script so it loads alongside the rest
@@ -231,3 +233,5 @@ function thumbhashAverageColor(base64) {
   thumbhashColorCache.set(base64, color);
   return color;
 }
+
+export { thumbhashDataURL, thumbhashAverageColor };

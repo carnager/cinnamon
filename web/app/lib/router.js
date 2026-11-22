@@ -1,4 +1,4 @@
-// Client-side routing under /next.
+// Client-side routing.
 //
 // - Every history entry carries a key; scroll position is saved per key, so
 //   Back returns to the same place in a long grid instead of the top.
@@ -8,8 +8,6 @@
 //   makes the following click render from cache.
 
 import { html, useEffect, useLayoutEffect, useReducer, useRef } from "./html.js";
-
-export const BASE = "/next";
 
 let routes = [];
 let current = parse(location);
@@ -28,7 +26,7 @@ function newKey() {
 }
 
 function parse(loc) {
-  const path = loc.pathname.startsWith(BASE) ? loc.pathname.slice(BASE.length) : loc.pathname;
+  const path = loc.pathname;
   const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
   return { path: path || "/", parts, query: new URLSearchParams(loc.search), href: loc.pathname + loc.search };
 }
@@ -78,13 +76,9 @@ function withTransition(update) {
   });
 }
 
-export function href(path) {
-  return BASE + (path.startsWith("/") ? path : `/${path}`);
-}
-
-// navigate to an app path ("/library/movies") or a full /next URL.
+// navigate to an app path ("/library/movies").
 export function navigate(to, { replace = false, morph = null, instant = false } = {}) {
-  const url = to.startsWith(BASE) ? to : href(to);
+  const url = to;
   if (url === current.href && !replace) return;
   const state = { key: newKey() };
   if (morph) {
@@ -177,8 +171,7 @@ export function useLocation() {
 // <Link href="/library/movies"> — client navigation plus hover prefetch.
 // morph: true makes the first [data-morph] element inside the link morph into
 // the destination's poster.
-export function Link({ href: to, children, class: className, morph = false, replace = false, onClick, onPointerEnter, ...rest }) {
-  const url = to.startsWith(BASE) ? to : href(to);
+export function Link({ href: url, children, class: className, morph = false, replace = false, onClick, onPointerEnter, ...rest }) {
   const go = (e) => {
     onClick?.(e);
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;

@@ -1,4 +1,4 @@
-// Cinnamon — next web client. Entry point: routes, login, app shell.
+// Cinnamon web client. Entry point: routes, login, app shell.
 import { html, render, useState, useEffect } from "./lib/html.js";
 import { api, setToken, getToken, onUnauthorized } from "./lib/api.js";
 import { useResource, fetchNow, peek, prefetch, clearAll } from "./lib/cache.js";
@@ -66,7 +66,7 @@ setRoutes([
   {
     name: "notfound",
     match: () => ({}),
-    view: () => html`<main class="page"><${Empty} title="Nothing here">This page doesn't exist. <a href="/next/">Go home</a>.<//></main>`,
+    view: () => html`<main class="page"><${Empty} title="Nothing here">This page doesn't exist. <a href="/">Go home</a>.<//></main>`,
   },
 ]);
 

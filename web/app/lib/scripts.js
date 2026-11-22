@@ -1,4 +1,4 @@
-// Loads a classic (non-module) script once. hls.js and JASSUB are big and only
+// Loads a plain (non-module) script once. hls.js and JASSUB are big and only
 // needed in the player, so they are fetched when it first opens.
 const loaded = new Map();
 

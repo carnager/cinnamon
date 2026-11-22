@@ -575,7 +575,7 @@ a.person:hover strong { color: var(--accent); }
 .set-copy span { color: var(--text-3); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
 .set-control { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; flex: none; max-width: 100%; }
 .set-row.is-stacked .set-control { justify-content: flex-start; }
-.set-rows > .set-actions, .set-rows > ul, .set-rows > .empty { border-top: 0; }
+.set-rows > ul, .set-rows > .empty { border-top: 0; }
 .set-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--line); }
 .set-actions .select-wrap { width: 220px; }
 .set-spacer { flex: 1; }

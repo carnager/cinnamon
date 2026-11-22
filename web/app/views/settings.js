@@ -473,6 +473,27 @@ function HiddenSection() {
 
 // ---- Library (admin) ----------------------------------------------------------
 
+const plural = (n, word) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+
+// A scan's own counts cover only what it looked at: the watcher rescans just
+// the folders that changed, so "found 1" is one new film, not the library's
+// size. The total comes from the letter index, which counts the whole list.
+function LibraryRow({ library, status: s }) {
+  const isTV = library.type === "tv";
+  const { data: letters } = useResource(R.alphabet(library.id, isTV ? "tv" : undefined));
+  const total = letters ? letters.reduce((n, l) => n + (l.count || 0), 0) : null;
+  const size = total == null ? "" : plural(total, isTV ? "show" : "movie");
+  let scan = "Not scanned yet";
+  if (s?.status === "running") scan = `Scanning… ${plural(s.mediaFound || 0, "title")} checked`;
+  else if (s) {
+    const partial = s.message === "incremental";
+    scan = `${partial ? "Last update" : "Last full scan"} ${formatDate(s.finishedAt)}`
+      + (partial ? ` (${plural(s.mediaFound || 0, "title")} checked)` : "")
+      + (s.errors ? ` · ${plural(s.errors, "error")}` : "");
+  }
+  return html`<${Row} title=${library.name} description=${[size, scan].filter(Boolean).join(" · ")} />`;
+}
+
 function LibrarySection() {
   const { data: libraries } = useResource(R.libraries());
   const { data: statuses } = useResource(R.scanStatus());
@@ -498,13 +519,8 @@ function LibrarySection() {
     }
   };
   return html`<${Group} title="Libraries" description="New files are picked up automatically when the watcher is running.">
-    ${(libraries || []).map((library) => {
-      const s = (statuses || []).find((x) => x.libraryId === library.id);
-      const detail = !s ? "Not scanned yet"
-        : s.status === "running" ? `Scanning… ${s.mediaFound || 0} found`
-        : `${s.mediaFound || 0} titles · last scan ${formatDate(s.finishedAt)}${s.errors ? ` · ${s.errors} errors` : ""}`;
-      return html`<${Row} key=${library.id} title=${library.name} description=${detail} />`;
-    })}
+    ${(libraries || []).map((library) => html`<${LibraryRow} key=${library.id} library=${library}
+      status=${(statuses || []).find((x) => x.libraryId === library.id)} />`)}
     <div class="set-actions"><span class="set-spacer"></span>
       <button type="button" class="btn btn-primary" disabled=${starting || running} onClick=${scan}>${running ? "Scanning…" : "Update libraries"}</button>
     </div>

@@ -329,8 +329,11 @@ async function play(item, opts = {}) {
   if (pb.subtitleIndex === undefined) pb.subtitleIndex = preferredSubtitleIndex(pb.subtitleStreams);
   if (pb.subtitleIndex !== null && !isTextSubtitle(pb.subtitleIndex)) pb.subtitleIndex = null;
 
-  let startMs = opts.startMs || 0;
-  if (!startMs && item.kind !== "trailer") {
+  // An explicit startMs (including 0, "Play from beginning") wins; only an
+  // absent one falls back to the saved resume point. `opts.startMs || 0`
+  // made 0 indistinguishable from "not given", so it resumed anyway.
+  let startMs = Number(opts.startMs) || 0;
+  if (opts.startMs == null && item.kind !== "trailer") {
     try {
       const progress = await api(`/api/items/${item.id}/progress`).catch(() => null);
       if (progress && !progress.completed && progress.positionMs > 30000) startMs = progress.positionMs;

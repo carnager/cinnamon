@@ -1439,6 +1439,17 @@ ON CONFLICT(library_id, name) DO UPDATE SET completed_at = CURRENT_TIMESTAMP`, l
 	return err
 }
 
+// ShowNFOPath returns the tvshow.nfo recorded for a show, or "" when the
+// show has none. Its uniqueids are the only show-level IDs the library keeps.
+func (s *Store) ShowNFOPath(ctx context.Context, libraryID, showTitle string) (string, error) {
+	var path sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT nfo_path FROM media_shows WHERE library_id = ? AND show_title = ?`, libraryID, showTitle).Scan(&path)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return path.String, err
+}
+
 func (s *Store) ListShows(ctx context.Context, libraryID, q, genre, sort string, minRating float64, limit, offset int) ([]ShowSummary, error) {
 	return s.ListShowsForUser(ctx, libraryID, q, genre, "", sort, "", 0, minRating, limit, offset)
 }

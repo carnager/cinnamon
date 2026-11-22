@@ -133,31 +133,11 @@ func (a *App) traktSyncRatingItems(userID int64, items []media.Item, rating int,
 		}
 		return
 	}
-	movies := []map[string]any{}
-	episodes := []map[string]any{}
-	for _, item := range items {
-		entry := traktHistoryEntry(item, false, "")
-		if entry == nil {
-			a.log.Debug("trakt rating sync skipped, item cannot be identified", "item", item.ID)
-			continue
-		}
-		if !remove {
-			entry["rating"] = rating
-		}
-		switch item.Kind {
-		case "movie":
-			movies = append(movies, entry)
-		case "episode":
-			episodes = append(episodes, entry)
-		}
+	var extra map[string]any
+	if !remove {
+		extra = map[string]any{"rating": rating}
 	}
-	body := map[string]any{}
-	if len(movies) > 0 {
-		body["movies"] = movies
-	}
-	if len(episodes) > 0 {
-		body["episodes"] = episodes
-	}
+	body := a.traktItemsBody(ctx, items, extra, "rating sync")
 	a.traktSyncRatingsBody(ctx, account.AccessToken, body, remove)
 }
 
@@ -176,10 +156,7 @@ func (a *App) traktSyncRatingShows(userID int64, shows []media.ShowSummary, rati
 	}
 	entries := []map[string]any{}
 	for _, show := range shows {
-		entry := map[string]any{"title": show.Title}
-		if show.Year > 0 {
-			entry["year"] = show.Year
-		}
+		entry := a.traktShowEntry(ctx, show)
 		if !remove {
 			entry["rating"] = rating
 		}
@@ -200,15 +177,16 @@ func (a *App) traktSyncRatingsBody(ctx context.Context, bearer string, body map[
 	}
 	resp, err := a.traktRequest(ctx, bearer, http.MethodPost, path, body)
 	if err != nil {
-		a.log.Debug("trakt rating sync request failed", "action", action, "error", err)
+		a.log.Warn("trakt rating sync request failed", "action", action, "error", err)
 		return
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 16*1024))
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		a.log.Debug("trakt rating sync failed", "action", action, "status", resp.StatusCode, "body", string(respBody))
+		a.log.Warn("trakt rating sync failed", "action", action, "status", resp.StatusCode, "body", string(respBody))
 		return
 	}
+	a.warnTraktNotFound("rating sync", action, respBody)
 	a.log.Debug("trakt rating sync sent", "action", action)
 }
 

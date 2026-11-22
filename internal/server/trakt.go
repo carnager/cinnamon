@@ -741,8 +741,13 @@ func markItemWatched(ctx context.Context, store *media.Store, userID int64, item
 	if duration <= 0 {
 		position = 0
 	}
-	_, err := store.SaveProgress(ctx, userID, item.ID, position, duration, true)
-	return err
+	if _, err := store.SaveProgress(ctx, userID, item.ID, position, duration, true); err != nil {
+		return err
+	}
+	// Same rule as finishing it in the player: a watched title is off the
+	// watchlist. Trakt drops it from its own watchlist when it is watched, so
+	// keeping it here would leave the two lists permanently disagreeing.
+	return store.DeleteItemWatchlist(ctx, userID, item.ID)
 }
 
 func countTraktEpisodes(shows []traktWatchedShow) int {

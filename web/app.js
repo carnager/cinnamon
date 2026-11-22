@@ -159,11 +159,15 @@ function renderUserPanel() {
     actions.append(userMenuAction("Preferred subtitles", playbackPreferenceLabel("subtitle"), () => renderPreferencePage("subtitle"), "subtitles"));
     if (currentUser?.isAdmin) {
       actions.append(userMenuAction("Update libraries", "Scan for new media", (button) => scanLibraries(button).catch(console.error), "refresh"));
-      actions.append(userMenuAction("Server settings", "Users, Trakt and app builds", () => {
+    }
+    // Settings is per-user (Trakt link and imports, home layout, Not
+    // interested); only its Users and app-build sections are admin-only, and
+    // the page gates those itself.
+    actions.append(userMenuAction("Settings",
+      currentUser?.isAdmin ? "Trakt, home layout, users and app builds" : "Trakt and home layout", () => {
         menu.open = false;
         renderSettings().catch(console.error);
       }, "settings"));
-    }
     actions.append(userMenuAction("Logout", "Sign out of Cinnamon", () => {
       menu.open = false;
       logoutUser();

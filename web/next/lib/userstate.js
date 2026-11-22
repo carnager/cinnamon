@@ -16,6 +16,7 @@ const state = {
   watchlistShows: new Set(),
   itemRatings: new Map(),
   showRatings: new Map(),
+  excluded: new Set(),      // "item:12" / "show:<library>:<title>", lower-cased
 };
 const subs = new Set();
 let loading = null;
@@ -38,15 +39,26 @@ async function fetchAllProgress() {
   return rows;
 }
 
+const showExclusionKey = (libraryId, title) =>
+  `show:${String(libraryId || "").trim().toLowerCase()}:${String(title || "").trim().toLowerCase()}`;
+
+function exclusionKey(entry) {
+  if (entry.item) return `item:${Number(entry.item.id)}`;
+  if (entry.show) return showExclusionKey(entry.show.libraryId, entry.show.title);
+  return entry.key || "";
+}
+
 export function loadUserState({ force = false } = {}) {
   if (loading && !force) return loading;
   loading = (async () => {
-    const [progress, shows, watchlist, ratings] = await Promise.all([
+    const [progress, shows, watchlist, ratings, exclusions] = await Promise.all([
       fetchAllProgress(),
       api("/api/progress/tv"),
       api(q("/api/watchlist", { limit: 1000 })),
       api("/api/ratings/user"),
+      api("/api/recommendations/exclusions").catch(() => []),
     ]);
+    state.excluded = new Set((exclusions || []).map(exclusionKey).filter(Boolean));
     state.progress = new Map((progress || []).map((p) => [Number(p.itemId), p]));
     state.shows = new Map((shows || []).map((s) => [showKey(s.libraryId, s.showTitle), s]));
     state.watchlistItems = new Set((watchlist?.items || []).map((i) => Number(i.id)));
@@ -111,6 +123,9 @@ export const isShowWatchlisted = (libraryId, title) => state.watchlistShows.has(
 export const itemRating = (id) => state.itemRatings.get(Number(id)) || 0;
 export const showRating = (libraryId, title) => state.showRatings.get(showKey(libraryId, title)) || 0;
 
+export const isItemExcluded = (id) => state.excluded.has(`item:${Number(id)}`);
+export const isShowExcluded = (libraryId, title) => state.excluded.has(showExclusionKey(libraryId, title));
+
 // Records what the server stored for a playback report, so cards and resume
 // buttons are current when the player closes. No request: the report was it.
 export function noteProgress(saved) {
@@ -149,6 +164,7 @@ export function setItemWatchlisted(item, on) {
     async () => {
       await api(`/api/items/${enc(id)}/watchlist`, { method: on ? "PUT" : "DELETE" });
       invalidate("home");
+      invalidate("watchlist");
     },
     "Watchlist not updated",
   );
@@ -165,6 +181,7 @@ export function setShowWatchlisted(show, on) {
     async () => {
       await api(q("/api/watchlist/tv", { libraryId: show.libraryId, showTitle: show.title }), { method: on ? "PUT" : "DELETE" });
       invalidate("home");
+      invalidate("watchlist");
     },
     "Watchlist not updated",
   );
@@ -270,4 +287,51 @@ export function setShowRating(show, rating) {
     () => api(path, rating > 0 ? { method: "PUT", body: { rating } } : { method: "DELETE" }),
     "Rating not saved",
   );
+}
+
+function setExcluded(key, path, on) {
+  return optimistic(
+    () => {
+      const had = state.excluded.has(key);
+      on ? state.excluded.add(key) : state.excluded.delete(key);
+      return () => (had ? state.excluded.add(key) : state.excluded.delete(key));
+    },
+    async () => {
+      await api(path, { method: on ? "PUT" : "DELETE" });
+      invalidate("home");
+      invalidate("exclusions");
+    },
+    "Not interested not updated",
+  );
+}
+
+export const setItemExcluded = (item, on) =>
+  setExcluded(`item:${Number(item.id)}`, `/api/items/${enc(item.id)}/recommendation-exclusion`, on);
+
+export const setShowExcluded = (show, on) =>
+  setExcluded(
+    showExclusionKey(show.libraryId, show.title),
+    q("/api/recommendations/exclusions/tv", { libraryId: show.libraryId, showTitle: show.title }),
+    on,
+  );
+
+// Seen and Not interested exclude each other, so one choice sets both.
+export async function setItemPreference(item, preference) {
+  if (preference === "not_interested") {
+    if (isItemSeen(item.id) || itemProgress(item.id)) await setItemSeen(item, false);
+    await setItemExcluded(item, true);
+    return;
+  }
+  if (isItemExcluded(item.id)) await setItemExcluded(item, false);
+  await setItemSeen(item, preference === "seen");
+}
+
+export async function setShowPreference(show, preference) {
+  if (preference === "not_interested") {
+    if (showProgress(show.libraryId, show.title)?.hasAnyCompletion) await setShowSeen(show, false);
+    await setShowExcluded(show, true);
+    return;
+  }
+  if (isShowExcluded(show.libraryId, show.title)) await setShowExcluded(show, false);
+  await setShowSeen(show, preference === "seen");
 }

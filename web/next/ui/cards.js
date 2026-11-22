@@ -35,7 +35,7 @@ function Marks({ seen, watchlisted, rating }) {
   </div>`;
 }
 
-export function ItemCard({ item, eager = false, subtitle }) {
+export function ItemCard({ item, eager = false, subtitle, offset }) {
   useUserState();
   const seen = isItemSeen(item.id);
   const watchlisted = isItemWatchlisted(item.id);
@@ -43,7 +43,7 @@ export function ItemCard({ item, eager = false, subtitle }) {
   const meta = subtitle ?? [item.year, formatRuntime(item.durationMs)].filter(Boolean).join(" · ");
   const prime = () => seed(`item:${item.id}`, item);
   return html`
-    <${Link} href=${paths.item(item)} class=${cx("card", seen && "is-seen")} morph onClick=${prime} onPointerEnter=${prime}>
+    <${Link} href=${paths.item(item)} class=${cx("card", seen && "is-seen")} data-offset=${offset} morph onClick=${prime} onPointerEnter=${prime}>
       <div class="card-art">
         <${Artwork} item=${item} kind="poster" width=${400} eager=${eager} morph />
         <${Marks} seen=${seen} watchlisted=${watchlisted} rating=${itemRating(item.id)} />
@@ -63,7 +63,7 @@ export function ItemCard({ item, eager = false, subtitle }) {
     <//>`;
 }
 
-export function ShowCard({ show, eager = false }) {
+export function ShowCard({ show, eager = false, offset }) {
   useUserState();
   const seen = isShowSeen(show.libraryId, show.title);
   const watchlisted = isShowWatchlisted(show.libraryId, show.title);
@@ -73,7 +73,7 @@ export function ShowCard({ show, eager = false }) {
   const meta = [show.year, show.seasonCount ? `${show.seasonCount} season${show.seasonCount === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
   const prime = () => seed(`show:${show.libraryId}:${show.title}`, show);
   return html`
-    <${Link} href=${paths.show(show.libraryId, show.title)} class=${cx("card", seen && "is-seen")} morph onClick=${prime} onPointerEnter=${prime}>
+    <${Link} href=${paths.show(show.libraryId, show.title)} class=${cx("card", seen && "is-seen")} data-offset=${offset} morph onClick=${prime} onPointerEnter=${prime}>
       <div class="card-art">
         <${Artwork} item=${show} kind="poster" width=${400} eager=${eager} morph />
         <${Marks} seen=${seen} watchlisted=${watchlisted} rating=${showRating(show.libraryId, show.title)} />

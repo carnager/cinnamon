@@ -11,8 +11,9 @@ export const paths = {
     `/library/${enc(libraryId)}/show/${enc(title)}${season != null ? `?season=${enc(season)}` : ""}`,
   search: (term) => `/search${term ? `?q=${enc(term)}` : ""}`,
   watchlist: () => "/watchlist",
-  // Not rebuilt yet: these open the classic client.
-  classic: (appPath) => appPath,
+  history: () => "/history",
+  actor: (name) => `/actor/${enc(name)}`,
+  settings: (section) => (section ? `/settings/${enc(section)}` : "/settings"),
 };
 
 export function formatRuntime(ms) {

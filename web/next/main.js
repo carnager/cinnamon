@@ -1,7 +1,7 @@
 // Cinnamon — next web client. Entry point: routes, login, app shell.
 import { html, render, useState, useEffect } from "./lib/html.js";
 import { api, setToken, getToken, onUnauthorized } from "./lib/api.js";
-import { useResource, fetchNow, peek, clearAll } from "./lib/cache.js";
+import { useResource, fetchNow, peek, prefetch, clearAll } from "./lib/cache.js";
 import { R } from "./lib/resources.js";
 import { setRoutes, match, useLocation } from "./lib/router.js";
 import { loadUserState } from "./lib/userstate.js";
@@ -11,7 +11,9 @@ import { HomeView } from "./views/home.js";
 import { LibraryView, prefetchLibrary } from "./views/library.js";
 import { DetailView, prefetchDetail } from "./views/detail.js";
 import { ShowView, prefetchShow } from "./views/show.js";
-import { SearchView, WatchlistView } from "./views/lists.js";
+import { SearchView, WatchlistView, HistoryView, ActorView } from "./views/lists.js";
+import { SettingsView } from "./views/settings.js";
+import { startScanPolling, stopScanPolling } from "./lib/scan.js";
 import { WatchView } from "./views/watch.js";
 
 setRoutes([
@@ -42,17 +44,29 @@ setRoutes([
   },
   {
     name: "watch",
-    match: (p) => (p[0] === "watch" && p[1] ? { itemId: p[1] } : null),
+    match: (p) => (p[0] === "watch" && p[1] ? { itemId: p[1], trailer: p[2] === "trailer" } : null),
     // Not keyed by item: Up Next keeps the same <video> (and fullscreen).
-    view: ({ itemId }) => html`<${WatchView} itemId=${itemId} />`,
+    view: ({ itemId, trailer }) => html`<${WatchView} itemId=${itemId} trailer=${trailer} />`,
     prefetch: ({ itemId }) => prefetchDetail(itemId),
   },
   { name: "search", match: (p) => (p[0] === "search" ? {} : null), view: (_, loc) => html`<${SearchView} query=${loc.query} />` },
   { name: "watchlist", match: (p) => (p[0] === "watchlist" ? {} : null), view: () => html`<${WatchlistView} />` },
+  { name: "history", match: (p) => (p[0] === "history" ? {} : null), view: () => html`<${HistoryView} />` },
+  {
+    name: "actor",
+    match: (p) => (p[0] === "actor" && p[1] ? { name: p.slice(1).join("/") } : null),
+    view: ({ name }) => html`<${ActorView} key=${name} name=${name} />`,
+    prefetch: ({ name }) => prefetch(R.actor(name)),
+  },
+  {
+    name: "settings",
+    match: (p) => (p[0] === "settings" ? { section: p[1] || "" } : null),
+    view: ({ section }, _loc, user) => html`<${SettingsView} section=${section} user=${user} />`,
+  },
   {
     name: "notfound",
     match: () => ({}),
-    view: () => html`<main class="page"><${Empty} title="Nothing here">This part of Cinnamon hasn't been rebuilt yet. <a href="/">Open the classic client</a>.<//></main>`,
+    view: () => html`<main class="page"><${Empty} title="Nothing here">This page doesn't exist. <a href="/next/">Go home</a>.<//></main>`,
   },
 ]);
 
@@ -65,7 +79,7 @@ function Shell({ user }) {
   const overlay = route.name === "home" || route.hero;
   return html`<div class=${`shell route-${route.name}`}>
     ${route.name !== "watch" && html`<${TopBar} user=${user} overlay=${overlay} />`}
-    ${route.view(params, loc)}
+    ${route.view(params, loc, user)}
     <${Toasts} />
   </div>`;
 }
@@ -111,6 +125,7 @@ function App() {
       fetchNow(R.libraries()).catch(() => {});
       fetchNow(R.home()).catch(() => {});
       loadUserState().catch(() => {});
+      startScanPolling();
       setPhase("ready");
     } catch (err) {
       // A 503 is the server unable to check the session, not a rejection.
@@ -123,6 +138,7 @@ function App() {
     return onUnauthorized(() => {
       setToken("");
       clearAll();
+      stopScanPolling();
       setPhase("login");
     });
   }, []);

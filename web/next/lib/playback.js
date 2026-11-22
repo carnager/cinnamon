@@ -63,7 +63,7 @@ export const preferences = {
   setVolume: (v) => store.set("popcornVolume", String(v)),
 };
 
-function preferredAudioIndex(tracks) {
+export function preferredAudioIndex(tracks) {
   const preferred = normalizeLanguage(preferences.audio());
   return tracks.find((t) => preferred && normalizeLanguage(t.language) === preferred)?.index
     ?? tracks.find((t) => t.default)?.index
@@ -71,7 +71,7 @@ function preferredAudioIndex(tracks) {
     ?? null;
 }
 
-function preferredSubtitleIndex(tracks) {
+export function preferredSubtitleIndex(tracks) {
   const preferred = preferences.subtitle();
   if (preferred === "off") return null;
   if (preferred === "default") return tracks.find((t) => t.default)?.index ?? null;
@@ -85,7 +85,7 @@ export function trackLabel(stream) {
   return [lang, stream.title, (stream.codec || "").toUpperCase(), names[stream.channels], stream.forced && "forced"].filter(Boolean).join(" · ");
 }
 
-const isTextSubtitleStream = (s) => TEXT_SUB_CODECS.has(String(s?.codec || "").toLowerCase());
+export const isTextSubtitleStream = (s) => TEXT_SUB_CODECS.has(String(s?.codec || "").toLowerCase());
 const isSSASubtitleStream = (s) => SSA_SUB_CODECS.has(String(s?.codec || "").toLowerCase());
 
 function isFinishedMs(positionMs, durationMs) {
@@ -149,6 +149,7 @@ export class PlaybackSession {
       bandwidthKbps: preferences.bandwidth(),
       nextItem: null,
       upNextDismissed: false,
+      trailer: false,
     };
     video.volume = preferences.volume();
     this.onTime = () => { this.sampleEvidence(); this.emit(); };
@@ -209,13 +210,13 @@ export class PlaybackSession {
 
   // ---- lifecycle ---------------------------------------------------------
 
-  async play(item, { startMs = null } = {}) {
+  async play(item, { startMs = null, audioIndex, subtitleIndex } = {}) {
     // Moving straight to another title (Up Next): save where this one ended.
     if (this.state.item) this.report("stopped", true);
     this.stopMedia();
     this.lastReportedMs = -1;
     this.resetEvidence();
-    this.set({ item, status: `Loading ${item.title}…`, error: false, nextItem: null, upNextDismissed: false, plan: null });
+    this.set({ item, status: `Loading ${item.title}…`, error: false, nextItem: null, upNextDismissed: false, plan: null, trailer: false });
 
     let streams = [];
     try { streams = (await api(`/api/items/${item.id}/streams`)) || []; } catch { streams = []; }
@@ -225,8 +226,11 @@ export class PlaybackSession {
     this.set({
       audioStreams,
       subtitleStreams,
-      audioIndex: preferredAudioIndex(audioStreams),
-      subtitleIndex: preferredSubtitleIndex(subtitleStreams),
+      // A choice made on the detail page wins over the saved preference.
+      audioIndex: audioIndex !== undefined ? audioIndex : preferredAudioIndex(audioStreams),
+      subtitleIndex: subtitleIndex !== undefined && subtitleStreams.some((t) => t.index === subtitleIndex)
+        ? subtitleIndex
+        : subtitleIndex === null ? null : preferredSubtitleIndex(subtitleStreams),
     });
 
     // An explicit start (including 0, "from the beginning") wins; only an
@@ -239,6 +243,21 @@ export class PlaybackSession {
     if (this.disposed) return;
     this.resolveNext(item);
     await this.startPlan(start);
+  }
+
+  // A trailer is a plain file: no plan, no tracks, no progress.
+  playTrailer(item) {
+    if (this.state.item) this.report("stopped", true);
+    this.stopMedia();
+    const v = this.video;
+    this.set({
+      item: { id: item.id, libraryId: item.libraryId, title: item.title, year: item.year, kind: "trailer", durationMs: 0 },
+      trailer: true, status: "", error: false, mode: "direct", plan: null, durationMs: 0, startOffsetSec: 0,
+      audioStreams: [], subtitleStreams: [], audioIndex: null, subtitleIndex: null, nextItem: null,
+    });
+    v.onerror = () => this.set({ status: "Trailer unavailable", error: true });
+    v.src = `/api/items/${encodeURIComponent(item.id)}/trailer`;
+    v.play().catch(() => this.set({ status: "Press play to start" }));
   }
 
   dispose() {
@@ -614,7 +633,7 @@ export class PlaybackSession {
 
   report(state, force = false) {
     const item = this.state.item;
-    if (!item) return;
+    if (!item || item.kind === "trailer") return;
     this.sampleEvidence();
     const positionMs = Math.round(this.logicalSeconds() * 1000);
     const durationMs = this.state.durationMs || item.durationMs || Math.round((this.video.duration || 0) * 1000);

@@ -1,19 +1,20 @@
 // Show page: header like a detail page, season tabs (in the URL, replaced not
 // pushed), and episodes as a list with stills, descriptions and state.
-import { html, cx } from "../lib/html.js";
+import { html, useState, cx } from "../lib/html.js";
 import { useResource, useResources, prefetch, seed } from "../lib/cache.js";
 import { R } from "../lib/resources.js";
 import { Link, replaceQuery } from "../lib/router.js";
-import { paths, formatRuntime, genreList } from "../lib/paths.js";
+import { paths, formatRuntime, formatBytes, resolutionLabel, episodeCode, genreList } from "../lib/paths.js";
+import { Cast } from "../ui/cast.js";
 import {
   useUserState, itemProgress, isItemSeen, resumeFraction,
-  isShowSeen, isShowWatchlisted, showProgress, showRating,
-  setItemSeen, setSeasonSeen, setShowSeen, setShowWatchlisted, setShowRating,
+  isShowSeen, isShowWatchlisted, isShowExcluded, showProgress, showRating,
+  setItemSeen, setSeasonSeen, setShowPreference, setShowWatchlisted, setShowRating,
 } from "../lib/userstate.js";
 import { playItem } from "../lib/play.js";
 import { Artwork } from "../ui/artwork.js";
 import { Icon } from "../ui/icons.js";
-import { RatingStars, ToggleButton, ErrorState, Empty } from "../ui/controls.js";
+import { RatingStars, ToggleButton, ErrorState, Empty, Modal } from "../ui/controls.js";
 
 function EpisodeRow({ episode }) {
   useUserState();
@@ -40,8 +41,22 @@ function EpisodeRow({ episode }) {
   </li>`;
 }
 
+function SeasonDownloads({ show, season, episodes, onClose }) {
+  const label = season ? `Season ${season}` : "Specials";
+  return html`<${Modal} title=${`${show.title} · ${label}`} onClose=${onClose}>
+    <ul class="download-list">
+      ${episodes.map((e) => html`<li key=${e.id}>
+        <span><strong>${episodeCode(e)} · ${e.episodeTitle || e.title}</strong>
+          <small>${[formatBytes(e.sizeBytes), resolutionLabel(e)].filter(Boolean).join(" · ")}</small></span>
+        <a class="btn btn-ghost" href=${`/api/items/${e.id}/download`} download><${Icon} name="download" size=${16} /> Download</a>
+      </li>`)}
+    </ul>
+  <//>`;
+}
+
 function Season({ show, season }) {
   const { data: episodes, error } = useResource(R.episodes(show.libraryId, show.title, season));
+  const [downloads, setDownloads] = useState(false);
   useUserState();
   if (error) return html`<${ErrorState} error=${error} />`;
   if (!episodes) return html`<ul class="episodes is-loading">${[0, 1, 2].map((i) => html`<li class="episode is-skeleton" key=${i}><div class="episode-still"><div class="art"></div></div><div class="episode-text"></div></li>`)}</ul>`;
@@ -50,11 +65,15 @@ function Season({ show, season }) {
   return html`<div class="season">
     <div class="season-tools">
       <span>${episodes.length} episode${episodes.length === 1 ? "" : "s"}</span>
-      <button type="button" class="btn btn-text" onClick=${() => setSeasonSeen(show, season, !allSeen, episodes).catch(() => {})}>
-        <${Icon} name="checkCircle" size=${18} /> ${allSeen ? "Mark season unseen" : "Mark season seen"}
-      </button>
+      <span class="season-actions">
+        <button type="button" class="btn btn-text" onClick=${() => setDownloads(true)}><${Icon} name="download" size=${18} /> Download</button>
+        <button type="button" class="btn btn-text" onClick=${() => setSeasonSeen(show, season, !allSeen, episodes).catch(() => {})}>
+          <${Icon} name="checkCircle" size=${18} /> ${allSeen ? "Mark season unseen" : "Mark season seen"}
+        </button>
+      </span>
     </div>
     <ul class="episodes">${episodes.map((e) => html`<${EpisodeRow} key=${e.id} episode=${e} />`)}</ul>
+    ${downloads && html`<${SeasonDownloads} show=${show} season=${season} episodes=${episodes} onClose=${() => setDownloads(false)} />`}
   </div>`;
 }
 
@@ -75,6 +94,7 @@ export function ShowView({ libraryId, title, query }) {
   useUserState();
   const { data: show, error } = useResource(R.show(libraryId, title));
   const { data: seasons } = useResource(R.seasons(libraryId, title));
+  const { data: actors } = useResource(R.showActors(libraryId, title));
   const seasonNumbers = (seasons || []).map((s) => s.seasonNumber).sort((a, b) => a - b);
   const requested = query.get("season");
   const progress = showProgress(libraryId, title);
@@ -92,6 +112,7 @@ export function ShowView({ libraryId, title, query }) {
 
   const seen = isShowSeen(libraryId, title);
   const watchlisted = isShowWatchlisted(libraryId, title);
+  const excluded = isShowExcluded(libraryId, title);
   const meta = [
     show.year,
     show.seasonCount && `${show.seasonCount} season${show.seasonCount === 1 ? "" : "s"}`,
@@ -113,13 +134,15 @@ export function ShowView({ libraryId, title, query }) {
             <${Icon} name="play" size=${20} /> ${itemProgress(next.id)?.positionMs > 30_000 ? "Resume" : "Play"} S${next.seasonNumber}·E${next.episodeNumber}
           </button>`}
           <${ToggleButton} on=${watchlisted} onLabel="On watchlist" offLabel="Watchlist" icon="bookmark" onIcon="bookmarkFilled" onClick=${() => setShowWatchlisted(show, !watchlisted)} />
-          <${ToggleButton} on=${seen} onLabel="Seen" offLabel="Mark show seen" icon="checkCircle" onClick=${() => setShowSeen(show, !seen)} />
+          <${ToggleButton} on=${seen} onLabel="Seen" offLabel="Mark show seen" icon="checkCircle" onClick=${() => setShowPreference(show, seen ? "unwatched" : "seen")} />
+          <${ToggleButton} on=${excluded} onLabel="Not interested" offLabel="Not interested" icon="eyeOff" onClick=${() => setShowPreference(show, excluded ? "unwatched" : "not_interested")} />
         </div>
         <${RatingStars} value=${showRating(libraryId, title)} onChange=${(n) => setShowRating(show, n)} />
         ${show.overview && html`<div class="overview"><p class="overview-text">${show.overview}</p></div>`}
       </div>
     </div>
     <div class="detail-sections">
+      <${Cast} actors=${actors || show.actors} />
       ${seasonNumbers.length > 1 && html`<nav class="tabs" aria-label="Seasons">
         ${seasonNumbers.map((n) => html`<button type="button" key=${n} class=${cx("tab", n === season && "is-active")} aria-current=${n === season ? "true" : undefined}
           onClick=${() => replaceQuery({ season: n })}

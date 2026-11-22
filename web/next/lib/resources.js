@@ -25,7 +25,12 @@ export const R = {
   },
   genres: (libraryId) => ({ key: `genres:${libraryId}`, fetch: () => api(q("/api/genres", { libraryId })), maxAge: 600_000 }),
   decades: (libraryId, kind) => ({ key: `decades:${libraryId}`, fetch: () => api(q("/api/decades", { libraryId, kind })), maxAge: 600_000 }),
-  alphabet: (libraryId, kind) => ({ key: `alphabet:${libraryId}`, fetch: () => api(q("/api/alphabet", { libraryId, kind })), maxAge: 120_000 }),
+  // Letter index of a title-sorted list; genre/decade narrow it, so they are part of the key.
+  alphabet: (libraryId, kind, { genre = "", decades = "" } = {}) => ({
+    key: `alphabet:${libraryId}:${genre}:${decades}`,
+    fetch: () => api(q("/api/alphabet", { libraryId, kind, genre, decades })),
+    maxAge: 120_000,
+  }),
 
   // A show is addressed by library + title; the shows endpoint filters by q.
   show: (libraryId, title) => ({
@@ -43,12 +48,26 @@ export const R = {
     maxAge: 120_000,
   }),
 
-  search: (term) => ({
-    key: `search:${term}`,
+  showActors: (libraryId, title) => ({ key: `show:${libraryId}:${title}:actors`, fetch: () => api(q("/api/tv/shows/actors", { libraryId, showTitle: title })), maxAge: 600_000 }),
+  actor: (name) => ({ key: `actor:${name}`, fetch: () => api(q("/api/actors", { name })), maxAge: 300_000 }),
+  history: () => ({ key: "history", fetch: () => api(q("/api/history", { limit: 200 })), maxAge: 15_000 }),
+  exclusions: () => ({ key: "exclusions", fetch: () => api("/api/recommendations/exclusions"), maxAge: 15_000 }),
+
+  traktStatus: () => ({ key: "settings:trakt", fetch: () => api("/api/trakt/status"), maxAge: 15_000 }),
+  users: () => ({ key: "settings:users", fetch: () => api("/api/users"), maxAge: 15_000 }),
+  userTrakt: (id) => ({ key: `settings:users:${id}:trakt`, fetch: () => api(`/api/users/${enc(id)}/trakt`), maxAge: 15_000 }),
+  appUpdates: () => ({ key: "settings:apps", fetch: () => api("/api/app/updates"), maxAge: 15_000 }),
+  scanStatus: () => ({ key: "settings:scan", fetch: () => api("/api/scan"), maxAge: 2_000 }),
+  homeCatalog: () => ({ key: "settings:home:catalog", fetch: () => api("/api/home/catalog"), maxAge: 300_000 }),
+  homeLayout: () => ({ key: "settings:home:layout", fetch: () => api("/api/home/layout"), maxAge: 5_000 }),
+
+  // scope: "" (both) | "movies" | "tv". fields: comma list, "" means titles.
+  search: (term, scope = "", fields = "title") => ({
+    key: `search:${term}:${scope}:${fields}`,
     fetch: async () => {
       const [movies, shows] = await Promise.all([
-        api(q("/api/search", { q: term, kind: "movie", limit: 120 })),
-        api(q("/api/tv/shows", { q: term, limit: 60 })),
+        scope === "tv" ? null : api(q("/api/search", { q: term, kind: "movie", limit: 500, fields })),
+        scope === "movies" ? [] : api(q("/api/tv/shows", { q: term, limit: 500, fields })),
       ]);
       return { movies: movies?.items || [], shows: shows || [] };
     },

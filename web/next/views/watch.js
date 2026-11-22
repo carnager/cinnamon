@@ -93,7 +93,7 @@ function UpNext({ next, remaining, onPlay, onCancel }) {
   </aside>`;
 }
 
-export function WatchView({ itemId }) {
+export function WatchView({ itemId, trailer = false }) {
   const { data: item, error } = useResource(R.item(itemId));
   const rootRef = useRef(null);
   const videoRef = useRef(null);
@@ -143,10 +143,12 @@ export function WatchView({ itemId }) {
   }, []);
 
   useEffect(() => {
-    if (!item || startedFor.current === itemId) return;
-    startedFor.current = itemId;
-    sessionRef.current.play(item, { startMs: takeStart(itemId) }).catch(() => {});
-  }, [itemId, item]);
+    const target = `${itemId}:${trailer}`;
+    if (!item || startedFor.current === target) return;
+    startedFor.current = target;
+    if (trailer) sessionRef.current.playTrailer(item);
+    else sessionRef.current.play(item, takeStart(itemId)).catch(() => {});
+  }, [itemId, item, trailer]);
 
   useEffect(() => {
     if (item) document.title = item.kind === "episode" ? `${item.showTitle} ${episodeCode(item)}` : item.title;
@@ -235,7 +237,7 @@ export function WatchView({ itemId }) {
   const isEpisode = shownItem?.kind === "episode";
   const title = isEpisode ? shownItem.showTitle : shownItem?.title;
   const subtitle = isEpisode ? [episodeCode(shownItem), shownItem.episodeTitle].filter(Boolean).join(" · ") : shownItem?.year;
-  const modeLabel = !st?.plan ? "" : st.mode === "direct" ? "Direct" : st.bandwidthKbps ? `${st.bandwidthKbps / 1000} Mbps` : st.mode === "remux" ? "Remux" : "Transcode";
+  const modeLabel = st?.trailer ? "Trailer" : !st?.plan ? "" : st.mode === "direct" ? "Direct" : st.bandwidthKbps ? `${st.bandwidthKbps / 1000} Mbps` : st.mode === "remux" ? "Remux" : "Transcode";
   const statusText = error ? error.message : st?.status;
   const statusIsError = Boolean(error || st?.error);
 
@@ -288,7 +290,7 @@ export function WatchView({ itemId }) {
         ${st?.subtitleStreams.length > 0 && html`<${PlayerMenu} id="subs" open=${menu} setOpen=${setMenu} label="Subtitles" button=${glyphs.subtitles}
           options=${[{ key: "off", label: "Off", index: null }, ...st.subtitleStreams.map((t) => ({ key: t.index, label: trackLabel(t), index: t.index }))]}
           isActive=${(o) => o.index === st.subtitleIndex} onPick=${(o) => s.setSubtitle(o.index)} />`}
-        ${st && html`<${PlayerMenu} id="quality" open=${menu} setOpen=${setMenu} label="Quality"
+        ${st && !st.trailer && html`<${PlayerMenu} id="quality" open=${menu} setOpen=${setMenu} label="Quality"
           button=${html`<span class="pbtn-text">${QUALITY_OPTIONS.find((o) => o.kbps === st.bandwidthKbps)?.label || "Auto"}</span>`}
           options=${QUALITY_OPTIONS.map((o) => ({ ...o, key: o.kbps ?? "auto" }))}
           isActive=${(o) => o.kbps === st.bandwidthKbps} onPick=${(o) => s.setQuality(o.kbps)} />`}

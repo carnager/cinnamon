@@ -87,9 +87,9 @@ function UserMenu({ user }) {
     </button>
     ${open && html`<div class="menu" role="menu">
       <div class="menu-head"><strong>${user?.displayName || user?.username}</strong><span>${user?.isAdmin ? "Admin" : "User"}</span></div>
-      <a role="menuitem" href="/history"><${Icon} name="history" size=${18} /> Watch history <em>classic</em></a>
-      <a role="menuitem" href="/settings"><${Icon} name="settings" size=${18} /> Settings <em>classic</em></a>
-      <a role="menuitem" href="/"><${Icon} name="layers" size=${18} /> Open classic client</a>
+      <${Link} role="menuitem" href=${paths.history()} onClick=${() => setOpen(false)}><${Icon} name="history" size=${18} /> Watch history<//>
+      <${Link} role="menuitem" href=${paths.settings("playback")} onClick=${() => setOpen(false)}><${Icon} name="play" size=${18} /> Playback<//>
+      <${Link} role="menuitem" href=${paths.settings()} onClick=${() => setOpen(false)}><${Icon} name="settings" size=${18} /> Settings<//>
       <button type="button" role="menuitem" onClick=${logout}><${Icon} name="logout" size=${18} /> Sign out</button>
     </div>`}
   </div>`;

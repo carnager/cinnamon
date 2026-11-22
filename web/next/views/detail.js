@@ -12,15 +12,17 @@ import {
   paths, formatRuntime, formatClock, formatBytes, endsAt, resolutionLabel, episodeCode, genreList,
 } from "../lib/paths.js";
 import {
-  useUserState, itemProgress, isItemSeen, isItemWatchlisted, itemRating,
-  setItemSeen, setItemWatchlisted, setItemRating,
+  useUserState, itemProgress, isItemSeen, isItemWatchlisted, isItemExcluded, itemRating,
+  setItemSeen, setItemWatchlisted, setItemRating, setItemPreference,
 } from "../lib/userstate.js";
-import { playItem } from "../lib/play.js";
+import { playItem, playTrailer, searchTrailer } from "../lib/play.js";
+import { preferredAudioIndex, preferredSubtitleIndex, isTextSubtitleStream, trackLabel as playerTrackLabel } from "../lib/playback.js";
+import { Cast } from "../ui/cast.js";
 import { Artwork } from "../ui/artwork.js";
 import { ItemCard } from "../ui/cards.js";
 import { Shelf } from "../ui/shelf.js";
 import { Icon } from "../ui/icons.js";
-import { RatingStars, ToggleButton, Empty, ErrorState } from "../ui/controls.js";
+import { RatingStars, ToggleButton, SelectField, Empty, ErrorState } from "../ui/controls.js";
 
 function Overview({ text, tagline }) {
   const [open, setOpen] = useState(false);
@@ -65,6 +67,7 @@ function TechDetails({ item, streams }) {
     ["Director", item.directors],
     ["Writers", item.writers],
     ["Studio", item.studios],
+    ["Country", item.countries],
   ].filter(([, v]) => v && (!Array.isArray(v) || v.length));
   if (!rows.length) return null;
   return html`<section class="section tech">
@@ -73,14 +76,21 @@ function TechDetails({ item, streams }) {
   </section>`;
 }
 
-function Cast({ actors }) {
-  if (!actors?.length) return null;
-  return html`<${Shelf} title="Cast" class="shelf-cast">
-    ${actors.slice(0, 30).map((a) => html`<a key=${a.name} class="person" href=${`/library?actor=${encodeURIComponent(a.name)}`} onClick=${(e) => e.preventDefault()}>
-      <span class="person-photo" style=${`background-image:url(/api/actors/image?name=${encodeURIComponent(a.name)})`}>${a.name.slice(0, 1)}</span>
-      <strong>${a.name}</strong>${a.role && html`<span>${a.role}</span>`}
-    </a>`)}
-  <//>`;
+// Audio and subtitle choice before pressing Play, preset from preferences.
+function TrackPicker({ streams, tracks, setTracks }) {
+  const audio = (streams || []).filter((t) => t.type === "audio");
+  const subs = (streams || []).filter((t) => t.type === "subtitle" && isTextSubtitleStream(t));
+  if (audio.length < 2 && !subs.length) return null;
+  const audioValue = tracks.audioIndex !== undefined ? tracks.audioIndex : preferredAudioIndex(audio);
+  const subValue = tracks.subtitleIndex !== undefined ? tracks.subtitleIndex : preferredSubtitleIndex(subs);
+  return html`<div class="track-picker">
+    ${audio.length > 1 && html`<${SelectField} label="Audio" value=${audioValue ?? ""}
+      options=${audio.map((t) => [t.index, playerTrackLabel(t)])}
+      onChange=${(v) => setTracks((t) => ({ ...t, audioIndex: Number(v) }))} />`}
+    ${subs.length > 0 && html`<${SelectField} label="Subtitles" value=${subValue ?? ""}
+      options=${[["", "Off"], ...subs.map((t) => [t.index, playerTrackLabel(t)])]}
+      onChange=${(v) => setTracks((t) => ({ ...t, subtitleIndex: v === "" ? null : Number(v) }))} />`}
+  </div>`;
 }
 
 export function DetailView({ itemId, query }) {
@@ -89,6 +99,8 @@ export function DetailView({ itemId, query }) {
   const { data: streams } = useResource(R.itemStreams(itemId));
   const { data: ratings } = useResource(R.itemRatings(itemId));
   const { data: similar } = useResource(item?.kind === "movie" ? R.itemSimilar(itemId) : null);
+  const { data: sidecars } = useResource(R.itemSidecars(itemId));
+  const [tracks, setTracks] = useState({});
   if (error) return html`<main class="page"><${ErrorState} error=${error} /></main>`;
   if (!item) return html`<main class="page detail is-loading"><div class="detail-backdrop"></div></main>`;
 
@@ -98,6 +110,7 @@ export function DetailView({ itemId, query }) {
   const remaining = Math.max(0, (item.durationMs || 0) - resumeMs);
   const seen = isItemSeen(item.id);
   const watchlisted = isItemWatchlisted(item.id);
+  const excluded = isItemExcluded(item.id);
   const title = isEpisode ? item.episodeTitle || item.title : item.title;
   const meta = [
     isEpisode ? episodeCode(item) : item.year,
@@ -120,15 +133,19 @@ export function DetailView({ itemId, query }) {
         <${ExternalRatings} ratings=${ratings} fallback=${item.rating} />
         ${!isEpisode && genreList(item.genres).length > 0 && html`<p class="genres">${genreList(item.genres).map((g) => html`<span>${g}</span>`)}</p>`}
         <div class="actions">
-          <button type="button" class="btn btn-primary btn-lg" onClick=${() => playItem(item)}>
+          <button type="button" class="btn btn-primary btn-lg" onClick=${() => playItem(item, { tracks })}>
             <${Icon} name="play" size=${20} /> ${resumeMs ? `Resume ${formatClock(resumeMs)}` : "Play"}
           </button>
-          ${resumeMs > 0 && html`<button type="button" class="btn btn-glass" onClick=${() => playItem(item, { fromStart: true })}><${Icon} name="restart" size=${18} /> From start</button>`}
+          ${resumeMs > 0 && html`<button type="button" class="btn btn-glass" onClick=${() => playItem(item, { fromStart: true, tracks })}><${Icon} name="restart" size=${18} /> From start</button>`}
+          <button type="button" class="btn btn-ghost" onClick=${() => (sidecars?.trailer ? playTrailer(item) : searchTrailer(item))}><${Icon} name="film" size=${18} /> Trailer</button>
           <${ToggleButton} on=${watchlisted} onLabel="On watchlist" offLabel="Watchlist" icon="bookmark" onIcon="bookmarkFilled" onClick=${() => setItemWatchlisted(item, !watchlisted)} />
-          <${ToggleButton} on=${seen} onLabel="Seen" offLabel="Mark seen" icon="checkCircle" onClick=${() => setItemSeen(item, !seen)} />
-          <a class="btn btn-icon" href=${`/api/items/${item.id}/download`} download title="Download" aria-label="Download"><${Icon} name="download" size=${18} /></a>
+          <${ToggleButton} on=${seen} onLabel="Seen" offLabel="Mark seen" icon="checkCircle" onClick=${() => setItemPreference(item, seen ? "unwatched" : "seen")} />
+          ${!isEpisode && html`<${ToggleButton} on=${excluded} onLabel="Not interested" offLabel="Not interested" icon="eyeOff" onClick=${() => setItemPreference(item, excluded ? "unwatched" : "not_interested")} />`}
+          <a class="btn btn-icon" href=${`/api/items/${item.id}/download`} download title=${`Download${item.sizeBytes ? ` · ${formatBytes(item.sizeBytes)}` : ""}`} aria-label="Download"><${Icon} name="download" size=${18} /></a>
         </div>
+        <${TrackPicker} streams=${streams} tracks=${tracks} setTracks=${setTracks} />
         ${resumeMs > 0 && html`<div class="resume-bar" title=${`${Math.round((resumeMs / item.durationMs) * 100)}% watched`}><span style=${`width:${(resumeMs / item.durationMs) * 100}%`}></span></div>`}
+        ${progress && html`<button type="button" class="btn btn-text reset-progress" onClick=${() => setItemSeen(item, false).catch(() => {})}>Reset progress</button>`}
         <${RatingStars} value=${itemRating(item.id)} onChange=${(n) => setItemRating(item, n)} />
         <${Overview} text=${item.overview} tagline=${item.tagline} />
       </div>

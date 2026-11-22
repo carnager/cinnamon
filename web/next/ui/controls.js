@@ -1,5 +1,5 @@
 // Small shared controls: rating stars, toggle buttons, toasts, empty states.
-import { html, useState, useEffect, cx } from "../lib/html.js";
+import { html, useState, useEffect, useRef, cx } from "../lib/html.js";
 import { onToast } from "../lib/toast.js";
 import { Icon } from "./icons.js";
 
@@ -56,4 +56,39 @@ export function Empty({ title, children }) {
 export function ErrorState({ error, retry }) {
   return html`<div class="empty is-error"><strong>Couldn't load this</strong><p>${error?.message || String(error)}</p>
     ${retry && html`<button type="button" class="btn btn-ghost" onClick=${retry}>Try again</button>`}</div>`;
+}
+
+export function Modal({ title, onClose, children }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const previous = document.activeElement;
+    ref.current?.focus();
+    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    document.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      previous?.focus?.();
+    };
+  }, []);
+  return html`<div class="modal-backdrop" onPointerDown=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div class="modal" role="dialog" aria-modal="true" aria-label=${title} tabindex="-1" ref=${ref}>
+      <header class="modal-head"><h2>${title}</h2>
+        <button type="button" class="btn btn-icon" aria-label="Close" onClick=${onClose}><${Icon} name="x" size=${18} /></button>
+      </header>
+      <div class="modal-body">${children}</div>
+    </div>
+  </div>`;
+}
+
+// A labelled native select: keyboard, touch and long lists for free.
+export function SelectField({ label, value, options, onChange, class: className }) {
+  return html`<label class=${cx("select-field", className)}>
+    <span>${label}</span>
+    <span class="select-wrap">
+      <select value=${value} onChange=${(e) => onChange(e.currentTarget.value)}>
+        ${options.map(([v, text]) => html`<option key=${v} value=${v} selected=${String(v) === String(value)}>${text}</option>`)}
+      </select>
+      <${Icon} name="chevronDown" size=${16} />
+    </span>
+  </label>`;
 }

@@ -1,18 +1,29 @@
-// Playback entry point. The player has not been rebuilt yet, so for now this
-// hands off to the classic client's page for the item, where Play works.
-// Every Play button goes through here, so swapping in the new player later
-// touches only this file.
-import { toast } from "./toast.js";
+// Playback entry point: every Play button comes through here. The player is a
+// route (/watch/<id>), so Back closes it and returns to the page it came from.
+import { navigate } from "./router.js";
+import { seed } from "./cache.js";
 
-export function playItem(item, { fromStart = false } = {}) {
+// How the next player mount should start. Kept out of the URL so reloading a
+// player page resumes from the saved position instead of repeating "from start".
+let pendingStart = null;
+let openedInApp = false;
+
+export function playItem(item, { fromStart = false, replace = false, instant = false } = {}) {
   if (!item?.id) return;
-  if (fromStart) toast("Opening the classic player — choose “Play from beginning” there.", { ms: 3000 });
-  const base = `/library/${encodeURIComponent(item.libraryId)}/item/${encodeURIComponent(item.id)}`;
-  const params = new URLSearchParams();
-  if (item.kind === "episode" && item.showTitle) {
-    params.set("show", item.showTitle);
-    if (item.seasonNumber != null) params.set("season", String(item.seasonNumber));
-  }
-  const qs = params.toString();
-  window.location.href = base + (qs ? `?${qs}` : "");
+  seed(`item:${item.id}`, item);
+  pendingStart = fromStart ? { itemId: String(item.id), startMs: 0 } : null;
+  openedInApp = true;
+  navigate(`/watch/${encodeURIComponent(item.id)}`, { replace, instant });
+}
+
+// The start position requested for this item, once; null means "resume".
+export function takeStart(itemId) {
+  const pending = pendingStart;
+  pendingStart = null;
+  return pending && pending.itemId === String(itemId) ? pending.startMs : null;
+}
+
+// True when Back has an in-app page to return to (not a direct link or reload).
+export function hasPlayerOrigin() {
+  return openedInApp;
 }

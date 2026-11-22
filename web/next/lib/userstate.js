@@ -111,6 +111,16 @@ export const isShowWatchlisted = (libraryId, title) => state.watchlistShows.has(
 export const itemRating = (id) => state.itemRatings.get(Number(id)) || 0;
 export const showRating = (libraryId, title) => state.showRatings.get(showKey(libraryId, title)) || 0;
 
+// Records what the server stored for a playback report, so cards and resume
+// buttons are current when the player closes. No request: the report was it.
+export function noteProgress(saved) {
+  const id = Number(saved.itemId);
+  if (saved.completed || saved.positionMs > 0) state.progress.set(id, saved);
+  // Finishing a title takes it off the watchlist on the server.
+  if (saved.completed) state.watchlistItems.delete(id);
+  emit();
+}
+
 // ---- writes ----------------------------------------------------------------
 
 async function optimistic(apply, request, failureMessage) {

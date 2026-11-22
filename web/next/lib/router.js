@@ -83,7 +83,7 @@ export function href(path) {
 }
 
 // navigate to an app path ("/library/movies") or a full /next URL.
-export function navigate(to, { replace = false, morph = null } = {}) {
+export function navigate(to, { replace = false, morph = null, instant = false } = {}) {
   const url = to.startsWith(BASE) ? to : href(to);
   if (url === current.href && !replace) return;
   const state = { key: newKey() };
@@ -98,11 +98,14 @@ export function navigate(to, { replace = false, morph = null } = {}) {
     morph.style.viewTransitionName = "morph";
     morph.setAttribute("data-vt-temp", "");
   }
-  withTransition(() => {
+  const update = () => {
     if (replace) history.replaceState(state, "", url);
     else history.pushState(state, "", url);
     return commit(parse(location), { key: state.key, restore: false });
-  });
+  };
+  // instant: no cross-fade (one episode rolling into the next in the player).
+  if (instant) update();
+  else withTransition(update);
 }
 
 // Updates the query string of the current entry without a new history entry

@@ -12,6 +12,7 @@ import { LibraryView, prefetchLibrary } from "./views/library.js";
 import { DetailView, prefetchDetail } from "./views/detail.js";
 import { ShowView, prefetchShow } from "./views/show.js";
 import { SearchView, WatchlistView } from "./views/lists.js";
+import { WatchView } from "./views/watch.js";
 
 setRoutes([
   {
@@ -39,6 +40,13 @@ setRoutes([
     view: ({ libraryId }, loc) => html`<${LibraryView} libraryId=${libraryId} query=${loc.query} />`,
     prefetch: ({ libraryId }, loc) => prefetchLibrary((peek("libraries") || []).find((l) => l.id === libraryId), loc?.query),
   },
+  {
+    name: "watch",
+    match: (p) => (p[0] === "watch" && p[1] ? { itemId: p[1] } : null),
+    // Not keyed by item: Up Next keeps the same <video> (and fullscreen).
+    view: ({ itemId }) => html`<${WatchView} itemId=${itemId} />`,
+    prefetch: ({ itemId }) => prefetchDetail(itemId),
+  },
   { name: "search", match: (p) => (p[0] === "search" ? {} : null), view: (_, loc) => html`<${SearchView} query=${loc.query} />` },
   { name: "watchlist", match: (p) => (p[0] === "watchlist" ? {} : null), view: () => html`<${WatchlistView} />` },
   {
@@ -56,7 +64,7 @@ function Shell({ user }) {
   }, [route.name]);
   const overlay = route.name === "home" || route.hero;
   return html`<div class=${`shell route-${route.name}`}>
-    <${TopBar} user=${user} overlay=${overlay} />
+    ${route.name !== "watch" && html`<${TopBar} user=${user} overlay=${overlay} />`}
     ${route.view(params, loc)}
     <${Toasts} />
   </div>`;

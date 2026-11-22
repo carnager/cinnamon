@@ -111,7 +111,7 @@ data class PlaybackPlan(
 // means offer to resume.
 fun progressFinished(positionMs: Long, durationMs: Long): Boolean {
     if (durationMs <= 0 || positionMs <= 0) return false
-    return durationMs - positionMs <= 90_000 || positionMs.toDouble() / durationMs.toDouble() >= 0.92
+    return durationMs - positionMs <= 90_000 || positionMs.toDouble() / durationMs.toDouble() >= 0.85
 }
 
 fun progressResumable(positionMs: Long, durationMs: Long): Boolean {

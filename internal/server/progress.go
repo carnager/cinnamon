@@ -323,5 +323,5 @@ func isFinished(positionMS, durationMS int64) bool {
 	if durationMS-positionMS <= 90_000 {
 		return true
 	}
-	return float64(positionMS)/float64(durationMS) >= 0.92
+	return float64(positionMS)/float64(durationMS) >= 0.85
 }

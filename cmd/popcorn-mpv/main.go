@@ -1016,7 +1016,7 @@ func isFinished(positionMS, durationMS int64) bool {
 	if durationMS <= 0 || positionMS <= 0 {
 		return false
 	}
-	return durationMS-positionMS <= 90_000 || positionMS*100 >= durationMS*92
+	return durationMS-positionMS <= 90_000 || positionMS*100 >= durationMS*85
 }
 
 func envInt(name string, fallback int) int {

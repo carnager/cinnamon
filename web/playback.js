@@ -251,7 +251,7 @@ function totalSeconds() {
 
 function isFinishedMs(positionMs, durationMs) {
   if (!durationMs || durationMs <= 0) return false;
-  return durationMs - positionMs <= 90000 || positionMs >= durationMs * 0.92;
+  return durationMs - positionMs <= 90000 || positionMs >= durationMs * 0.85;
 }
 
 /* ── Open / close ── */

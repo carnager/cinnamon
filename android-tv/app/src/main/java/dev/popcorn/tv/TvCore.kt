@@ -118,7 +118,7 @@ fun fmtClock(ms: Long): String {
 // progressCompleted: at/near the end of the file.
 fun progressFinished(positionMs: Long, durationMs: Long): Boolean {
     if (durationMs <= 0 || positionMs <= 0) return false
-    return durationMs - positionMs <= 90_000 || positionMs.toDouble() / durationMs.toDouble() >= 0.92
+    return durationMs - positionMs <= 90_000 || positionMs.toDouble() / durationMs.toDouble() >= 0.85
 }
 
 // progressResumable is true when there is a mid-file position worth resuming,

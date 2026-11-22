@@ -370,7 +370,12 @@ fun PlayerScreen(
 
     fun progressCompleted(positionMs: Long, durationMs: Long): Boolean {
         if (durationMs <= 0 || positionMs <= 0) return false
-        return durationMs - positionMs <= 90_000 || positionMs.toDouble() / durationMs.toDouble() >= 0.92
+        // Past the start of the end credits the story is over, however long
+        // the credits run. Same sanity bounds as the Up Next card.
+        val credits = if (planUsesHls) null else mpvPlayer?.creditsStartMs()
+            ?.takeIf { it > durationMs * 0.7 && it < durationMs - 10_000 }
+        if (credits != null && positionMs >= credits) return true
+        return durationMs - positionMs <= 90_000 || positionMs.toDouble() / durationMs.toDouble() >= 0.85
     }
 
     fun sampleProgressEvidence() {

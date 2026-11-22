@@ -174,6 +174,8 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/users/{id}/avatar", a.userAvatar)
 	mux.HandleFunc("POST /api/users/{id}/avatar", a.uploadUserAvatar)
 	mux.HandleFunc("DELETE /api/users/{id}/avatar", a.deleteUserAvatar)
+	mux.HandleFunc("GET /api/users/{id}/trakt", a.adminUserTraktStatus)
+	mux.HandleFunc("POST /api/users/{id}/trakt/import-watched", a.adminTraktImportWatched)
 	mux.HandleFunc("GET /api/progress", a.progressList)
 	mux.HandleFunc("GET /api/history", a.watchHistory)
 	mux.HandleFunc("GET /api/progress/tv", a.progressShows)

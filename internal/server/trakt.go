@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -229,7 +230,53 @@ func (a *App) traktImportWatched(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	account, err := a.traktAccountForRequest(r.Context(), user.ID)
+	a.traktImportWatchedFor(w, r, user.ID)
+}
+
+// adminUserTraktStatus and adminTraktImportWatched let an admin see and run
+// another user's Trakt import from the Users page. Trakt links are per-user,
+// so without these an admin could only ever act on their own account.
+func (a *App) adminUserTraktStatus(w http.ResponseWriter, r *http.Request) {
+	userID, ok := a.adminTargetUser(w, r)
+	if !ok {
+		return
+	}
+	account, err := a.store.TraktAccount(r.Context(), userID)
+	connected := err == nil
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"configured": a.traktConfigured(),
+		"connected":  connected,
+		"expiresAt":  account.ExpiresAt,
+	})
+}
+
+func (a *App) adminTraktImportWatched(w http.ResponseWriter, r *http.Request) {
+	userID, ok := a.adminTargetUser(w, r)
+	if !ok {
+		return
+	}
+	a.log.Info("admin trakt watched import", "user", userID)
+	a.traktImportWatchedFor(w, r, userID)
+}
+
+func (a *App) adminTargetUser(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	if _, ok := a.requireAdmin(w, r); !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid user id", http.StatusBadRequest)
+		return 0, false
+	}
+	return id, true
+}
+
+func (a *App) traktImportWatchedFor(w http.ResponseWriter, r *http.Request, userID int64) {
+	account, err := a.traktAccountForRequest(r.Context(), userID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "trakt account is not linked", http.StatusConflict)
@@ -297,7 +344,7 @@ func (a *App) traktImportWatched(w http.ResponseWriter, r *http.Request) {
 		if _, ok := seen[item.ID]; ok {
 			continue
 		}
-		if err := markItemWatched(r.Context(), a.store, user.ID, *item); err != nil {
+		if err := markItemWatched(r.Context(), a.store, userID, *item); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -318,7 +365,7 @@ func (a *App) traktImportWatched(w http.ResponseWriter, r *http.Request) {
 				if _, ok := seen[item.ID]; ok {
 					continue
 				}
-				if err := markItemWatched(r.Context(), a.store, user.ID, *item); err != nil {
+				if err := markItemWatched(r.Context(), a.store, userID, *item); err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}

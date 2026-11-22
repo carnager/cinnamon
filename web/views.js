@@ -535,8 +535,40 @@ function userEditorCard(user) {
     }
   });
 
-  card.append(head, identity, form);
+  card.append(head, identity, form, userTraktBlock(user));
   return card;
+}
+
+// Trakt links are per-user, so this is the only place an admin can see or
+// run another user's Trakt import.
+function userTraktBlock(user) {
+  const block = el("div", "user-trakt");
+  block.append(el("h3", null, "Trakt.tv"));
+  const statusLine = el("div", "settings-copy", "Checking…");
+  const output = el("div", "settings-output");
+  block.append(statusLine);
+  api(`/api/users/${user.id}/trakt`).then((status) => {
+    if (!status?.configured) {
+      statusLine.textContent = "Trakt is not configured on this server.";
+      return;
+    }
+    if (!status.connected) {
+      statusLine.textContent = "Not linked. The user links their own account under Settings.";
+      return;
+    }
+    statusLine.textContent = `Linked${status.expiresAt ? ` · token valid until ${formatDateTime(status.expiresAt)}` : ""}`;
+    const importSeen = el("button", "secondary", "Import seen status");
+    importSeen.type = "button";
+    importSeen.addEventListener("click", () => runSettingsAction(importSeen, output, async () => {
+      const summary = await api(`/api/users/${user.id}/trakt/import-watched`, { method: "POST" });
+      if (Number(user.id) === Number(currentUser?.id)) await refreshMediaState();
+      return renderTraktWatchedSummary(summary);
+    }));
+    block.append(importSeen, output);
+  }).catch((err) => {
+    statusLine.textContent = cleanError(err);
+  });
+  return block;
 }
 
 function avatarControls(user, isCurrent) {
@@ -771,6 +803,7 @@ function traktSection(status) {
       title: "Import from Trakt",
       description: "Pull watched history, watchlist, ratings, or hidden recommendations into Cinnamon.",
       control: [importSeen, importWatchlist, importRatings, importHidden],
+      stacked: true,
     }));
 
     const runCollectionSync = (button, prune) => runSettingsAction(button, output, async () => {

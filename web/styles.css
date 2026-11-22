@@ -1895,6 +1895,24 @@ button, input, select { font: inherit; }
   gap: 12px;
 }
 
+.user-trakt {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+}
+
+.user-trakt h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.user-trakt .settings-output:empty {
+  display: none;
+}
+
 .user-form .primary {
   min-width: 110px;
   min-height: 42px;

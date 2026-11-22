@@ -248,6 +248,8 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /api/items/{id}/hls/{session}/{segment}", a.hlsSegment)
 	mux.HandleFunc("DELETE /api/hls/{session}", a.hlsStop)
 	mux.HandleFunc("GET /api/items/{id}/image/{kind}", a.image)
+	mux.Handle("GET /next", nextWebFiles())
+	mux.Handle("GET /next/", nextWebFiles())
 	mux.Handle("GET /web", popcornWebFiles("/web"))
 	mux.Handle("GET /web/", popcornWebFiles("/web"))
 	mux.Handle("GET /popcorn", popcornWebFiles("/popcorn"))

@@ -1,0 +1,7 @@
+preact 10.29.8 (MIT) — https://github.com/preactjs/preact
+htm 3.1.1 (Apache-2.0) — https://github.com/developit/htm
+
+Fetched from registry.npmjs.org, sha1 verified:
+preact-10.29.8.tgz fc85b82dc2474e245b1430b51781d417361f5fc3
+htm-3.1.1.tgz 49266582be0dc66ed2235d5ea892307cc0c24b78
+hooks.js: bare 'preact' import rewritten to ./preact.js
